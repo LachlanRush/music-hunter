@@ -17,13 +17,23 @@ ARCHIVE_DB = config.ROOT / "runs" / "v1" / "data" / "music_hunter.db"
 
 
 def source_db():
-    """The live database if it has a pool, else the archived v1 run's (its pool is all that's used)."""
+    """The live database if it has a finished pool, else the archived v1 run's (its pool is all that's used).
+
+    A pool still downloading (a generation without a recorded pool size) isn't used: its tracks
+    would be dropped as unfinished, leaving nothing to test against.
+    """
     for candidate in (REAL_DB, ARCHIVE_DB):
-        if candidate.exists():
-            with sqlite3.connect(candidate) as c:
-                if c.execute("SELECT count(*) FROM sqlite_master WHERE name = 'tracks'").fetchone()[0] and \
-                        c.execute("SELECT count(*) FROM tracks WHERE origin = 'pool'").fetchone()[0]:
-                    return candidate
+        if not candidate.exists():
+            continue
+        with sqlite3.connect(candidate) as c:
+            if not c.execute("SELECT count(*) FROM sqlite_master WHERE name = 'tracks'").fetchone()[0]:
+                continue
+            pool = c.execute("SELECT count(*) FROM tracks WHERE origin = 'pool'").fetchone()[0]
+            unfinished = c.execute("SELECT count(*) FROM generations g WHERE EXISTS (SELECT 1 FROM tracks t"
+                                   " WHERE t.generation = g.id) AND json_extract(coalesce(g.stats, '{}'),"
+                                   " '$.pool_size') IS NULL").fetchone()[0]
+            if pool and not unfinished:
+                return candidate
     return None
 
 

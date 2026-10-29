@@ -56,13 +56,17 @@ def estimate(samples: np.ndarray, sr: int, around: float | None = None, details:
     Then 3:2 ambiguity is resolved: of the tempo and its 3:2-related readings, keep the one
     with the best repetition strength (salience) × closeness to `around` (the seeds' median BPM).
     """
+    import warnings
+
     import librosa
 
     target_sr = CFG["analysis_sample_rate"]
     y = librosa.resample(samples, orig_sr=sr, target_sr=target_sr) if sr != target_sr else samples
     hop = CFG["hop_length"]
-    oenv = librosa.onset.onset_strength(y=y, sr=target_sr, hop_length=hop)
-    tempo, beats = librosa.beat.beat_track(onset_envelope=oenv, sr=target_sr, hop_length=hop, units="time")
+    with warnings.catch_warnings():               # numba's "invalid value encountered in cast" is harmless here
+        warnings.simplefilter("ignore", RuntimeWarning)
+        oenv = librosa.onset.onset_strength(y=y, sr=target_sr, hop_length=hop)
+        tempo, beats = librosa.beat.beat_track(onset_envelope=oenv, sr=target_sr, hop_length=hop, units="time")
     coarse = float(np.atleast_1d(tempo)[0])
     if coarse <= 0:
         return None

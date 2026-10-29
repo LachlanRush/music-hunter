@@ -363,3 +363,91 @@ Based on the first 100-play test (§14, and the review on 2026-10-29: ranked 2.3
 4. **BPM and year** — BPM measurement, `bpm_match`, `year_match`, target-BPM playback. Check: BPM values on the pool look right; stretched playback sounds clean.
 5. **Re-weighting v2 and dislike fix** — objective, steps, guardrails, continuous re-evaluation of all weight sets. Check: simulated session shows gradual drift, and a set that started with lucky picks losing its place as ratings accumulate.
 6. **Results and report** — v2 measures, weight-set timeline with reverts, simulated end-to-end session. Then the 100-play run.
+
+---
+
+## 16. Version 3 plan (draft, 2026-10-29 — not built)
+
+### 16.0 Why: v2 results (93 plays, 2026-10-29)
+- Ranked 2.42 vs control 2.22 (+0.19, 95% range −0.36 to +0.75); Add rate 22% vs 11% (+11 points, −7 to +29). Strong start (plays 1–30: ranked 2.80, Add 35%, vs control 1.89), then a fade.
+- **Exact agreement** (track suggested by 2+ sources) was again the strongest signal (+0.28; 2.88 vs 2.15, Add 28% vs 18%), but scarce: 32 of 162 pool tracks, mostly used up in the first 30 plays.
+- **Release year** +0.26 (newer better); BPM closeness to 141 +0.15.
+- **Not working:** CLAP audio match (v1 +0.12, v2 −0.11), personal model on CLAP (v1 −0.18, v2 −0.26; predictions all 2.38–2.49), artist-level agreement credit (v2 −0.06), controls' rank vs rating (0.01, 18 controls).
+- Re-weighting over-committed to release year (0.10 → 0.57) while agreement fell to its floor and the dislike penalty to −0.09; picks drifted towards tracks close to Off ratings.
+- Conclusion on CLAP: it separates **genre/style**, not **taste within a style** — and the sources already deliver one style, so it adds nothing here.
+
+### 16.1 Milestone 1 — Taste-model test (offline, before anything else)
+Find out from my existing ratings whether any audio model or analysis captures my taste within a style. Bring in "comparing embedding models" (§1 out of scope until now) for this test.
+
+**Data**
+- Every rated track from v1 (103) and v2 (90), with rating, run, control flag and the non-audio facts already logged (sources/agreement, release year, BPM).
+- Audio deleted after rating is re-downloaded from the stored YouTube IDs (~150 tracks, ~25 min); seeds and collection files are reused.
+- Ratings differ in scale (v1 1–5 with noisy low ratings, v2 1–4): analyse each run on its own and pooled with per-run normalisation (rank within run); targets: rating, and "liked" (v2 On target/Add; v1 4–5).
+
+**Representations to compare** (all fit in 16 GB VRAM; weights mostly non-commercial licences, fine for personal use)
+1. CLAP `laion/larger_clap_music` — baseline.
+2. **MERT-v1-330M** (24 kHz; sweep its 25 layers — task performance varies by layer).
+3. **MuQ-large-msd-iter** and **MuQ-MuLan-large** (24 kHz; MuLan also allows text-attribute scoring).
+4. **OMAR-RQ** (MTG, 2025; multifeature variants).
+5. **MAEST** (Discogs 400 styles; electronic-heavy training data — fine-grained sub-styles) and **Discogs-EffNet** (style and track-similarity embeddings): embeddings plus the 400 style probabilities as interpretable features.
+6. **Essentia classifiers** (interpretable descriptors): danceability, arousal/valence (energy/positiveness), mood aggressive/happy/party/relaxed/sad, voice/instrumental, vocal gender, engagement, approachability, electronic/acoustic, bright/dark timbre; plus signal features (loudness range, onset density, spectral brightness, BPM, key).
+7. **Stems** (Demucs): vocal share over time, and the best model run separately on vocals and instrumental — tests "good beat, bad vocals/lyrics" (§14 item 4).
+
+**Analyses** (for each representation)
+- Nearest-neighbour prediction (rating of the most similar rated tracks), regularised regression / logistic, and pairwise ranking (the same "right order" measure re-weighting uses).
+- **Section analysis**: per-chunk predictions aggregated by mean vs **weakest section** vs spread — tests "one bad part ruins it".
+- **Added value**: best audio features combined with agreement, year and BPM, against those alone.
+
+**Evaluation**
+- Cross-validation **grouped by artist** (no artist in both training and test), so a model can't score by recognising an artist.
+- Metrics: rank correlation with ratings, AUC for liked vs not, and top-10 precision ("would its top picks have been my Adds?").
+- **Permutation baseline**: the same analysis on shuffled ratings, to tell signal from noise; bootstrap 95% ranges.
+- Caveat: ~190 ratings can only show moderate effects (a correlation around 0.2 is near the limit of what this many ratings can confirm).
+
+**Decision rule**
+- A representation enters v3 scoring only if it clearly beats both the shuffled baseline and CLAP on held-out artists. If none does, v3 drops audio-similarity components and builds on what works (agreement, year, tempo).
+- Output: a results table per representation and analysis, written to `runs/taste-test/` and summarised for review.
+
+### 16.2 Agreed changes for v3 (2026-10-29)
+All five agreed; item 4 depends on the taste-model test (16.1) — CLAP is reassessed first, not dropped blindly.
+- **Agreement as the backbone**: more multi-source tracks (deeper source lists, a fourth source such as TIDAL, quotas favouring multi-source candidates), and refill when multi-source tracks run out, not only when the pool shrinks.
+- Turn off artist-level agreement credit (not supported in v2).
+- Re-weighting: cap any single weight (e.g. ≤ 0.35) and raise agreement's floor, so one signal can't crowd out the rest.
+- Drop or replace CLAP audio match and the personal model, depending on 16.1.
+- Keep release year; keep BPM as a mild factor.
+- Artist preference: left out (decided 2026-10-29). Control design: see 16.6.
+
+### 16.3 More sources (researched 2026-10-29)
+Goal: more multi-source agreement, the strongest signal in both runs.
+- **Spotify via playlists I generate** (most promising): Spotify's own recommendations reach me as playlists — a song's or artist's "radio", Discover Weekly, Daily Mixes. Pasting their links, the existing public-page reader (§15.1) can list their tracks, which then go through the usual YouTube matching. Legitimate (my own playlists, public pages) and genuinely Spotify's algorithm; semi-manual (I create/paste the links). To test: whether Spotify-generated radio/Discover playlists are readable via their public embed page.
+- **YouTube Music "You might also like"** (`get_song_related`): 20 tracks for some seeds, only 3 overlapping radio; empty for others (La Musica, Cloudburst). Cheap extra list, but the same company as YouTube radio, so less independent.
+- **Playlist neighbours** (tracks that co-occur with a seed in public playlists — how Spotify's own recommendations work), tested 2026-10-29 via YouTube Music community playlists and Deezer playlist search: not viable for these seeds — at most 1 playlist per seed contained it (usually the artist's own discography) on YouTube Music, none on Deezer; too new/underground for public playlists.
+- **TIDAL — adopted (2026-10-29)**: one-time developer sign-up done (client ID/secret in `.env`), app-only access, unattended. Seeds are found exactly by **ISRC** (all 4 v2 seeds found); `similarTracks` returns up to ~99 tracks per seed (20 per page) with ISRCs. Covered 2 of 4 v2 seeds (Feel The Pressure, No More; none for the newest artists, La Musica and Cloudburst). Largely independent: only 4 and 13 of the 99 were already suggested by the other three sources — enough overlap to create agreement (one overlap was a track I'd Added).
+- **YouTube Music "You might also like"** — adopted as an extra list where available.
+- **Not usable**: Chosic playlist generator (blocks automated access, HTTP 403; it would mean working around a site's bot protection); ReccoBeats (free API, but didn't know any of the 4 seeds, nor a well-known test track); Apify Spotify scraper (paid, scrapes Spotify against its terms); Spotify's own recommendations endpoint (closed to new apps since 2024-11).
+
+### 16.4 Other changes (agreed 2026-10-29)
+- **More seeds** (8–10 rather than 4): more candidates and more chances of agreement.
+- **Deeper pulls and a bigger pool**: ~100 suggestions per source per seed (was 50); pool 250 (was 150), filled with **multi-source tracks first**; refill when multi-source tracks run out, not only when the pool shrinks. (A bigger pool of single-source tracks wouldn't help: nothing tested so far ranks those well.)
+- **Three buttons**: Off (wrong direction; negative set) · Close (sounds right, not a keeper; mild positive, not saved) · Add (right and saved; strongest positive; seed). "Close" and "On target" were the same idea to me ("sounds right, not quite a fit"), though v2 used all four about equally (ranked: 21 / 16 / 19 / 16). Trade-off accepted: "great but don't save" becomes Close.
+- **Hold settings steady during an evaluation run** (v2 had 26 tempo-setting changes): choose the target BPM before a run and lock it in the player during it (changeable in config), because a changing target changes what "top-scored" means.
+- **Faster track starts** (v2: 1 in 10 took 1.8–3.7 s): start loading the next track's audio as soon as it's chosen.
+- **Report noise**: only log player stalls longer than ~250 ms (v2 logged ~100 stalls of 0–20 ms).
+
+### 16.5 Milestones (build in order, stop after each for my check)
+1. **Taste-model test** (16.1) — offline comparison of audio models and analyses on my ~190 ratings. Check: results table and a recommendation on CLAP.
+2. **Sources and pool** — TIDAL (ISRC lookup, similar tracks), YouTube Music related, deeper lists (~100 per source per seed), multi-source-first filling, refill when multi-source tracks run out, pool 250, artist-level credit off. Check: candidate list with four-plus sources and overlap counts.
+3. **Ratings and scoring** — three buttons; weight cap (≤ 0.35) and higher agreement floor; CLAP and personal model kept, replaced or dropped per milestone 1; release year and BPM kept.
+4. **Player and monitoring** — preload the next track, tempo settings locked during a run, stall logging threshold.
+5. **Controls and sealed results** (16.6) — secret per-run control rate, run ends at 25 rated controls, results sealed until then, control ratings count for learning.
+6. **Results, report, simulated session** — then a fresh run with 8–10 new seeds.
+
+Decided 2026-10-29: no artist-preference factor (evidence weak: v1 +0.14, v2 −0.04). Controls: see 16.6.
+
+### 16.6 Controls (decided 2026-10-29)
+- **Still a random pool track**: a random pick from the same pool the ranking chooses from (what the sources alone would give), so ranked vs control measures exactly what the ranking adds. Median or lowest-ranked controls were considered and rejected (median can't show whether scores mean anything; lowest exaggerates the difference and serves the worst picks).
+- **How many**: aim for **25 rated controls** per run. With v2's rating spread (SD 1.11) and ~100 ranked plays, that is enough to confirm a clear difference (about +0.5 on the 1–4 scale; +0.7 needs ~11, +0.3 ~110).
+- **Secret rate**: at the start of each run the system draws its own control rate from a range (default 1 in 4 to 1 in 10), stores it, and never shows it; each play is still a control independently at that rate.
+- **The run ends by itself** when 25 controls have been rated: the player shows "run complete".
+- **Sealed results**: until the run completes, the results page and `report` show only that a run is in progress — no ranked/control counts or comparisons, which would reveal the rate. Everything is revealed at completion (and stays logged throughout).
+- **Control ratings count for learning**: likes and dislikes (positive/negative sets), seed and source credit, and the personal model (if kept). Controls still never become seeds, so random picks don't steer the sources. This doesn't bias the comparison, because which plays are controls stays random.

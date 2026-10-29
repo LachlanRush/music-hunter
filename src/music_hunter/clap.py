@@ -1,6 +1,8 @@
 """Full-track chunked CLAP embeddings (SPEC.md §6)."""
 
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -34,9 +36,14 @@ def chunk(samples: np.ndarray) -> tuple[list[np.ndarray], list[tuple[float, floa
 
 class Embedder:
     def __init__(self):
+        self.model_name = CFG["checkpoint"]
+        # Once the model is downloaded, load it offline: no Hugging Face Hub check (and no
+        # "unauthenticated requests" warning) on every start. Must be set before transformers loads.
+        cache = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")) / "hub"
+        if (cache / f"models--{self.model_name.replace('/', '--')}").exists():
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
         from transformers import ClapModel, ClapProcessor
 
-        self.model_name = CFG["checkpoint"]
         self.device = CFG["device"] if torch.cuda.is_available() else "cpu"
         self.model = ClapModel.from_pretrained(self.model_name).to(self.device).eval()
         self.extractor = ClapProcessor.from_pretrained(self.model_name).feature_extractor

@@ -123,13 +123,13 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
       </button>
     </div>
     <div class="rate" id="rate" role="group" aria-label="Rate this track">
-      <button data-r="1"><b>Off</b><span>1 · wrong direction</span></button>
-      <button data-r="2"><b>Close</b><span>2 · near, or a bad part</span></button>
-      <button data-r="3"><b>On target</b><span>3 · right sound</span></button>
-      <button data-r="4" class="add"><b>Add</b><span>4 · save it</span></button>
+      <button data-r="1"><b>Off</b><span>wrong direction</span></button>
+      <button data-r="2"><b>Close</b><span>near, or a bad part</span></button>
+      <button data-r="3"><b>On target</b><span>right sound</span></button>
+      <button data-r="4" class="add"><b>Add</b><span>save it</span></button>
     </div>
     <div class="below">
-      <div class="hint" id="hint">Keys: 1–4 rate · space play/pause · N skip · B back</div>
+      <div class="hint" id="hint">Keys: space play/pause · N skip · B back</div>
       <div class="volume"><label class="label" for="volume">Volume</label>
         <input type="range" id="volume" min="0" max="100" value="100"></div>
     </div>
@@ -323,6 +323,10 @@ function applyTempo(track) {
 }
 $("match-tempo").addEventListener("change", saveSettings);
 $("target-bpm").addEventListener("change", saveSettings);
+$("target-bpm").addEventListener("focus", () => {        // start from the default target, not the box's minimum
+  if ($("target-bpm").value === "" && settings.effective_target_bpm) $("target-bpm").value = settings.effective_target_bpm.toFixed(1);
+});
+$("target-bpm").addEventListener("keydown", (e) => { if (e.key === "Enter") $("target-bpm").blur(); });
 
 function tempoReport() {
   const t = onAir();
@@ -382,11 +386,11 @@ function renderRating() {
     const back = resume ? "N returns to the current track where you left it" : "N moves on";
     $("hint").textContent = !prev.can_change
       ? `${LABELS[prev.rating] ?? "Not rated"} · only your most recent rating can be changed · ${back}`
-      : prev.rating === null ? `You skipped this one · rate it now with 1–4 · ${back}`
-      : `${LABELS[prev.rating]} · press another number to change it · ${back}`;
+      : prev.rating === null ? `You skipped this one · rate it now with the buttons · ${back}`
+      : `${LABELS[prev.rating]} · press another button to change it · ${back}`;
   } else {
     $("hint").textContent = ratedCurrent === null
-      ? "Keys: 1–4 rate · space play/pause · N skip · B back"
+      ? "Keys: space play/pause · N skip · B back"
       : `${LABELS[ratedCurrent]} · plays to the end, then the next track starts · N skips ahead · B back`;
   }
 }
@@ -508,9 +512,10 @@ document.querySelectorAll("#rate button").forEach((b) => b.addEventListener("cli
 document.addEventListener("pointerdown", () => { if (ctx) unlockAudio(); });
 document.addEventListener("keydown", (e) => {
   if (!started || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target.closest("input, textarea, select")) return;   // typing in a box never controls playback
   unlockAudio();
-  if (e.key >= "1" && e.key <= "4") { rate(Number(e.key)); e.preventDefault(); }
-  else if (e.key === " " && e.target.tagName !== "BUTTON") { togglePlay(); e.preventDefault(); }
+  // No number-key ratings: rating needs a click on a button (typing a BPM once rated tracks by accident).
+  if (e.key === " " && e.target.tagName !== "BUTTON") { togglePlay(); e.preventDefault(); }
   else if (e.key === "n" || e.key === "N") { skip(); }
   else if (e.key === "b" || e.key === "B") { goBack(); }
 });
