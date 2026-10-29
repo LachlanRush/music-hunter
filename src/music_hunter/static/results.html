@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Music Hunter Results</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+/* Results: the success test first, then trends, then the learning machinery. */
+:root {
+  --ranked: #2a78d6; --control: #eb6834;          /* validated pair (light) */
+  --lastfm: #1baf7a; --ytmusic: #6250d6;           /* validated pair (light) */
+  --grid: #e1e5e9;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --ranked: #3987e5; --control: #d95926; --lastfm: #199e70; --ytmusic: #9085e9; --grid: #252a30; }
+}
+:root[data-theme="dark"] { --ranked: #3987e5; --control: #d95926; --lastfm: #199e70; --ytmusic: #9085e9; --grid: #252a30; }
+
+main { max-width: 980px; }
+section { display: grid; gap: 14px; }
+h2 { font: 700 18px/1.2 var(--display); margin: 0; text-wrap: balance; }
+.sub { color: var(--muted); margin: 0; max-width: 70ch; font-size: 14px; }
+
+/* Headline: ranked minus control */
+.verdict { display: grid; gap: 10px; }
+.big { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+.big b { font: 800 clamp(40px, 8vw, 64px)/1 var(--display); font-stretch: 112%; font-variant-numeric: tabular-nums; }
+.big span { font: 400 14px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font: 500 12px/1 var(--mono); padding: 6px 9px; border-radius: 999px; border: 1px solid currentColor; }
+.pill.meets { color: var(--good); } .pill.below { color: var(--bad); } .pill.wait { color: var(--muted); }
+.progress { font: 400 12px var(--mono); color: var(--muted); }
+
+.compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.group { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.group h3 { margin: 0; display: flex; align-items: center; gap: 8px; font: 600 15px/1.2 var(--body); }
+.swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.metric { display: grid; gap: 4px; }
+.metric .v { font: 700 24px/1 var(--display); font-variant-numeric: tabular-nums; }
+.metric .ci { font: 400 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.scale { position: relative; height: 18px; }
+.scale .track { position: absolute; left: 0; right: 0; top: 8px; height: 2px; background: var(--grid); }
+.scale .whisk { position: absolute; top: 8px; height: 2px; }
+.scale .dot { position: absolute; top: 4px; width: 10px; height: 10px; border-radius: 50%; margin-left: -5px; box-shadow: 0 0 0 2px var(--surface); }
+.scale .ref { position: absolute; top: 2px; width: 2px; height: 14px; background: var(--muted); margin-left: -1px; }
+.scale-labels { display: flex; justify-content: space-between; font: 400 11px var(--mono); color: var(--muted); }
+
+/* Charts */
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { font: 400 11px var(--mono); fill: var(--muted); }
+.chart .end-label { font-weight: 500; fill: var(--fg); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.tip { position: absolute; pointer-events: none; background: var(--fg); color: var(--bg); font: 400 12px/1.5 var(--mono); padding: 6px 8px; border-radius: 4px; white-space: nowrap; transform: translate(-50%, -100%); }
+.empty { color: var(--muted); font-size: 14px; padding: 18px 0; border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line); }
+details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font: 400 13px var(--mono); font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; padding: 0 12px 6px 0; white-space: nowrap; }
+td { padding: 7px 12px 7px 0; border-top: 1px solid var(--line); white-space: nowrap; }
+td.num, th.num { text-align: right; }
+td.name { white-space: normal; min-width: 180px; font-family: var(--body); }
+.up { color: var(--good); } .down { color: var(--bad); }
+.spark { width: 140px; height: 28px; display: block; }
+
+.totals { display: flex; flex-wrap: wrap; gap: 6px 22px; font: 400 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.totals b { color: var(--fg); font-weight: 500; }
+
+@media (max-width: 640px) { .compare { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <nav><span class="brand">MUSIC HUNTER</span><a href="/">Player</a><a href="/results" aria-current="page">Results</a></nav>
+    <div class="status" id="updated">Loading…</div>
+  </header>
+
+  <section class="verdict" aria-labelledby="h-test">
+    <div class="label" id="h-test">Success test · ranked minus control</div>
+    <div class="big"><b id="diff">–</b><span id="diff-ci"></span><span id="verdict"></span></div>
+    <div class="progress" id="progress"></div>
+    <div class="compare" id="compare"></div>
+  </section>
+
+  <section aria-labelledby="h-trend">
+    <h2 id="h-trend">Rolling average rating</h2>
+    <p class="sub" id="trend-sub">Average of each group's most recent 25 ratings, by play number.</p>
+    <div class="legend" id="trend-legend"></div>
+    <div class="chart" id="trend"></div>
+    <details><summary>Show data</summary><div class="table-wrap" id="trend-table"></div></details>
+  </section>
+
+  <section aria-labelledby="h-sources">
+    <h2 id="h-sources">Source averages</h2>
+    <p class="sub">Decayed average rating (prior 3) of learning plays each source suggested, after each rating.</p>
+    <div class="legend" id="src-legend"></div>
+    <div class="chart" id="sources"></div>
+    <details><summary>Show data</summary><div class="table-wrap" id="src-table"></div></details>
+  </section>
+
+  <section aria-labelledby="h-seeds">
+    <h2 id="h-seeds">Seed averages</h2>
+    <p class="sub">The 5 originals plus every track you rated 5 in a learning play. Higher averages get more of each pull.</p>
+    <div class="table-wrap" id="seeds"></div>
+  </section>
+
+  <section aria-labelledby="h-rw">
+    <h2 id="h-rw">Re-weighting</h2>
+    <p class="sub" id="rw-sub">Runs at 30, 45, 60 and 75 learning ratings, then every 15. Concordance is the share of differently rated pairs that the weights put in the right order.</p>
+    <div class="table-wrap" id="rw"></div>
+  </section>
+
+  <section aria-labelledby="h-totals">
+    <h2 id="h-totals">Totals</h2>
+    <div class="totals" id="totals"></div>
+    <div class="table-wrap" id="weights"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const NAMES = {
+  audio_match: "Audio match", dislike_match: "Dislike match", source_score: "Source average",
+  seed_score: "Seed average", agreement: "Source agreement", personal_model: "Personal model",
+  diversity_penalty: "Diversity penalty",
+};
+const SOURCE_NAMES = {lastfm: "Last.fm", ytmusic: "YouTube Music"};
+const f2 = (x) => x == null ? "–" : x.toFixed(2);
+const pct = (x) => x == null ? "–" : `${Math.round(100 * x)}%`;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+
+// --- line chart with crosshair tooltip ----------------------------------------------
+function lineChart(el, series, {ymin, ymax, yticks, fmt = f2}) {
+  const pts = series.flatMap((s) => s.points);
+  if (!pts.length) { el.innerHTML = ""; return false; }
+  const W = 900, H = 260, L = 34, R = 120, T = 10, B = 26;
+  const xmax = Math.max(...pts.map((p) => p.play)), xmin = Math.min(...pts.map((p) => p.play));
+  const span = Math.max(1, xmax - xmin);
+  const x = (v) => L + (W - L - R) * (v - xmin) / span;
+  const y = (v) => T + (H - T - B) * (1 - (v - ymin) / (ymax - ymin));
+  const step = [1, 2, 5, 10, 20, 25, 50, 100].find((s) => span / s <= 8) || 200;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Line chart">`;
+  for (const t of yticks) svg += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" stroke="var(--grid)" stroke-width="1"/><text x="${L - 8}" y="${y(t) + 4}" text-anchor="end">${t}</text>`;
+  for (let t = Math.ceil(xmin / step) * step; t <= xmax; t += step) svg += `<text x="${x(t)}" y="${H - 6}" text-anchor="middle">${t}</text>`;
+  svg += `<text x="${W - R}" y="${H - 6}" text-anchor="start" dx="8">play</text>`;
+  const ends = [];
+  for (const s of series) {
+    if (!s.points.length) continue;
+    const d = s.points.map((p, i) => `${i ? "L" : "M"}${x(p.play).toFixed(1)},${y(p.value).toFixed(1)}`).join("");
+    svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const last = s.points[s.points.length - 1];
+    svg += `<circle cx="${x(last.play)}" cy="${y(last.value)}" r="4" fill="${s.color}" stroke="var(--bg)" stroke-width="2"/>`;
+    ends.push({y: y(last.value), x: x(last.play), text: `${s.name} ${fmt(last.value)}`});
+  }
+  ends.sort((a, b) => a.y - b.y);                       // keep end labels from colliding
+  for (let i = 1; i < ends.length; i++) ends[i].y = Math.max(ends[i].y, ends[i - 1].y + 14);
+  for (const e of ends) svg += `<text class="end-label" x="${e.x + 10}" y="${e.y + 4}">${esc(e.text)}</text>`;
+  svg += `<line id="cross" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-width="1" visibility="hidden"/>`;
+  svg += `<rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" class="hit"/></svg>`;
+  el.innerHTML = svg + `<div class="tip" hidden></div>`;
+  const svgEl = el.querySelector("svg"), tip = el.querySelector(".tip"), cross = el.querySelector("#cross");
+  const plays = [...new Set(pts.map((p) => p.play))].sort((a, b) => a - b);
+  el.querySelector(".hit").addEventListener("mousemove", (ev) => {
+    const box = svgEl.getBoundingClientRect();
+    const vx = (ev.clientX - box.left) * W / box.width;
+    const play = plays.reduce((a, b) => Math.abs(x(b) - vx) < Math.abs(x(a) - vx) ? b : a);
+    const lines = series.map((s) => {
+      const p = [...s.points].reverse().find((q) => q.play <= play);
+      return p ? `${s.name}: ${fmt(p.value)}${p.n ? ` (last ${p.n})` : ""}` : null;
+    }).filter(Boolean);
+    cross.setAttribute("x1", x(play)); cross.setAttribute("x2", x(play)); cross.setAttribute("visibility", "visible");
+    tip.innerHTML = `Play ${play}<br>${lines.map(esc).join("<br>")}`;
+    tip.style.left = `${x(play) / W * box.width}px`;
+    tip.style.top = `${T / H * box.height}px`;
+    tip.hidden = false;
+  });
+  el.querySelector(".hit").addEventListener("mouseleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); });
+  return true;
+}
+
+function legend(el, series) {
+  el.innerHTML = series.map((s) => `<span><i class="swatch" style="background:${s.color}"></i>${esc(s.name)}</span>`).join("");
+}
+
+function dataTable(el, series, fmt = f2) {
+  const plays = [...new Set(series.flatMap((s) => s.points.map((p) => p.play)))].sort((a, b) => a - b);
+  const rows = plays.map((play) => `<tr><td>${play}</td>${series.map((s) => {
+    const p = s.points.find((q) => q.play === play);
+    return `<td class="num">${p ? fmt(p.value) : ""}</td>`;
+  }).join("")}</tr>`).join("");
+  el.innerHTML = `<table><thead><tr><th>Play</th>${series.map((s) => `<th class="num">${esc(s.name)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function sparkline(points) {
+  if (points.length < 2) return "";
+  const W = 140, H = 28, vals = points.map((p) => p.value);
+  const lo = Math.min(1.5, ...vals), hi = Math.max(4.5, ...vals);
+  const x = (i) => 2 + (W - 6) * i / (points.length - 1), y = (v) => 3 + (H - 6) * (1 - (v - lo) / (hi - lo));
+  const d = vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true"><line x1="0" x2="${W}" y1="${y(3)}" y2="${y(3)}" stroke="var(--grid)"/><path d="${d}" fill="none" stroke="var(--fg)" stroke-width="1.5"/><circle cx="${x(vals.length - 1)}" cy="${y(vals[vals.length - 1])}" r="2.5" fill="var(--fg)"/></svg>`;
+}
+
+// --- sections ------------------------------------------------------------------------
+function groupCard(name, color, g, usualKeep) {
+  const pos = (v) => `${(100 * (v - 1) / 4).toFixed(1)}%`;
+  const meanScale = g.mean == null ? "" : `<div class="scale" aria-hidden="true"><div class="track"></div>
+      ${g.mean_lo != null ? `<div class="whisk" style="left:${pos(Math.max(1, g.mean_lo))};width:calc(${pos(Math.min(5, g.mean_hi))} - ${pos(Math.max(1, g.mean_lo))});background:${color}"></div>` : ""}
+      <div class="dot" style="left:${pos(g.mean)};background:${color}"></div></div>
+      <div class="scale-labels"><span>1</span><span>3</span><span>5</span></div>`;
+  const keepScale = g.keep == null ? "" : `<div class="scale" aria-hidden="true"><div class="track"></div>
+      <div class="whisk" style="left:${100 * g.keep_lo}%;width:${100 * (g.keep_hi - g.keep_lo)}%;background:${color}"></div>
+      <div class="ref" style="left:${100 * usualKeep}%" title="Your usual keep rate"></div>
+      <div class="dot" style="left:${100 * g.keep}%;background:${color}"></div></div>
+      <div class="scale-labels"><span>0%</span><span>usual ${pct(usualKeep)} marked</span><span>100%</span></div>`;
+  return `<div class="group">
+    <h3><i class="swatch" style="background:${color}"></i>${name}<span class="label" style="margin-left:auto">${g.n} rated</span></h3>
+    <div class="metric"><span class="label">Average rating</span><span class="v">${f2(g.mean)}</span>
+      <span class="ci">${g.mean_lo != null ? `95% range ${f2(g.mean_lo)}–${f2(g.mean_hi)}` : g.n ? "Needs 2 ratings for a range" : "No ratings yet"}</span>${meanScale}</div>
+    <div class="metric"><span class="label">Keep rate (rated 3–5)</span><span class="v">${pct(g.keep)}</span>
+      <span class="ci">${g.keep != null ? `95% range ${pct(g.keep_lo)}–${pct(g.keep_hi)}` : "No ratings yet"}</span>${keepScale}</div>
+  </div>`;
+}
+
+function render(d) {
+  const t = d.totals;
+  $("updated").textContent = `Updated ${new Date().toLocaleTimeString("en-AU", {hour: "2-digit", minute: "2-digit", second: "2-digit"})}`;
+
+  const diff = d.difference;
+  $("diff").textContent = diff.diff == null ? "–" : `${diff.diff >= 0 ? "+" : ""}${diff.diff.toFixed(2)}★`;
+  $("diff-ci").textContent = diff.diff == null ? "" : `95% range ${diff.lo >= 0 ? "+" : ""}${diff.lo.toFixed(2)} to ${diff.hi >= 0 ? "+" : ""}${diff.hi.toFixed(2)}`;
+  const v = {meets: ["meets", `✓ Meets the +${d.margin}★ target`], below: ["below", `✕ Below the +${d.margin}★ target`],
+             not_enough_data: ["wait", "Needs at least 2 ranked and 2 control ratings"]}[d.verdict];
+  $("verdict").innerHTML = `<span class="pill ${v[0]}">${v[1]}</span>`;
+  $("progress").textContent = `${t.plays} of about ${d.target_plays} plays · ${t.learning} ranked, ${t.control} control rated` +
+    (t.plays < d.target_plays ? ` · judge the result after about ${d.target_plays} plays` : "");
+  $("compare").innerHTML = groupCard("Ranked plays", "var(--ranked)", d.ranked, d.usual_keep_rate) +
+                           groupCard("Control plays", "var(--control)", d.control, d.usual_keep_rate);
+
+  const trend = [
+    {name: "Ranked", color: "var(--ranked)", points: d.rolling.ranked},
+    {name: "Control", color: "var(--control)", points: d.rolling.control},
+  ];
+  legend($("trend-legend"), trend);
+  if (!lineChart($("trend"), trend, {ymin: 1, ymax: 5, yticks: [1, 2, 3, 4, 5]}))
+    $("trend").innerHTML = `<div class="empty">No ratings yet. Rate tracks in the player and the trend appears here.</div>`;
+  dataTable($("trend-table"), trend);
+
+  const src = d.source_averages.map((s) => ({name: SOURCE_NAMES[s.label] || s.label,
+    color: `var(--${s.label})`, points: s.points}));
+  legend($("src-legend"), src);
+  if (!lineChart($("sources"), src, {ymin: 1, ymax: 5, yticks: [1, 2, 3, 4, 5]}))
+    $("sources").innerHTML = `<div class="empty">No learning ratings yet. Both sources start at 3.</div>`;
+  dataTable($("src-table"), src);
+
+  $("seeds").innerHTML = `<table><thead><tr><th>Seed</th><th>Over time</th><th class="num">Now</th></tr></thead><tbody>${
+    d.seed_averages.map((s) => {
+      const now = s.points.length ? s.points[s.points.length - 1].value : 3;
+      const cls = now > 3.005 ? "up" : now < 2.995 ? "down" : "";
+      return `<tr><td class="name">${esc(s.label)}</td><td>${sparkline(s.points) || '<span class="label">no ratings yet</span>'}</td><td class="num ${cls}">${f2(now)}</td></tr>`;
+    }).join("")}</tbody></table>`;
+
+  $("rw").innerHTML = d.reweightings.length ? `<table><thead><tr><th class="num">At ratings</th><th class="num">Pairs</th>
+      <th class="num">Old → new (data used)</th><th class="num">Next 15: old</th><th class="num">Next 15: new</th><th>Biggest weight changes</th></tr></thead><tbody>${
+    d.reweightings.map((r) => {
+      const changes = Object.keys(r.new_weights).map((c) => [c, r.new_weights[c] - r.old_weights[c]])
+        .filter(([, dw]) => Math.abs(dw) > 0.005).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 3)
+        .map(([c, dw]) => `${NAMES[c]} ${dw > 0 ? "+" : ""}${dw.toFixed(2)}`).join(", ") || "none";
+      const better = r.eval_new_concordance != null && r.eval_new_concordance > r.eval_old_concordance ? "up"
+                   : r.eval_new_concordance != null && r.eval_new_concordance < r.eval_old_concordance ? "down" : "";
+      return `<tr><td class="num">${r.at_ratings}</td><td class="num">${r.pairs}</td>
+        <td class="num">${pct(r.old_concordance)} → ${pct(r.new_concordance)}</td>
+        <td class="num">${r.eval_n ? pct(r.eval_old_concordance) : "pending"}</td>
+        <td class="num ${better}">${r.eval_n ? pct(r.eval_new_concordance) : "pending"}</td>
+        <td class="name">${esc(changes)}</td></tr>`;
+    }).join("")}</tbody></table>` : `<div class="empty">The first re-weighting runs at 30 learning ratings (${t.learning} so far).</div>`;
+
+  $("totals").innerHTML = [
+    ["Plays", t.plays], ["Rated", t.rated], ["Ranked", t.learning], ["Control", t.control], ["Skipped", t.skipped],
+    ["Generations", t.generations],
+    ["Personal model", t.personal_model_active ? "active" : `from ${t.personal_model_at} ranked ratings`],
+  ].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
+  $("weights").innerHTML = `<table><thead><tr><th>Current weights</th>${Object.keys(d.weights).map((c) => `<th class="num">${NAMES[c]}</th>`).join("")}</tr></thead>
+    <tbody><tr><td></td>${Object.values(d.weights).map((w) => `<td class="num">${w >= 0 ? "+" : ""}${w.toFixed(2)}</td>`).join("")}</tr></tbody></table>`;
+}
+
+async function load() {
+  try {
+    const res = await fetch("/api/results");
+    if (!res.ok) throw new Error(res.statusText);
+    render(await res.json());
+  } catch (e) {
+    $("updated").textContent = "Can't reach the music-hunter server. Is `music-hunter serve` running?";
+  }
+}
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>

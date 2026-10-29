@@ -1,0 +1,231 @@
+"""Ratings and their effects — SPEC.md §3, §5 and §8 (control handling).
+
+Everything derived from ratings (averages, reference sets, seeds) is computed from the
+`plays` table on demand, so changing the most recent rating only has to update that
+play and move its audio file.
+
+Rating effects on the audio file:
+  learning 4–5 → references/      learning 3, control 3–5 → keepers/
+  1–2 → deleted. The file is held in data/undo/ until the next rating, so a mis-tap
+  can still be corrected; it is deleted for good when the next rating is made.
+"""
+
+import json
+import random
+import re
+import shutil
+import sqlite3
+import time
+from pathlib import Path
+
+import numpy as np
+
+from . import db
+from .config import CONFIG, path, relative, resolve
+
+SOURCES = ("lastfm", "ytmusic")
+AVG = CONFIG["averages"]
+POSITIVE_WEIGHTS = {int(k): v for k, v in CONFIG["ratings"]["positive_weights"].items()}
+NEGATIVE_WEIGHTS = {int(k): v for k, v in CONFIG["ratings"]["negative_weights"].items()}
+
+
+def current_generation(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT coalesce(max(id), 0) FROM generations").fetchone()[0]
+
+
+# --- averages (SPEC.md §5) -----------------------------------------------------------
+
+def _averages(conn: sqlite3.Connection, column: str, upto_play: int | None = None,
+              generation: int | None = None) -> dict:
+    """Decayed average with prior, per seed or per source, over learning ratings.
+
+    Each seed (or source) that suggested a track gets full credit for its rating, once.
+    upto_play / generation replay the averages as they were at an earlier play (results view).
+    """
+    gen = current_generation(conn) if generation is None else generation
+    total, weight = {}, {}
+    for r in conn.execute(
+            f"SELECT DISTINCT p.id, s.{column} AS key, p.rating, p.generation FROM plays p"
+            " JOIN tracks t ON t.id = p.track_id"
+            " JOIN suggestions s ON s.candidate_id = t.candidate_id"
+            " WHERE p.is_control = 0 AND p.rating IS NOT NULL AND p.id <= ?", (upto_play or 1 << 62,)):
+        w = AVG["decay"] ** (gen - r["generation"])
+        total[r["key"]] = total.get(r["key"], 0.0) + w * r["rating"]
+        weight[r["key"]] = weight.get(r["key"], 0.0) + w
+    k, prior = AVG["prior_strength"], AVG["prior"]
+    return {key: (prior * k + total[key]) / (k + weight[key]) for key in total}
+
+
+def seed_averages(conn: sqlite3.Connection, seed_ids) -> dict[int, float]:
+    avgs = _averages(conn, "seed_track_id")
+    return {s: avgs.get(s, AVG["prior"]) for s in seed_ids}
+
+
+def source_averages(conn: sqlite3.Connection) -> dict[str, float]:
+    avgs = _averages(conn, "source")
+    return {s: avgs.get(s, AVG["prior"]) for s in SOURCES}
+
+
+# --- reference sets (SPEC.md §3) ---------------------------------------------------------
+
+def _embedding_set(conn: sqlite3.Connection, query: str, weights: dict[int, float]):
+    rows = conn.execute(
+        "SELECT t.id, r.rating, e.embedding FROM (" + query + ") r"
+        " JOIN tracks t ON t.id = r.id JOIN track_embeddings e ON e.track_id = t.id ORDER BY t.id").fetchall()
+    ids = [r["id"] for r in rows]
+    vecs = np.stack([db.from_blob(r["embedding"]) for r in rows]) if rows else np.zeros((0, 512), np.float32)
+    return ids, vecs, np.array([weights[r["rating"]] for r in rows], dtype=np.float32)
+
+
+def positive_set(conn: sqlite3.Connection):
+    """(track ids, embeddings, weights): originals (as 5) and learning plays rated 4–5."""
+    return _embedding_set(conn,
+        "SELECT id, 5 AS rating FROM tracks WHERE origin = 'original_reference'"
+        " UNION SELECT track_id, rating FROM plays WHERE is_control = 0 AND rating >= 4",
+        POSITIVE_WEIGHTS)
+
+
+def negative_set(conn: sqlite3.Connection):
+    """(track ids, embeddings, weights): learning plays rated 1–2."""
+    return _embedding_set(conn, "SELECT track_id AS id, rating FROM plays WHERE is_control = 0 AND rating <= 2",
+                          NEGATIVE_WEIGHTS)
+
+
+def learning_ratings(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT count(*) FROM plays WHERE is_control = 0 AND rating IS NOT NULL").fetchone()[0]
+
+
+def next_is_control(conn: sqlite3.Connection, rng=random) -> bool:
+    """One control per block of plays, at a random position (SPEC.md §8)."""
+    size = CONFIG["controls"]["block_size"]
+    shown = conn.execute("SELECT count(*) FROM plays").fetchone()[0]
+    start = shown - shown % size
+    if conn.execute("SELECT count(*) FROM plays WHERE play_number > ? AND is_control = 1", (start,)).fetchone()[0]:
+        return False
+    remaining = size - shown % size          # positions left in this block, including this one
+    return rng.random() < 1 / remaining
+
+
+# --- showing and rating --------------------------------------------------------------------
+
+def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = False) -> int:
+    """Log a track as shown, with its score breakdown at this moment. Returns the play ID.
+
+    Without track_id: a learning play shows the top-scored track, a control play the
+    median-scored one (SPEC.md §8).
+    """
+    from .scoring import score_pool
+
+    t0 = time.monotonic()
+    scored = score_pool(conn)
+    score_ms = (time.monotonic() - t0) * 1000
+    if not scored:
+        raise RuntimeError("The pool has no unplayed tracks")
+    if track_id:
+        row = next(r for r in scored if r["track_id"] == track_id)
+    else:
+        row = scored[(len(scored) - 1) // 2] if control else scored[0]
+    play_number = conn.execute("SELECT count(*) FROM plays").fetchone()[0] + 1
+    components = {c: {"raw": row["raw"][c], "norm": row["norm"][c]} for c in row["raw"]}
+    with conn:
+        play_id = conn.execute(
+            "INSERT INTO plays (track_id, generation, play_number, is_control, weight_set_id, components,"
+            " score, rank, pool_size, provenance, shown_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))",
+            (row["track_id"], current_generation(conn), play_number, int(control), row["weight_set_id"],
+             json.dumps(components), row["score"], row["rank"], len(scored),
+             json.dumps(row["provenance"]))).lastrowid
+    db.log_event(conn, "shown", play_id, control=control, rank=row["rank"], pool_size=len(scored),
+                 score_ms=round(score_ms, 1))
+    return play_id
+
+
+def rate(conn: sqlite3.Connection, play_id: int, rating: int, played_seconds: float | None = None) -> None:
+    _check(rating)
+    play = conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone()
+    if play is None or play["rating"] is not None or play["skipped_at"]:
+        raise ValueError(f"Play {play_id} doesn't exist, was skipped, or is already rated (use change_last_rating)")
+    _purge_undo(conn)
+    with conn:
+        _place(conn, play, rating)
+        conn.execute("UPDATE plays SET rating = ?, rated_at = strftime('%Y-%m-%d %H:%M:%f', 'now'),"
+                     " played_seconds = ? WHERE id = ?",
+                     (rating, played_seconds, play_id))
+        conn.execute("UPDATE tracks SET rating = ? WHERE id = ?", (rating, play["track_id"]))
+
+
+def skip(conn: sqlite3.Connection, play_id: int, played_seconds: float | None = None) -> None:
+    """Skip without rating: the track counts as shown (never shown again) but teaches nothing."""
+    with conn:
+        conn.execute("UPDATE plays SET skipped_at = strftime('%Y-%m-%d %H:%M:%f', 'now'), played_seconds = ?"
+                     " WHERE id = ? AND rating IS NULL AND skipped_at IS NULL", (played_seconds, play_id))
+
+
+def current_play(conn: sqlite3.Connection):
+    """The play waiting for a rating, if any (e.g. after reloading the page)."""
+    return conn.execute("SELECT * FROM plays WHERE rating IS NULL AND skipped_at IS NULL"
+                        " ORDER BY id DESC LIMIT 1").fetchone()
+
+
+def last_rated(conn: sqlite3.Connection):
+    return conn.execute("SELECT * FROM plays WHERE rating IS NOT NULL ORDER BY rated_at DESC, id DESC LIMIT 1"
+                        ).fetchone()
+
+
+def change_last_rating(conn: sqlite3.Connection, rating: int) -> int:
+    """Correct the most recent rating (mis-tap). Returns the play ID."""
+    _check(rating)
+    play = last_rated(conn)
+    if play is None:
+        raise ValueError("Nothing has been rated yet")
+    db.log_event(conn, "rating_changed", play["id"], old=play["rating"], new=rating)
+    with conn:
+        _place(conn, play, rating)
+        conn.execute("UPDATE plays SET rating = ? WHERE id = ?", (rating, play["id"]))
+        conn.execute("UPDATE tracks SET rating = ? WHERE id = ?", (rating, play["track_id"]))
+    return play["id"]
+
+
+def _check(rating: int) -> None:
+    if rating not in (1, 2, 3, 4, 5):
+        raise ValueError(f"Rating must be 1–5, got {rating}")
+
+
+def _place(conn: sqlite3.Connection, play, rating: int) -> None:
+    """Move the play's audio to where its rating puts it (see module docstring)."""
+    track = conn.execute("SELECT * FROM tracks WHERE id = ?", (play["track_id"],)).fetchone()
+    play = conn.execute("SELECT * FROM plays WHERE id = ?", (play["id"],)).fetchone()  # fresh undo_path
+    src = resolve(track["file_path"] or play["undo_path"])
+    if rating <= 2:
+        dest = _unique(path("data") / "undo" / src.name, src)
+        file_path, undo_path = None, relative(dest)
+    else:
+        folder = path("keepers") if play["is_control"] or rating == 3 else path("references")
+        dest = _unique(folder / f"{_safe(track['artist'])} - {_safe(track['title'])}{src.suffix}", src)
+        file_path, undo_path = relative(dest), None
+    if dest != src:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(src, dest)
+    conn.execute("UPDATE tracks SET file_path = ? WHERE id = ?", (file_path, track["id"]))
+    conn.execute("UPDATE plays SET undo_path = ? WHERE id = ?", (undo_path, play["id"]))
+
+
+def _purge_undo(conn: sqlite3.Connection) -> None:
+    """A new rating makes earlier ones final: delete audio held for 1–2 ratings."""
+    with conn:
+        for r in conn.execute("SELECT id, undo_path FROM plays WHERE undo_path IS NOT NULL").fetchall():
+            resolve(r["undo_path"]).unlink(missing_ok=True)
+            conn.execute("UPDATE plays SET undo_path = NULL WHERE id = ?", (r["id"],))
+
+
+def _safe(name: str) -> str:
+    return re.sub(r'[/\\:*?"<>|\x00-\x1f]', "_", name).strip(" .")[:120] or "untitled"
+
+
+def _unique(dest: Path, src: Path) -> Path:
+    if dest == src or not dest.exists():
+        return dest
+    n = 2
+    while (candidate := dest.with_name(f"{dest.stem} ({n}){dest.suffix}")).exists():
+        n += 1
+    return candidate

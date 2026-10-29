@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Music Hunter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+/* Now playing */
+.now { display: grid; gap: 18px; }
+.artist { font: 500 15px/1.3 var(--body); color: var(--muted); overflow-wrap: anywhere; }
+.title {
+  font: 800 clamp(30px, 6vw, 52px)/1.02 var(--display); font-stretch: 112%;
+  letter-spacing: -0.01em; margin: 4px 0 0; text-wrap: balance; overflow-wrap: anywhere;
+}
+.transport { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; }
+.round {
+  width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--line);
+  background: var(--surface); display: grid; place-items: center;
+}
+.round svg { width: 18px; height: 18px; fill: currentColor; }
+.round.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.seek { display: grid; gap: 4px; min-width: 0; }
+.times { display: flex; justify-content: space-between; font: 400 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
+
+/* Rating strip */
+.rate { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.rate button {
+  border: 1px solid var(--line); background: var(--surface); border-radius: 6px;
+  padding: 12px 4px 10px; display: grid; gap: 2px; justify-items: center;
+}
+.rate button b { font: 800 26px/1 var(--display); font-variant-numeric: tabular-nums; }
+.rate button span { font: 400 12px/1.2 var(--body); color: var(--muted); }
+.rate button:hover:not(:disabled) { border-color: var(--fg); }
+.rate button.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.rate button.on span { color: inherit; }
+.rate button:disabled:not(.on) { opacity: 0.45; cursor: default; }
+.hint { font: 400 12px/1.5 var(--mono); color: var(--muted); }
+
+/* Preparing / start */
+.gate { display: grid; gap: 14px; padding-block: 40px; }
+.gate h1 { font: 800 clamp(28px, 5vw, 40px)/1.05 var(--display); font-stretch: 112%; margin: 0; text-wrap: balance; }
+.gate p { margin: 0; color: var(--muted); max-width: 60ch; }
+.meter { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; max-width: 420px; }
+.meter i { display: block; height: 100%; background: var(--accent); width: 0; transition: width 0.4s; }
+.start {
+  justify-self: start; border: 0; border-radius: 6px; padding: 12px 20px;
+  background: var(--fg); color: var(--bg); font-weight: 600;
+}
+
+/* Reveal of the most recent rating */
+.reveal { border-top: 1px solid var(--line); padding-top: 22px; display: grid; gap: 18px; }
+.reveal-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; justify-content: space-between; }
+.reveal h2 { font: 700 20px/1.2 var(--display); margin: 4px 0 0; overflow-wrap: anywhere; }
+.reveal .by { color: var(--muted); font-size: 14px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 500 12px/1 var(--mono); padding: 6px 8px; border-radius: 4px; border: 1px solid var(--line); white-space: nowrap; }
+.chip.control { border-color: var(--accent); color: var(--accent); }
+.scoreline { font: 400 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.scoreline b { color: var(--fg); font-weight: 500; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font: 400 13px var(--mono); font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; padding: 0 10px 6px 0; }
+td { padding: 6px 10px 6px 0; border-top: 1px solid var(--line); white-space: nowrap; }
+td.num, th.num { text-align: right; }
+.bar { width: 120px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--fg); }
+.neg { color: var(--bad); }
+.pos { color: var(--good); }
+.sources { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 14px; }
+.sources li { display: flex; gap: 10px; flex-wrap: wrap; }
+.sources .src { font: 500 12px/1.6 var(--mono); color: var(--muted); min-width: 140px; }
+.change { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.change button { border: 1px solid var(--line); background: var(--surface); border-radius: 4px; width: 34px; height: 30px; font: 500 13px var(--mono); }
+.change button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.error { color: var(--bad); font-size: 14px; }
+
+@media (max-width: 480px) {
+  .rate button span { font-size: 10px; }
+  .bar { width: 64px; }
+}
+@media (prefers-reduced-motion: reduce) { .meter i { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <nav><span class="brand">MUSIC HUNTER</span><a href="/" aria-current="page">Player</a><a href="/results">Results</a></nav>
+    <div class="status" id="status">Connecting…</div>
+  </header>
+
+  <section class="gate" id="gate">
+    <div class="label" id="gate-label">Preparing the pool</div>
+    <h1 id="gate-title">Getting tracks ready</h1>
+    <p id="gate-text">Checking the pool…</p>
+    <div class="meter" id="gate-meter" hidden><i id="gate-fill"></i></div>
+    <button class="start" id="start" hidden>Start listening</button>
+  </section>
+
+  <section class="now" id="now" hidden>
+    <div>
+      <div class="label">Now playing</div>
+      <div class="artist" id="artist"></div>
+      <h1 class="title" id="title"></h1>
+    </div>
+    <div class="transport">
+      <button class="round primary" id="play" aria-label="Pause">
+        <svg viewBox="0 0 24 24" id="play-icon"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+      </button>
+      <div class="seek">
+        <input type="range" id="seek" min="0" max="1000" value="0" aria-label="Position in track">
+        <div class="times"><span id="pos">0:00</span><span id="dur">0:00</span></div>
+      </div>
+      <button class="round" id="skip" aria-label="Skip to next track">
+        <svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg>
+      </button>
+    </div>
+    <div class="rate" id="rate" role="group" aria-label="Rate this track">
+      <button data-r="1"><b>1</b><span>Terrible</span></button>
+      <button data-r="2"><b>2</b><span>Bad</span></button>
+      <button data-r="3"><b>3</b><span>Good</span></button>
+      <button data-r="4"><b>4</b><span>Great</span></button>
+      <button data-r="5"><b>5</b><span>Amazing</span></button>
+    </div>
+    <div class="hint" id="hint">Keys: 1–5 rate · space play/pause · N skip</div>
+    <div class="error" id="error" hidden></div>
+  </section>
+
+  <section class="reveal" id="reveal" hidden></section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const LABELS = {1: "Terrible", 2: "Bad", 3: "Good", 4: "Great", 5: "Amazing"};
+const COMPONENT_NAMES = {
+  audio_match: "Audio match", dislike_match: "Dislike match", source_score: "Source average",
+  seed_score: "Seed average", agreement: "Source agreement", personal_model: "Personal model",
+  diversity_penalty: "Diversity penalty",
+};
+const SOURCE_NAMES = {lastfm: "Last.fm similar artists", ytmusic: "YouTube Music radio"};
+
+const audio = new Audio();
+audio.preload = "auto";
+let ctx = null, gainNode = null;
+let current = null;        // track awaiting or holding a rating
+let ratedCurrent = null;   // rating given to the current track (it keeps playing for 3–5)
+let played = 0, lastPos = 0, seeking = false, started = false;
+let loadStart = 0, awaitingFirstPlay = false, stallStart = null;
+
+// Operational log: start latency, stalls, audio errors, track ends, script errors.
+function report(kind, data = {}) {
+  fetch("/api/event", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({kind, play_id: current ? current.play_id : null, data})}).catch(() => {});
+}
+window.addEventListener("error", (e) => report("page_error", {message: e.message, line: e.lineno}));
+window.addEventListener("unhandledrejection", (e) => report("page_error", {message: String(e.reason)}));
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+  return res.json();
+}
+
+function fmt(s) {
+  if (!isFinite(s)) return "0:00";
+  s = Math.max(0, Math.floor(s));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function showError(msg) { $("error").textContent = msg; $("error").hidden = !msg; }
+
+// --- polling: pool readiness and status line -------------------------------------------
+async function poll() {
+  try {
+    const s = await api("/api/state");
+    const busy = s.worker.state === "running" ? ` · <span class="busy">${s.worker.message}</span>` : "";
+    const err = s.worker.state === "error" ? ` · <span class="neg">Pool worker failed: ${s.worker.message}</span>` : "";
+    $("status").innerHTML = `${s.unplayed} unplayed · ${s.rated} rated${busy}${err}`;
+    if (!started) renderGate(s);
+    if (s.last && !$("reveal").dataset.loaded) renderReveal(s.last);
+  } catch (e) {
+    $("status").textContent = "Can't reach the music-hunter server. Is `music-hunter serve` running?";
+  }
+}
+
+function renderGate(s) {
+  if (s.ready) {
+    $("gate-label").textContent = "Ready";
+    $("gate-title").textContent = `${s.unplayed} tracks in the pool`;
+    $("gate-text").textContent = s.worker.state === "running"
+      ? "More tracks join as they finish downloading. Playback starts with the best-scored track."
+      : "Playback starts with the best-scored track. Scores stay hidden until you rate.";
+    $("gate-meter").hidden = true;
+    $("start").hidden = false;
+  } else if (s.unplayed === 0 && s.worker.state !== "running") {
+    $("gate-label").textContent = "Pool empty";
+    $("gate-title").textContent = "No unplayed tracks";
+    $("gate-text").textContent = "Run `music-hunter pull` to fetch a new generation, then reload.";
+    $("gate-meter").hidden = true;
+    $("start").hidden = true;
+  } else {
+    $("gate-label").textContent = "Preparing the pool";
+    $("gate-title").textContent = `${s.unplayed} of ${s.early_start} tracks ready`;
+    $("gate-text").textContent = `${s.worker.message || "Working…"} Playback can start once ${s.early_start} tracks are analysed; the rest join as they finish.`;
+    $("gate-meter").hidden = false;
+    $("gate-fill").style.width = `${Math.min(100, 100 * s.unplayed / s.early_start)}%`;
+    $("start").hidden = true;
+  }
+}
+
+// --- playback ----------------------------------------------------------------------
+function ensureAudioGraph() {
+  if (ctx) return;
+  ctx = new AudioContext();
+  gainNode = ctx.createGain();
+  ctx.createMediaElementSource(audio).connect(gainNode).connect(ctx.destination);
+}
+
+async function loadNext() {
+  showError("");
+  try {
+    current = await api("/api/next", {});
+  } catch (e) {
+    current = null;
+    audio.pause();
+    $("now").hidden = true;
+    started = false;
+    $("gate").hidden = false;
+    poll();
+    return;
+  }
+  ratedCurrent = null;
+  played = 0; lastPos = 0;
+  $("artist").textContent = current.artist;
+  $("title").textContent = current.title;
+  gainNode.gain.value = Math.pow(10, current.gain_db / 20);   // loudness normalisation
+  audio.src = current.audio;
+  loadStart = performance.now(); awaitingFirstPlay = true; stallStart = null;
+  $("seek").value = 0;
+  $("dur").textContent = fmt(current.duration_s);
+  renderRating();
+  try { await audio.play(); }
+  catch (e) { report("audio_error", {message: `autoplay blocked: ${e.name}`}); /* stays paused until play is pressed */ }
+}
+
+function renderRating() {
+  document.querySelectorAll("#rate button").forEach((b) => {
+    b.classList.toggle("on", Number(b.dataset.r) === ratedCurrent);
+    b.disabled = ratedCurrent !== null;
+  });
+  $("hint").textContent = ratedCurrent === null
+    ? "Keys: 1–5 rate · space play/pause · N skip"
+    : `Rated ${ratedCurrent} · plays to the end, then the next track starts · N skips ahead`;
+}
+
+async function rate(r) {
+  if (!current || ratedCurrent !== null) return;
+  try {
+    const rev = await api("/api/rate", {play_id: current.play_id, rating: r, played_seconds: Math.round(played)});
+    renderReveal(rev);
+    if (r <= 2) { loadNext(); return; }       // 1–2 skip immediately
+    ratedCurrent = r;                         // 3–5 play to the end
+    renderRating();
+    if (audio.ended) loadNext();
+  } catch (e) { showError(`Couldn't save the rating: ${e.message}`); }
+  poll();
+}
+
+async function skip() {
+  if (!current) return;
+  if (ratedCurrent === null) {
+    try { await api("/api/skip", {play_id: current.play_id, played_seconds: Math.round(played)}); }
+    catch (e) { showError(`Couldn't skip: ${e.message}`); return; }
+  }
+  loadNext();
+  poll();
+}
+
+async function changeRating(r) {
+  try {
+    const rev = await api("/api/change", {rating: r});
+    renderReveal(rev);
+    if (current && rev.play_id === current.play_id) {
+      if (r <= 2) { loadNext(); } else { ratedCurrent = r; renderRating(); }
+    }
+  } catch (e) { showError(`Couldn't change the rating: ${e.message}`); }
+  poll();
+}
+
+audio.addEventListener("timeupdate", () => {
+  const d = audio.duration || current?.duration_s || 0;
+  const delta = audio.currentTime - lastPos;
+  if (!audio.paused && delta > 0 && delta < 1.5) played += delta;
+  lastPos = audio.currentTime;
+  if (!seeking && d) $("seek").value = Math.round(1000 * audio.currentTime / d);
+  $("pos").textContent = fmt(audio.currentTime);
+  if (audio.duration) $("dur").textContent = fmt(audio.duration);
+});
+audio.addEventListener("play", () => setPlayIcon(true));
+audio.addEventListener("playing", () => {
+  const now = performance.now();
+  if (awaitingFirstPlay) { report("playing", {latency_ms: Math.round(now - loadStart)}); awaitingFirstPlay = false; }
+  else if (stallStart !== null) { report("stall", {ms: Math.round(now - stallStart), at_s: Math.round(audio.currentTime)}); }
+  stallStart = null;
+});
+audio.addEventListener("waiting", () => { if (!awaitingFirstPlay && !seeking) stallStart = performance.now(); });
+audio.addEventListener("error", () => {
+  if (audio.error) report("audio_error", {code: audio.error.code, message: audio.error.message || ""});
+});
+audio.addEventListener("pause", () => setPlayIcon(false));
+audio.addEventListener("ended", () => {
+  report("ended", {rated: ratedCurrent, played_s: Math.round(played)});
+  if (ratedCurrent !== null) loadNext();
+});
+
+function setPlayIcon(playing) {
+  $("play-icon").innerHTML = playing
+    ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M7 4l13 8-13 8z"/>';
+  $("play").setAttribute("aria-label", playing ? "Pause" : "Play");
+}
+function togglePlay() { if (!current) return; audio.paused ? audio.play() : audio.pause(); }
+
+$("seek").addEventListener("input", () => { seeking = true; });
+$("seek").addEventListener("change", () => {
+  const d = audio.duration || current?.duration_s || 0;
+  audio.currentTime = d * $("seek").value / 1000;
+  lastPos = audio.currentTime;
+  seeking = false;
+});
+$("play").addEventListener("click", togglePlay);
+$("skip").addEventListener("click", skip);
+document.querySelectorAll("#rate button").forEach((b) => b.addEventListener("click", () => rate(Number(b.dataset.r))));
+$("start").addEventListener("click", async () => {
+  ensureAudioGraph();
+  await ctx.resume();
+  started = true;
+  $("gate").hidden = true;
+  $("now").hidden = false;
+  loadNext();
+});
+document.addEventListener("keydown", (e) => {
+  if (!started || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key >= "1" && e.key <= "5") { rate(Number(e.key)); e.preventDefault(); }
+  else if (e.key === " " && e.target.tagName !== "BUTTON") { togglePlay(); e.preventDefault(); }
+  else if (e.key === "n" || e.key === "N") { skip(); }
+});
+
+// --- reveal ------------------------------------------------------------------------
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c])); }
+
+function renderReveal(rev) {
+  const el = $("reveal");
+  el.dataset.loaded = "1";
+  const rows = rev.components.map((c) => {
+    const cls = c.contribution < 0 ? "neg" : c.contribution > 0 ? "pos" : "";
+    return `<tr>
+      <td>${COMPONENT_NAMES[c.name] || c.name}</td>
+      <td><div class="bar"><i style="width:${(100 * c.norm).toFixed(0)}%"></i></div></td>
+      <td class="num">${c.norm.toFixed(2)}</td>
+      <td class="num">${c.weight >= 0 ? "+" : ""}${c.weight.toFixed(2)}</td>
+      <td class="num ${cls}">${c.contribution >= 0 ? "+" : ""}${c.contribution.toFixed(3)}</td>
+    </tr>`;
+  }).join("");
+  const sources = rev.provenance.map(([seed, src]) =>
+    `<li><span class="src">${SOURCE_NAMES[src] || src}</span><span>from ${esc(seed)}</span></li>`).join("");
+  const change = [1, 2, 3, 4, 5].map((r) =>
+    `<button class="${r === rev.rating ? "on" : ""}" data-change="${r}" aria-label="Change rating to ${r}">${r}</button>`).join("");
+  el.innerHTML = `
+    <div class="reveal-head">
+      <div>
+        <div class="label">Last rated</div>
+        <h2>${esc(rev.title)}</h2>
+        <div class="by">${esc(rev.artist)}</div>
+      </div>
+      <div class="chips">
+        <span class="chip">${rev.rating} · ${LABELS[rev.rating]}</span>
+        <span class="chip ${rev.control ? "control" : ""}">${rev.control ? "Control play" : "Ranked play"}</span>
+      </div>
+    </div>
+    <div class="scoreline">Score <b>${rev.score.toFixed(3)}</b> · rank <b>${rev.rank}</b> of ${rev.pool_size} when shown</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Component</th><th>Normalised</th><th class="num">Value</th><th class="num">Weight</th><th class="num">Effect</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div>
+      <div class="label">Suggested by</div>
+      <ul class="sources">${sources || "<li>No source recorded</li>"}</ul>
+    </div>
+    <div class="change"><span class="label">Change rating</span>${change}</div>`;
+  el.hidden = false;
+  el.querySelectorAll("[data-change]").forEach((b) =>
+    b.addEventListener("click", () => changeRating(Number(b.dataset.change))));
+}
+
+poll();
+setInterval(poll, 4000);
+</script>
+</body>
+</html>

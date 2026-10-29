@@ -1,0 +1,129 @@
+# All tunable numbers and paths for music-hunter live here.
+# Sections are added as each milestone needs them (SPEC.md §13).
+
+[paths]
+references = "references"
+keepers = "keepers"
+cache = "cache"
+data = "data"
+db = "data/music_hunter.db"
+
+[clap]
+# SPEC.md §6 — same model for everything; embeddings from other models are not comparable.
+checkpoint = "laion/larger_clap_music"
+device = "cuda"
+sample_rate = 48000          # model's native rate
+chunk_seconds = 10.0         # model's native clip length
+# A final partial chunk shorter than this is dropped; longer ones are repeat-padded
+# to chunk_seconds by the feature extractor. A track shorter than one chunk is
+# always embedded as a single padded chunk.
+min_last_chunk_seconds = 5.0
+batch_size = 16              # chunks per GPU batch
+
+[sources]
+# SPEC.md §4.1
+lastfm_similar_artists = 10     # artist.getSimilar artists per seed (seed's own artist excluded)
+lastfm_top_tracks = 5            # artist.getTopTracks tracks per similar artist
+ytmusic_radio_limit = 50         # radio tracks per seed (seed itself excluded)
+yt_search_limit = 10             # results inspected per YouTube Music search
+duration_tolerance_seconds = 5   # seed and Last.fm matching
+api_delay_seconds = 0.5          # pause between Last.fm / YouTube Music API calls
+
+[pool]
+# SPEC.md §4.1 steps 5–7
+target_size = 75                 # unrated, analysed tracks to fill the pool to
+min_seed_share = 0.3333          # floor on a seed's share, as a fraction of an equal share
+download_delay_seconds = 5       # minimum gap between downloads (analysis runs in the gap)
+download_format = "bestaudio"    # yt-dlp format; kept in its original container, no re-encode
+# SPEC.md §4.2 refills (run in the background while listening)
+refill_below = 25                # pull a new generation when fewer unplayed tracks remain
+# …or when the best unplayed track scores below this. Scores are relative to the current
+# pool (components are normalised across it), so this is off (0) by default.
+refill_min_best_score = 0.0
+
+[averages]
+# SPEC.md §5 — seed and source averages (learning ratings only)
+prior = 3.0
+prior_strength = 3               # k
+decay = 0.5
+
+[ratings]
+# SPEC.md §3 — weights within the positive (4–5) and negative (1–2) reference sets.
+# The 5 originals count as rated 5.
+positive_weights = { "5" = 2.0, "4" = 1.0 }
+negative_weights = { "1" = 2.0, "2" = 1.0 }
+
+[controls]
+# SPEC.md §8 — one control play (median-scored track) in each block of this many plays.
+# Its position within the block is random, so the pattern can't be counted.
+block_size = 5
+
+[reweighting]
+# SPEC.md §9
+first_at = 30                    # learning ratings before the first re-weighting
+every = 15                       # then every this many learning ratings
+eval_window = 15                 # later: old vs new weights on the next this-many learning ratings
+random_samples = 3000            # random weight vectors tried (sign-constrained)
+refine_rounds = 12               # local refinement rounds around the best so far
+refine_batch = 250               # perturbations per refinement round
+
+[personal_model]
+# SPEC.md §7 — ridge regression from CLAP embedding to rating; strength chosen per fit
+# by leave-one-out error over these values (CLAP embeddings are unit length, so their
+# variance is small and useful strengths are low).
+alphas = [0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0]
+
+[results]
+# SPEC.md §11–12
+rolling_window = 25
+success_margin = 0.5             # ranked average must beat control by this many stars
+usual_keep_rate = 0.2            # "my usual ~1 in 5"
+
+[scoring]
+# SPEC.md §7
+audio_match_top_k = 3            # most similar positive references averaged…
+audio_match_min_refs = 5         # …but k = 1 while there are fewer references than this
+diversity_last_n = 5             # recent plays compared for diversity_penalty
+personal_model_min_ratings = 50  # personal_model stays 0 until this many learning ratings
+
+[scoring.weights]
+# Initial weights (sign = direction). Re-weighting (Milestone 6) replaces them.
+audio_match = 0.45
+dislike_match = -0.30
+source_score = 0.15
+seed_score = 0.15
+agreement = 0.10
+personal_model = 0.20            # contributes nothing until the model is active
+diversity_penalty = -0.10
+
+[loudness]
+# Loudness normalisation: files are kept untouched; each gets a playback gain
+# (applied by the player) so it plays at target_lufs, limited so peaks stay below
+# max_true_peak_db.
+target_lufs = -14.0
+max_true_peak_db = -1.0
+
+[report]
+session_gap_minutes = 30         # plays further apart than this start a new session
+
+[ui]
+# SPEC.md §11 — localhost player
+host = "127.0.0.1"
+port = 8765
+early_start_tracks = 20          # first pull: playback starts once this many tracks are analysed
+
+[versions]
+# Bracket or " - " suffix labels that mark a length/edit version of the SAME song.
+# Compared after lowercasing and removing punctuation. Anything else in brackets
+# (e.g. "X Remix", "Y Edit") is treated as a different track.
+labels = [
+    "extended mix", "extended", "extended version", "extended edit", "extended club mix",
+    "extended vocal mix", "extended original mix",
+    "radio edit", "radio mix", "radio version", "radio",
+    "original mix", "original version", "original",
+    "edit", "short edit", "single edit", "single version", "album version",
+    "club mix", "club edit", "clean", "explicit",
+]
+
+[audio]
+extensions = [".mp3", ".flac", ".m4a", ".opus", ".ogg", ".wav", ".aac", ".webm"]

@@ -1,0 +1,49 @@
+/* Shared by the player and results pages: theme tokens, base type, header. */
+:root {
+  --bg: #eef0f2;
+  --surface: #f8f9fa;
+  --fg: #16191d;
+  --muted: #5d6670;
+  --line: #d3d8dd;
+  --accent: #c2410c;          /* sodium amber: the playhead and the active rating */
+  --accent-fg: #ffffff;
+  --good: #2f7d4f;
+  --bad: #b3261e;
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111417; --surface: #191d21; --fg: #e8ebee; --muted: #8d97a1; --line: #2b3137;
+    --accent: #f59e0b; --accent-fg: #111417; --good: #5fbf85; --bad: #f07167; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111417; --surface: #191d21; --fg: #e8ebee; --muted: #8d97a1; --line: #2b3137;
+  --accent: #f59e0b; --accent-fg: #111417; --good: #5fbf85; --bad: #f07167; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--fg); font: 400 15px/1.5 var(--body);
+  padding-block: 24px 48px; padding-inline: 16px;
+}
+main { max-width: 760px; margin: 0 auto; display: grid; gap: 28px; }
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.label {
+  font: 500 11px/1.2 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+}
+
+header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 16px; }
+.brand { font: 700 15px/1 var(--display); font-stretch: 125%; letter-spacing: 0.02em; }
+.status { font: 400 12px/1.4 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.status .busy { color: var(--accent); }
+
+nav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
+nav a { color: var(--muted); text-decoration: none; font: 500 13px/1 var(--body); padding-bottom: 3px; border-bottom: 2px solid transparent; }
+nav a:hover { color: var(--fg); }
+nav a[aria-current="page"] { color: var(--fg); border-bottom-color: var(--accent); }
