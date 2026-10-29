@@ -30,7 +30,8 @@ UI = CONFIG["ui"]
 @asynccontextmanager
 async def lifespan(app):
     conn = db.connect()
-    db.log_event(conn, "server_start", host=UI["host"], port=UI["port"])
+    db.log_event(conn, "server_start", host=UI["host"], port=UI["port"],
+                 hide_names_until_rated=UI["hide_names_until_rated"])
     worker.start_if_needed()
     yield
     db.log_event(conn, "server_stop")
@@ -159,13 +160,18 @@ class ClientEvent(BaseModel):
     data: dict = {}
 
 
-CLIENT_EVENTS = {"playing", "stall", "audio_error", "ended", "page_error"}
+CLIENT_EVENTS = {"playing", "stall", "audio_error", "ended", "page_error", "back", "forward"}
 
 
 def track_info(conn, play) -> dict:
-    """What the player may know before rating: no score, no sources, no control flag."""
+    """What the player may know before rating: no score, no sources, no control flag.
+
+    With [ui] hide_names_until_rated, artist and title are withheld too until the play is rated.
+    """
     t = conn.execute("SELECT * FROM tracks WHERE id = ?", (play["track_id"],)).fetchone()
-    return {"play_id": play["id"], "track_id": t["id"], "artist": t["artist"], "title": t["title"],
+    hidden = UI["hide_names_until_rated"] and play["rating"] is None
+    return {"play_id": play["id"], "track_id": t["id"],
+            "artist": None if hidden else t["artist"], "title": None if hidden else t["title"],
             "duration_s": t["duration_s"], "gain_db": t["gain_db"] or 0.0, "audio": f"/audio/{t['id']}"}
 
 
@@ -218,6 +224,23 @@ def next_track() -> dict:
         play_id = ratings.show(conn, control=ratings.next_is_control(conn))
         play = conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone()
     return track_info(conn, play)
+
+
+@app.get("/api/previous")
+def previous(exclude: int | None = None) -> dict:
+    """The track the back button returns to (`exclude`: the track on screen, if already rated).
+
+    can_change: its rating can still be changed, or given late if it was skipped. A skipped
+    track stays blind (no score) because it has not been rated.
+    """
+    conn = db.connect()
+    play = ratings.previous_play(conn, exclude)
+    if play is None:
+        raise HTTPException(404, "No previous track yet")
+    latest = ratings.previous_play(conn)
+    can_change = latest is not None and latest["id"] == play["id"]
+    info = {**track_info(conn, play), "rating": None} if play["rating"] is None else reveal(conn, play["id"])
+    return {**info, "can_change": can_change}
 
 
 @app.post("/api/rate")

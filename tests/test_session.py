@@ -7,36 +7,14 @@ test runs offline on a temporary copy of the database.
 """
 
 import json
-import sqlite3
 
 import numpy as np
-import pytest
 
 import music_hunter.config as config
 from music_hunter import db, pool, web
 from music_hunter.reweight import CFG as RW
 
-REAL_DB = config.path("db")
 PLAYS = 112
-
-
-@pytest.fixture
-def project(tmp_path, monkeypatch):
-    if not REAL_DB.exists():
-        pytest.skip("needs a filled pool: run `music-hunter pull` first")
-    (tmp_path / "data").mkdir()
-    src = sqlite3.connect(REAL_DB)
-    with sqlite3.connect(tmp_path / "data" / "music_hunter.db") as dst:
-        src.backup(dst)
-    src.close()
-    monkeypatch.setattr(config, "ROOT", tmp_path)
-    c = db.connect()
-    if c.execute("SELECT count(*) FROM plays").fetchone()[0]:
-        pytest.skip("the real database already has plays; this test expects a fresh pool")
-    for (rel,) in c.execute("SELECT file_path FROM tracks WHERE origin = 'pool'"):
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_bytes(b"placeholder audio")
-    return c
 
 
 class FakeFiller:
@@ -73,7 +51,11 @@ def fake_job(job):
     if job == "pull":
         with conn:
             gen = conn.execute("INSERT INTO generations DEFAULT VALUES").lastrowid
-            for c in conn.execute("SELECT * FROM candidates WHERE status = 'not_selected'").fetchall():
+            # One per video, and never a video already downloaded (as a real pull's filters ensure).
+            for c in conn.execute(
+                    "SELECT * FROM candidates WHERE status = 'not_selected'"
+                    " AND video_id NOT IN (SELECT video_id FROM tracks WHERE video_id IS NOT NULL)"
+                    " GROUP BY video_id").fetchall():
                 new = conn.execute(
                     "INSERT INTO candidates (generation, video_id, artist, title, duration_s, song_title,"
                     " song_artists, is_extended) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -98,11 +80,17 @@ class InlineThread:
         self.target(*self.args)
 
 
-def test_session(project, monkeypatch):
+def test_session(conn, monkeypatch):
     from fastapi.testclient import TestClient
 
-    c = project
+    c = conn
     monkeypatch.setattr(pool, "Filler", FakeFiller)
+    # The real pool size changes as listening goes on; set thresholds so a refill happens mid-session.
+    from music_hunter.config import CONFIG
+    from music_hunter.pool import unrated_pool_size
+    start = unrated_pool_size(c)
+    monkeypatch.setitem(CONFIG["pool"], "target_size", start)
+    monkeypatch.setitem(CONFIG["pool"], "refill_below", start - 40)
     monkeypatch.setattr(web.threading, "Thread", InlineThread)
     jobs = []
 
@@ -185,13 +173,15 @@ def test_session(project, monkeypatch):
         if not p["is_control"] and p["rating"] is not None:
             seen += 1
 
-    # A refill ran in the background once fewer than 25 tracks were left, as a new generation.
-    assert "pull" in jobs
+    # A refill ran in the background once fewer than refill_below tracks were left, as a new generation.
+    assert "pull" in jobs, (jobs, unrated_pool_size(c), web.Worker.job_needed(c),
+                            [tuple(r) for r in c.execute("SELECT generation, status, count(*) FROM candidates GROUP BY 1, 2")])
     gens = c.execute("SELECT id, stats FROM generations ORDER BY id").fetchall()
     assert len(gens) >= 2
     for g in gens:
         stats = json.loads(g["stats"])
-        assert {"seed_averages", "source_averages", "quotas", "weights", "pool_size"} <= set(stats)
+        assert {"seed_averages", "source_averages", "quotas", "weights", "pool_size"} <= set(stats), \
+            (g["id"], sorted(stats), [__import__("json").loads(r[0])["error"] for r in c.execute("SELECT data FROM events WHERE kind = 'job_error' LIMIT 1")])
     assert {"raw_suggestions", "filter_reasons"} <= set(json.loads(gens[0]["stats"]))
     assert any(p["generation"] == gens[-1]["id"] for p in plays)
 

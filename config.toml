@@ -31,12 +31,12 @@ api_delay_seconds = 0.5          # pause between Last.fm / YouTube Music API cal
 
 [pool]
 # SPEC.md §4.1 steps 5–7
-target_size = 75                 # unrated, analysed tracks to fill the pool to
+target_size = 150                # unplayed, analysed tracks to fill the pool to (was 75 until 2026-10-29)
 min_seed_share = 0.3333          # floor on a seed's share, as a fraction of an equal share
 download_delay_seconds = 5       # minimum gap between downloads (analysis runs in the gap)
 download_format = "bestaudio"    # yt-dlp format; kept in its original container, no re-encode
 # SPEC.md §4.2 refills (run in the background while listening)
-refill_below = 25                # pull a new generation when fewer unplayed tracks remain
+refill_below = 100               # pull a new generation when fewer unplayed tracks remain (was 25)
 # …or when the best unplayed track scores below this. Scores are relative to the current
 # pool (components are normalised across it), so this is off (0) by default.
 refill_min_best_score = 0.0
@@ -111,6 +111,7 @@ session_gap_minutes = 30         # plays further apart than this start a new ses
 host = "127.0.0.1"
 port = 8765
 early_start_tracks = 20          # first pull: playback starts once this many tracks are analysed
+hide_names_until_rated = true    # artist and title stay hidden until the track is rated (from 2026-10-29)
 
 [versions]
 # Bracket or " - " suffix labels that mark a length/edit version of the SAME song.

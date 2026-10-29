@@ -161,7 +161,7 @@ class Filler:
         return True
 
     def _fail(self, c, reason: str, **timings) -> bool:
-        reason = reason.splitlines()[0][:300]
+        reason = re.sub(r"\x1b\[[0-9;]*m", "", reason).splitlines()[0][:300]   # drop yt-dlp's colour codes
         db.log_event(self.conn, "track_failed", generation=self.generation, video_id=c["video_id"], reason=reason,
                      **{k: round(v, 2) for k, v in timings.items()})
         with self.conn:

@@ -16,7 +16,10 @@
   font: 800 clamp(30px, 6vw, 52px)/1.02 var(--display); font-stretch: 112%;
   letter-spacing: -0.01em; margin: 4px 0 0; text-wrap: balance; overflow-wrap: anywhere;
 }
-.transport { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; }
+.transport { display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 14px; }
+.round:disabled { opacity: 0.4; cursor: default; }
+.now.previous .title { color: var(--muted); }
+.title.hidden-name { color: var(--muted); font-stretch: 100%; letter-spacing: 0; }
 .round {
   width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--line);
   background: var(--surface); display: grid; place-items: center;
@@ -41,16 +44,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 .rate button:disabled:not(.on) { opacity: 0.45; cursor: default; }
 .hint { font: 400 12px/1.5 var(--mono); color: var(--muted); }
 
-/* Preparing / start */
+/* Preparing the pool */
 .gate { display: grid; gap: 14px; padding-block: 40px; }
 .gate h1 { font: 800 clamp(28px, 5vw, 40px)/1.05 var(--display); font-stretch: 112%; margin: 0; text-wrap: balance; }
 .gate p { margin: 0; color: var(--muted); max-width: 60ch; }
 .meter { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; max-width: 420px; }
 .meter i { display: block; height: 100%; background: var(--accent); width: 0; transition: width 0.4s; }
-.start {
-  justify-self: start; border: 0; border-radius: 6px; padding: 12px 20px;
-  background: var(--fg); color: var(--bg); font-weight: 600;
-}
 
 /* Reveal of the most recent rating */
 .reveal { border-top: 1px solid var(--line); padding-top: 22px; display: grid; gap: 18px; }
@@ -98,16 +97,18 @@ td.num, th.num { text-align: right; }
     <h1 id="gate-title">Getting tracks ready</h1>
     <p id="gate-text">Checking the pool…</p>
     <div class="meter" id="gate-meter" hidden><i id="gate-fill"></i></div>
-    <button class="start" id="start" hidden>Start listening</button>
   </section>
 
   <section class="now" id="now" hidden>
     <div>
-      <div class="label">Now playing</div>
+      <div class="label" id="now-label">Now playing</div>
       <div class="artist" id="artist"></div>
       <h1 class="title" id="title"></h1>
     </div>
     <div class="transport">
+      <button class="round" id="back" aria-label="Back to the previous track">
+        <svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg>
+      </button>
       <button class="round primary" id="play" aria-label="Pause">
         <svg viewBox="0 0 24 24" id="play-icon"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
       </button>
@@ -126,7 +127,7 @@ td.num, th.num { text-align: right; }
       <button data-r="4"><b>4</b><span>Great</span></button>
       <button data-r="5"><b>5</b><span>Amazing</span></button>
     </div>
-    <div class="hint" id="hint">Keys: 1–5 rate · space play/pause · N skip</div>
+    <div class="hint" id="hint">Keys: 1–5 rate · space play/pause · N skip · B back</div>
     <div class="error" id="error" hidden></div>
   </section>
 
@@ -148,13 +149,19 @@ audio.preload = "auto";
 let ctx = null, gainNode = null;
 let current = null;        // track awaiting or holding a rating
 let ratedCurrent = null;   // rating given to the current track (it keeps playing for 3–5)
+let currentEnded = false;  // the current track has finished playing
+let viewing = "current";   // "current" or "previous" (after pressing back)
+let prev = null;           // the previous track while viewing it
+let resume = null;         // {pos, played} of the current track, to return to after back
 let played = 0, lastPos = 0, seeking = false, started = false;
 let loadStart = 0, awaitingFirstPlay = false, stallStart = null;
+
+function onAir() { return viewing === "previous" ? prev : current; }
 
 // Operational log: start latency, stalls, audio errors, track ends, script errors.
 function report(kind, data = {}) {
   fetch("/api/event", {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({kind, play_id: current ? current.play_id : null, data})}).catch(() => {});
+    body: JSON.stringify({kind, play_id: onAir() ? onAir().play_id : null, data})}).catch(() => {});
 }
 window.addEventListener("error", (e) => report("page_error", {message: e.message, line: e.lineno}));
 window.addEventListener("unhandledrejection", (e) => report("page_error", {message: String(e.reason)}));
@@ -191,26 +198,21 @@ async function poll() {
 
 function renderGate(s) {
   if (s.ready) {
-    $("gate-label").textContent = "Ready";
-    $("gate-title").textContent = `${s.unplayed} tracks in the pool`;
-    $("gate-text").textContent = s.worker.state === "running"
-      ? "More tracks join as they finish downloading. Playback starts with the best-scored track."
-      : "Playback starts with the best-scored track. Scores stay hidden until you rate.";
-    $("gate-meter").hidden = true;
-    $("start").hidden = false;
+    started = true;
+    $("gate").hidden = true;
+    $("now").hidden = false;
+    loadNext({autoplay: false});            // shown paused; the play button is the first click
   } else if (s.unplayed === 0 && s.worker.state !== "running") {
     $("gate-label").textContent = "Pool empty";
     $("gate-title").textContent = "No unplayed tracks";
     $("gate-text").textContent = "Run `music-hunter pull` to fetch a new generation, then reload.";
     $("gate-meter").hidden = true;
-    $("start").hidden = true;
   } else {
     $("gate-label").textContent = "Preparing the pool";
     $("gate-title").textContent = `${s.unplayed} of ${s.early_start} tracks ready`;
     $("gate-text").textContent = `${s.worker.message || "Working…"} Playback can start once ${s.early_start} tracks are analysed; the rest join as they finish.`;
     $("gate-meter").hidden = false;
     $("gate-fill").style.width = `${Math.min(100, 100 * s.unplayed / s.early_start)}%`;
-    $("start").hidden = true;
   }
 }
 
@@ -222,7 +224,7 @@ function ensureAudioGraph() {
   ctx.createMediaElementSource(audio).connect(gainNode).connect(ctx.destination);
 }
 
-async function loadNext() {
+async function loadNext({autoplay = true} = {}) {
   showError("");
   try {
     current = await api("/api/next", {});
@@ -235,36 +237,116 @@ async function loadNext() {
     poll();
     return;
   }
-  ratedCurrent = null;
-  played = 0; lastPos = 0;
-  $("artist").textContent = current.artist;
-  $("title").textContent = current.title;
-  gainNode.gain.value = Math.pow(10, current.gain_db / 20);   // loudness normalisation
-  audio.src = current.audio;
-  loadStart = performance.now(); awaitingFirstPlay = true; stallStart = null;
+  ratedCurrent = null; currentEnded = false;
+  viewing = "current"; prev = null; resume = null;
+  await loadTrack(current, 0, 0, autoplay);
+}
+
+async function loadTrack(track, startAt, alreadyPlayed, autoplay = true) {
+  ensureAudioGraph();
+  played = alreadyPlayed; lastPos = startAt;
+  showNames(track);
+  gainNode.gain.value = Math.pow(10, track.gain_db / 20);   // loudness normalisation
+  audio.src = track.audio;
+  if (startAt) audio.addEventListener("loadedmetadata", () => { audio.currentTime = startAt; }, {once: true});
+  loadStart = performance.now(); awaitingFirstPlay = autoplay; stallStart = null;
   $("seek").value = 0;
-  $("dur").textContent = fmt(current.duration_s);
+  $("dur").textContent = fmt(track.duration_s);
   renderRating();
-  try { await audio.play(); }
-  catch (e) { report("audio_error", {message: `autoplay blocked: ${e.name}`}); /* stays paused until play is pressed */ }
+  if (!autoplay) { setPlayIcon(false); return; }
+  try { await unlockAudio(); await audio.play(); }
+  catch (e) {
+    awaitingFirstPlay = false;               // no start-latency figure for a track that waited for a click
+    setPlayIcon(false);
+    report("audio_error", {message: `autoplay blocked: ${e.name}`});
+  }
+}
+
+// Artist and title arrive only once a track is rated (server setting hide_names_until_rated).
+function showNames(track) {
+  const hidden = track.title == null;
+  $("artist").textContent = hidden ? "Artist and title appear once you rate" : track.artist;
+  $("title").textContent = hidden ? "Hidden until rated" : track.title;
+  $("title").classList.toggle("hidden-name", hidden);
+}
+
+// Browsers only allow sound after a click or key press; any of them unlocks it.
+async function unlockAudio() {
+  ensureAudioGraph();
+  if (ctx.state === "suspended") await ctx.resume();
+}
+
+async function goBack() {
+  if (viewing === "previous") return;
+  showError("");
+  let track;
+  try {
+    const exclude = current && ratedCurrent !== null ? `?exclude=${current.play_id}` : "";
+    track = await api(`/api/previous${exclude}`);
+  } catch (e) { showError("There's no previous track yet."); return; }
+  resume = current && !currentEnded ? {pos: audio.currentTime, played} : null;
+  viewing = "previous"; prev = track;
+  report("back", {to: track.play_id});
+  await loadTrack(track, 0, 0);
+}
+
+async function goForward() {
+  if (viewing !== "previous") return;
+  report("forward", {});
+  viewing = "current"; prev = null;
+  if (current && resume) { const r = resume; resume = null; await loadTrack(current, r.pos, r.played); }
+  else loadNext();
 }
 
 function renderRating() {
+  const onPrev = viewing === "previous";
+  const shown = onPrev ? prev.rating : ratedCurrent;
   document.querySelectorAll("#rate button").forEach((b) => {
-    b.classList.toggle("on", Number(b.dataset.r) === ratedCurrent);
-    b.disabled = ratedCurrent !== null;
+    b.classList.toggle("on", Number(b.dataset.r) === shown);
+    b.disabled = onPrev ? !prev.can_change : ratedCurrent !== null;
   });
-  $("hint").textContent = ratedCurrent === null
-    ? "Keys: 1–5 rate · space play/pause · N skip"
-    : `Rated ${ratedCurrent} · plays to the end, then the next track starts · N skips ahead`;
+  $("now").classList.toggle("previous", onPrev);
+  $("now-label").textContent = onPrev ? "Previous track" : "Now playing";
+  $("back").disabled = onPrev;
+  $("skip").setAttribute("aria-label", onPrev ? "Return to the current track" : "Skip to next track");
+  if (onPrev) {
+    const back = resume ? "N returns to the current track where you left it" : "N moves on";
+    $("hint").textContent = !prev.can_change
+      ? `Rated ${prev.rating ?? "–"} · only your most recent rating can be changed · ${back}`
+      : prev.rating === null ? `You skipped this one · rate it now with 1–5 · ${back}`
+      : `Rated ${prev.rating} · press another number to change it · ${back}`;
+  } else {
+    $("hint").textContent = ratedCurrent === null
+      ? "Keys: 1–5 rate · space play/pause · N skip · B back"
+      : `Rated ${ratedCurrent} · plays to the end, then the next track starts · N skips ahead · B back`;
+  }
+}
+
+async function ratePrevious(r) {
+  if (!prev.can_change || r === prev.rating) return;
+  try {
+    const rev = prev.rating === null
+      ? await api("/api/rate", {play_id: prev.play_id, rating: r, played_seconds: Math.round(played)})
+      : await api("/api/change", {rating: r});
+    renderReveal(rev);
+    prev = {...prev, ...rev, can_change: true};
+    if (r <= 2) { goForward(); return; }      // 1–2 skip immediately
+    showNames(prev);
+    renderRating();
+    if (audio.ended) goForward();
+  } catch (e) { showError(`Couldn't save the rating: ${e.message}`); }
+  poll();
 }
 
 async function rate(r) {
+  if (viewing === "previous") return ratePrevious(r);
   if (!current || ratedCurrent !== null) return;
   try {
     const rev = await api("/api/rate", {play_id: current.play_id, rating: r, played_seconds: Math.round(played)});
     renderReveal(rev);
+    current = {...current, artist: rev.artist, title: rev.title};
     if (r <= 2) { loadNext(); return; }       // 1–2 skip immediately
+    showNames(current);
     ratedCurrent = r;                         // 3–5 play to the end
     renderRating();
     if (audio.ended) loadNext();
@@ -273,6 +355,7 @@ async function rate(r) {
 }
 
 async function skip() {
+  if (viewing === "previous") return goForward();
   if (!current) return;
   if (ratedCurrent === null) {
     try { await api("/api/skip", {play_id: current.play_id, played_seconds: Math.round(played)}); }
@@ -286,7 +369,10 @@ async function changeRating(r) {
   try {
     const rev = await api("/api/change", {rating: r});
     renderReveal(rev);
-    if (current && rev.play_id === current.play_id) {
+    if (viewing === "previous" && prev && rev.play_id === prev.play_id) {
+      prev = {...prev, ...rev, can_change: true};
+      if (r <= 2) goForward(); else renderRating();
+    } else if (current && rev.play_id === current.play_id) {
       if (r <= 2) { loadNext(); } else { ratedCurrent = r; renderRating(); }
     }
   } catch (e) { showError(`Couldn't change the rating: ${e.message}`); }
@@ -294,7 +380,7 @@ async function changeRating(r) {
 }
 
 audio.addEventListener("timeupdate", () => {
-  const d = audio.duration || current?.duration_s || 0;
+  const d = audio.duration || onAir()?.duration_s || 0;
   const delta = audio.currentTime - lastPos;
   if (!audio.paused && delta > 0 && delta < 1.5) played += delta;
   lastPos = audio.currentTime;
@@ -315,7 +401,13 @@ audio.addEventListener("error", () => {
 });
 audio.addEventListener("pause", () => setPlayIcon(false));
 audio.addEventListener("ended", () => {
+  if (viewing === "previous") {
+    report("ended", {rated: prev.rating, played_s: Math.round(played), previous: true});
+    goForward();
+    return;
+  }
   report("ended", {rated: ratedCurrent, played_s: Math.round(played)});
+  currentEnded = true;
   if (ratedCurrent !== null) loadNext();
 });
 
@@ -324,31 +416,33 @@ function setPlayIcon(playing) {
     ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M7 4l13 8-13 8z"/>';
   $("play").setAttribute("aria-label", playing ? "Pause" : "Play");
 }
-function togglePlay() { if (!current) return; audio.paused ? audio.play() : audio.pause(); }
+async function togglePlay() {
+  if (!onAir()) return;
+  if (!audio.paused) { audio.pause(); return; }
+  await unlockAudio();
+  if (audio.currentTime === 0 && !awaitingFirstPlay) { loadStart = performance.now(); awaitingFirstPlay = true; }
+  audio.play().catch((e) => showError(`Couldn't start playback: ${e.message}`));
+}
 
 $("seek").addEventListener("input", () => { seeking = true; });
 $("seek").addEventListener("change", () => {
-  const d = audio.duration || current?.duration_s || 0;
+  const d = audio.duration || onAir()?.duration_s || 0;
   audio.currentTime = d * $("seek").value / 1000;
   lastPos = audio.currentTime;
   seeking = false;
 });
 $("play").addEventListener("click", togglePlay);
 $("skip").addEventListener("click", skip);
+$("back").addEventListener("click", goBack);
 document.querySelectorAll("#rate button").forEach((b) => b.addEventListener("click", () => rate(Number(b.dataset.r))));
-$("start").addEventListener("click", async () => {
-  ensureAudioGraph();
-  await ctx.resume();
-  started = true;
-  $("gate").hidden = true;
-  $("now").hidden = false;
-  loadNext();
-});
+document.addEventListener("pointerdown", () => { if (ctx) unlockAudio(); });
 document.addEventListener("keydown", (e) => {
   if (!started || e.metaKey || e.ctrlKey || e.altKey) return;
+  unlockAudio();
   if (e.key >= "1" && e.key <= "5") { rate(Number(e.key)); e.preventDefault(); }
   else if (e.key === " " && e.target.tagName !== "BUTTON") { togglePlay(); e.preventDefault(); }
   else if (e.key === "n" || e.key === "N") { skip(); }
+  else if (e.key === "b" || e.key === "B") { goBack(); }
 });
 
 // --- reveal ------------------------------------------------------------------------

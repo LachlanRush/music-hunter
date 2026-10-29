@@ -143,13 +143,15 @@ def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = 
 def rate(conn: sqlite3.Connection, play_id: int, rating: int, played_seconds: float | None = None) -> None:
     _check(rating)
     play = conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone()
-    if play is None or play["rating"] is not None or play["skipped_at"]:
-        raise ValueError(f"Play {play_id} doesn't exist, was skipped, or is already rated (use change_last_rating)")
+    if play is None or play["rating"] is not None:
+        raise ValueError(f"Play {play_id} doesn't exist or is already rated (use change_last_rating)")
+    if play["skipped_at"] and previous_play(conn)["id"] != play_id:
+        raise ValueError("Only the most recent skipped track can still be rated")
     _purge_undo(conn)
     with conn:
         _place(conn, play, rating)
         conn.execute("UPDATE plays SET rating = ?, rated_at = strftime('%Y-%m-%d %H:%M:%f', 'now'),"
-                     " played_seconds = ? WHERE id = ?",
+                     " played_seconds = coalesce(?, played_seconds), skipped_at = NULL WHERE id = ?",
                      (rating, played_seconds, play_id))
         conn.execute("UPDATE tracks SET rating = ? WHERE id = ?", (rating, play["track_id"]))
 
@@ -165,6 +167,17 @@ def current_play(conn: sqlite3.Connection):
     """The play waiting for a rating, if any (e.g. after reloading the page)."""
     return conn.execute("SELECT * FROM plays WHERE rating IS NULL AND skipped_at IS NULL"
                         " ORDER BY id DESC LIMIT 1").fetchone()
+
+
+def previous_play(conn: sqlite3.Connection, exclude: int | None = None):
+    """The most recent finished (rated or skipped) play, other than `exclude`.
+
+    This is where the player's back button goes. When it is the most recent finished play
+    overall, its rating can be changed (or, if it was skipped, given late).
+    """
+    return conn.execute("SELECT * FROM plays WHERE (rating IS NOT NULL OR skipped_at IS NOT NULL) AND id != ?"
+                        " ORDER BY coalesce(rated_at, skipped_at) DESC, id DESC LIMIT 1",
+                        (exclude or -1,)).fetchone()
 
 
 def last_rated(conn: sqlite3.Connection):

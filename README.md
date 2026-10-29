@@ -49,7 +49,9 @@ uv run pytest                       # scripted ratings check (runs on a temporar
 uv run music-hunter serve           # then open http://127.0.0.1:8765
 ```
 
-Keys: 1–5 rate · space play/pause · N skip. Ratings 3–5 play to the end; 1–2 skip straight away.
+Keys: 1–5 rate · space play/pause · N skip · B back. Ratings 3–5 play to the end; 1–2 skip straight away.
+Back returns to the previous track: change its rating there (or rate it, if you skipped it); N returns
+to the current track where you left it.
 The score, sources and control status appear only after rating. The most recent rating can be changed.
 If no pull has run yet (or the pool fill was interrupted), `serve` runs it in the background and
 playback starts once 20 tracks are analysed.

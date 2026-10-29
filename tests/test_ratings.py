@@ -4,42 +4,15 @@ Runs against a copy of the real database (needs a filled pool) in a temporary pr
 folder, with placeholder audio files, so the real pool and folders are untouched.
 """
 
-import sqlite3
-
-import numpy as np
 import pytest
 
 import music_hunter.config as config
-from music_hunter import db
 from music_hunter.pool import quotas
 from music_hunter.pull import Pull, seeds
 from music_hunter.ratings import (change_last_rating, negative_set, positive_set, rate, seed_averages, show,
                                   source_averages)
 from music_hunter.scoring import score_pool
 from music_hunter.sources import Item
-
-REAL_DB = config.path("db")
-
-
-@pytest.fixture
-def conn(tmp_path, monkeypatch):
-    if not REAL_DB.exists():
-        pytest.skip("needs a filled pool: run `music-hunter pull` first")
-    (tmp_path / "data").mkdir()
-    src = sqlite3.connect(REAL_DB)
-    with sqlite3.connect(tmp_path / "data" / "music_hunter.db") as dst:
-        src.backup(dst)
-    src.close()
-    monkeypatch.setattr(config, "ROOT", tmp_path)
-    c = db.connect()
-    for (rel,) in c.execute("SELECT file_path FROM tracks WHERE origin = 'pool'"):
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_bytes(b"placeholder audio")
-    if c.execute("SELECT count(*) FROM plays").fetchone()[0]:
-        pytest.skip("the real database already has plays; this test expects a fresh pool")
-    yield c
-    c.close()
-
 
 def provenance(c, track_id):
     """(seeds, sources) that suggested a track — queried independently of ratings.py."""
@@ -87,13 +60,14 @@ def test_scripted_ratings(conn):
     assert ids == originals and list(w) == [2.0] * 5
     assert negative_set(c)[0] == []
     before = {r["track_id"]: r for r in score_pool(c)}
-    assert len(before) == 75
+    pool_size = c.execute("SELECT count(*) FROM tracks WHERE origin = 'pool'").fetchone()[0]
+    assert len(before) == pool_size
 
     # 1. Learning play rated 5: references/, positive weight 2, becomes a seed, averages 3.5.
     p1 = show(c)
     t1 = track_of(c, p1)
     logged = c.execute("SELECT * FROM plays WHERE id = ?", (p1,)).fetchone()
-    assert logged["rank"] == 1 and logged["pool_size"] == 75 and logged["is_control"] == 0
+    assert logged["rank"] == 1 and logged["pool_size"] == pool_size and logged["is_control"] == 0
     old_file = root / t1["file_path"]
     rate(c, p1, 5, played_seconds=200)
     history.append((t1["id"], 5, gen))
@@ -110,7 +84,7 @@ def test_scripted_ratings(conn):
     # Pool re-scores: rated track gone, audio match can only rise (new 5-rated reference),
     # diversity penalty now active (last play).
     after = {r["track_id"]: r for r in score_pool(c)}
-    assert len(after) == 74 and t1["id"] not in after
+    assert len(after) == pool_size - 1 and t1["id"] not in after
     rises = [after[t]["raw"]["audio_match"] - before[t]["raw"]["audio_match"] for t in after]
     assert min(rises) >= -1e-6 and max(rises) > 0
     assert max(r["raw"]["diversity_penalty"] for r in after.values()) > 0
