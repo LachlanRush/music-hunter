@@ -12,13 +12,13 @@
 /* Results: the success test first, then trends, then the learning machinery. */
 :root {
   --ranked: #2a78d6; --control: #eb6834;          /* validated pair (light) */
-  --lastfm: #1baf7a; --ytmusic: #6250d6;           /* validated pair (light) */
+  --lastfm: #1baf7a; --ytmusic: #6250d6; --deezer: #eda100;   /* validated trio (light) */
   --grid: #e1e5e9;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --ranked: #3987e5; --control: #d95926; --lastfm: #199e70; --ytmusic: #9085e9; --grid: #252a30; }
+  :root:not([data-theme="light"]) { --ranked: #3987e5; --control: #d95926; --lastfm: #199e70; --ytmusic: #9085e9; --deezer: #c98500; --grid: #252a30; }
 }
-:root[data-theme="dark"] { --ranked: #3987e5; --control: #d95926; --lastfm: #199e70; --ytmusic: #9085e9; --grid: #252a30; }
+:root[data-theme="dark"] { --ranked: #3987e5; --control: #d95926; --lastfm: #199e70; --ytmusic: #9085e9; --deezer: #c98500; --grid: #252a30; }
 
 main { max-width: 980px; }
 section { display: grid; gap: 14px; }
@@ -67,6 +67,12 @@ td.num, th.num { text-align: right; }
 td.name { white-space: normal; min-width: 180px; font-family: var(--body); }
 .up { color: var(--good); } .down { color: var(--bad); }
 .spark { width: 140px; height: 28px; display: block; }
+.bars { display: grid; gap: 8px; max-width: 640px; }
+.bar-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) 90px; align-items: center; gap: 12px; font-size: 13px; }
+.bar-track { height: 14px; background: var(--grid); border-radius: 3px; position: relative; }
+.bar-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--control); }
+.bar-row .n { font: 400 12px var(--mono); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 480px) { .bar-row { grid-template-columns: 96px minmax(0, 1fr) 72px; } }
 
 .totals { display: flex; flex-wrap: wrap; gap: 6px 22px; font: 400 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
 .totals b { color: var(--fg); font-weight: 500; }
@@ -82,8 +88,9 @@ td.name { white-space: normal; min-width: 180px; font-family: var(--body); }
   </header>
 
   <section class="verdict" aria-labelledby="h-test">
-    <div class="label" id="h-test">Success test · ranked minus control</div>
+    <div class="label" id="h-test">Ranked minus control · average rating (1–4)</div>
     <div class="big"><b id="diff">–</b><span id="diff-ci"></span><span id="verdict"></span></div>
+    <div class="progress" id="add-diff"></div>
     <div class="progress" id="progress"></div>
     <div class="compare" id="compare"></div>
   </section>
@@ -96,9 +103,16 @@ td.name { white-space: normal; min-width: 180px; font-family: var(--body); }
     <details><summary>Show data</summary><div class="table-wrap" id="trend-table"></div></details>
   </section>
 
+  <section aria-labelledby="h-rank">
+    <h2 id="h-rank">Does a higher score mean a better track?</h2>
+    <p class="sub">Controls are random pool tracks, so they land at every rank. Their average rating by where they ranked in the pool when shown.</p>
+    <div class="chart" id="rank-bars"></div>
+    <p class="sub" id="rank-note"></p>
+  </section>
+
   <section aria-labelledby="h-sources">
     <h2 id="h-sources">Source averages</h2>
-    <p class="sub">Decayed average rating (prior 3) of learning plays each source suggested, after each rating.</p>
+    <p class="sub">Decayed average rating of learning plays each source suggested, after each rating.</p>
     <div class="legend" id="src-legend"></div>
     <div class="chart" id="sources"></div>
     <details><summary>Show data</summary><div class="table-wrap" id="src-table"></div></details>
@@ -106,14 +120,15 @@ td.name { white-space: normal; min-width: 180px; font-family: var(--body); }
 
   <section aria-labelledby="h-seeds">
     <h2 id="h-seeds">Seed averages</h2>
-    <p class="sub">The 5 originals plus every track you rated 5 in a learning play. Higher averages get more of each pull.</p>
+    <p class="sub">Your seeds plus every track you Added in a learning play. Higher averages get more of each pull.</p>
     <div class="table-wrap" id="seeds"></div>
   </section>
 
   <section aria-labelledby="h-rw">
     <h2 id="h-rw">Re-weighting</h2>
-    <p class="sub" id="rw-sub">Runs at 30, 45, 60 and 75 learning ratings, then every 15. Concordance is the share of differently rated pairs that the weights put in the right order.</p>
-    <div class="table-wrap" id="rw"></div>
+    <p class="sub" id="rw-sub">From 20 ranked ratings, every 5. Each update moves every weight by at most 0.05, towards whichever weight set best fits your whole rating history (or stays put). "Fit" is the share of differently rated pairs put in the right order, with recent ratings and mistakes near the top counting most.</p>
+    <div class="table-wrap" id="weight-history"></div>
+    <details><summary>Every update</summary><div class="table-wrap" id="rw"></div></details>
   </section>
 
   <section aria-labelledby="h-totals">
@@ -128,9 +143,10 @@ const $ = (id) => document.getElementById(id);
 const NAMES = {
   audio_match: "Audio match", dislike_match: "Dislike match", source_score: "Source average",
   seed_score: "Seed average", agreement: "Source agreement", personal_model: "Personal model",
-  diversity_penalty: "Diversity penalty",
+  diversity_penalty: "Diversity penalty", bpm_match: "BPM match", year_match: "Release year match",
 };
-const SOURCE_NAMES = {lastfm: "Last.fm", ytmusic: "YouTube Music"};
+const SOURCE_NAMES = {lastfm: "Last.fm", ytmusic: "YouTube Music", deezer: "Deezer"};
+let SCALE = 4, LABELS = ["Off", "Close", "On target", "Add"], PRIOR = 2.5;
 const f2 = (x) => x == null ? "–" : x.toFixed(2);
 const pct = (x) => x == null ? "–" : `${Math.round(100 * x)}%`;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
@@ -200,19 +216,28 @@ function dataTable(el, series, fmt = f2) {
 function sparkline(points) {
   if (points.length < 2) return "";
   const W = 140, H = 28, vals = points.map((p) => p.value);
-  const lo = Math.min(1.5, ...vals), hi = Math.max(4.5, ...vals);
+  const lo = Math.min(1.25, ...vals), hi = Math.max(SCALE - 0.25, ...vals);
   const x = (i) => 2 + (W - 6) * i / (points.length - 1), y = (v) => 3 + (H - 6) * (1 - (v - lo) / (hi - lo));
   const d = vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
-  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true"><line x1="0" x2="${W}" y1="${y(3)}" y2="${y(3)}" stroke="var(--grid)"/><path d="${d}" fill="none" stroke="var(--fg)" stroke-width="1.5"/><circle cx="${x(vals.length - 1)}" cy="${y(vals[vals.length - 1])}" r="2.5" fill="var(--fg)"/></svg>`;
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true"><line x1="0" x2="${W}" y1="${y(PRIOR)}" y2="${y(PRIOR)}" stroke="var(--grid)"/><path d="${d}" fill="none" stroke="var(--fg)" stroke-width="1.5"/><circle cx="${x(vals.length - 1)}" cy="${y(vals[vals.length - 1])}" r="2.5" fill="var(--fg)"/></svg>`;
+}
+
+function weightSpark(points) {
+  if (points.length < 2) return '<span class="label">no updates yet</span>';
+  const W = 140, H = 28, vals = points.map((p) => p.value);
+  const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), span = hi - lo || 1;
+  const x = (i) => 2 + (W - 6) * i / (points.length - 1), y = (v) => 3 + (H - 6) * (1 - (v - lo) / span);
+  const d = vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true"><line x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}" stroke="var(--grid)"/><path d="${d}" fill="none" stroke="var(--fg)" stroke-width="1.5"/><circle cx="${x(vals.length - 1)}" cy="${y(vals[vals.length - 1])}" r="2.5" fill="var(--fg)"/></svg>`;
 }
 
 // --- sections ------------------------------------------------------------------------
 function groupCard(name, color, g, usualKeep) {
-  const pos = (v) => `${(100 * (v - 1) / 4).toFixed(1)}%`;
+  const pos = (v) => `${(100 * (v - 1) / (SCALE - 1)).toFixed(1)}%`;
   const meanScale = g.mean == null ? "" : `<div class="scale" aria-hidden="true"><div class="track"></div>
-      ${g.mean_lo != null ? `<div class="whisk" style="left:${pos(Math.max(1, g.mean_lo))};width:calc(${pos(Math.min(5, g.mean_hi))} - ${pos(Math.max(1, g.mean_lo))});background:${color}"></div>` : ""}
+      ${g.mean_lo != null ? `<div class="whisk" style="left:${pos(Math.max(1, g.mean_lo))};width:calc(${pos(Math.min(SCALE, g.mean_hi))} - ${pos(Math.max(1, g.mean_lo))});background:${color}"></div>` : ""}
       <div class="dot" style="left:${pos(g.mean)};background:${color}"></div></div>
-      <div class="scale-labels"><span>1</span><span>3</span><span>5</span></div>`;
+      <div class="scale-labels"><span>1 ${LABELS[0]}</span><span>${SCALE} ${LABELS[SCALE - 1]}</span></div>`;
   const keepScale = g.keep == null ? "" : `<div class="scale" aria-hidden="true"><div class="track"></div>
       <div class="whisk" style="left:${100 * g.keep_lo}%;width:${100 * (g.keep_hi - g.keep_lo)}%;background:${color}"></div>
       <div class="ref" style="left:${100 * usualKeep}%" title="Your usual keep rate"></div>
@@ -222,7 +247,7 @@ function groupCard(name, color, g, usualKeep) {
     <h3><i class="swatch" style="background:${color}"></i>${name}<span class="label" style="margin-left:auto">${g.n} rated</span></h3>
     <div class="metric"><span class="label">Average rating</span><span class="v">${f2(g.mean)}</span>
       <span class="ci">${g.mean_lo != null ? `95% range ${f2(g.mean_lo)}–${f2(g.mean_hi)}` : g.n ? "Needs 2 ratings for a range" : "No ratings yet"}</span>${meanScale}</div>
-    <div class="metric"><span class="label">Keep rate (rated 3–5)</span><span class="v">${pct(g.keep)}</span>
+    <div class="metric"><span class="label">Add rate</span><span class="v">${pct(g.keep)}</span>
       <span class="ci">${g.keep != null ? `95% range ${pct(g.keep_lo)}–${pct(g.keep_hi)}` : "No ratings yet"}</span>${keepScale}</div>
   </div>`;
 }
@@ -232,13 +257,20 @@ function render(d) {
   $("updated").textContent = `Updated ${new Date().toLocaleTimeString("en-AU", {hour: "2-digit", minute: "2-digit", second: "2-digit"})}`;
 
   const diff = d.difference;
-  $("diff").textContent = diff.diff == null ? "–" : `${diff.diff >= 0 ? "+" : ""}${diff.diff.toFixed(2)}★`;
+  SCALE = d.scale_max; LABELS = d.labels; PRIOR = d.prior;
+  $("diff").textContent = diff.diff == null ? "–" : `${diff.diff >= 0 ? "+" : ""}${diff.diff.toFixed(2)}`;
   $("diff-ci").textContent = diff.diff == null ? "" : `95% range ${diff.lo >= 0 ? "+" : ""}${diff.lo.toFixed(2)} to ${diff.hi >= 0 ? "+" : ""}${diff.hi.toFixed(2)}`;
-  const v = {meets: ["meets", `✓ Meets the +${d.margin}★ target`], below: ["below", `✕ Below the +${d.margin}★ target`],
-             not_enough_data: ["wait", "Needs at least 2 ranked and 2 control ratings"]}[d.verdict];
+  const v = {clearly_higher: ["meets", "Ranked clearly higher: the range is above zero"],
+             clearly_lower: ["below", "Ranked clearly lower: the range is below zero"],
+             unclear: ["wait", "Unclear: the range includes no difference"],
+             not_enough_data: ["wait", "Needs at least 2 ranked and 2 control ratings"]}[d.reading];
   $("verdict").innerHTML = `<span class="pill ${v[0]}">${v[1]}</span>`;
+  const ad = d.add_difference;
+  $("add-diff").textContent = d.ranked.keep == null || d.control.keep == null ? "" :
+    `Add rate: ranked ${pct(d.ranked.keep)} vs control ${pct(d.control.keep)}` +
+    (ad.diff == null ? "" : ` (difference ${ad.diff >= 0 ? "+" : ""}${Math.round(ad.diff * 100)} points, 95% range ${Math.round(ad.lo * 100)} to ${Math.round(ad.hi * 100)})`);
   $("progress").textContent = `${t.plays} of about ${d.target_plays} plays · ${t.learning} ranked, ${t.control} control rated` +
-    (t.plays < d.target_plays ? ` · judge the result after about ${d.target_plays} plays` : "");
+    (t.plays < d.target_plays ? ` · no pass mark: read it from the data, ideally after about ${d.target_plays} plays` : "");
   $("compare").innerHTML = groupCard("Ranked plays", "var(--ranked)", d.ranked, d.usual_keep_rate) +
                            groupCard("Control plays", "var(--control)", d.control, d.usual_keep_rate);
 
@@ -247,43 +279,66 @@ function render(d) {
     {name: "Control", color: "var(--control)", points: d.rolling.control},
   ];
   legend($("trend-legend"), trend);
-  if (!lineChart($("trend"), trend, {ymin: 1, ymax: 5, yticks: [1, 2, 3, 4, 5]}))
+  if (!lineChart($("trend"), trend, {ymin: 1, ymax: SCALE, yticks: [...Array(SCALE).keys()].map((i) => i + 1)}))
     $("trend").innerHTML = `<div class="empty">No ratings yet. Rate tracks in the player and the trend appears here.</div>`;
   dataTable($("trend-table"), trend);
 
   const src = d.source_averages.map((s) => ({name: SOURCE_NAMES[s.label] || s.label,
     color: `var(--${s.label})`, points: s.points}));
   legend($("src-legend"), src);
-  if (!lineChart($("sources"), src, {ymin: 1, ymax: 5, yticks: [1, 2, 3, 4, 5]}))
-    $("sources").innerHTML = `<div class="empty">No learning ratings yet. Both sources start at 3.</div>`;
+  if (!lineChart($("sources"), src, {ymin: 1, ymax: SCALE, yticks: [...Array(SCALE).keys()].map((i) => i + 1)}))
+    $("sources").innerHTML = `<div class="empty">No learning ratings yet. Every source starts at ${PRIOR}.</div>`;
   dataTable($("src-table"), src);
 
   $("seeds").innerHTML = `<table><thead><tr><th>Seed</th><th>Over time</th><th class="num">Now</th></tr></thead><tbody>${
     d.seed_averages.map((s) => {
-      const now = s.points.length ? s.points[s.points.length - 1].value : 3;
-      const cls = now > 3.005 ? "up" : now < 2.995 ? "down" : "";
+      const now = s.points.length ? s.points[s.points.length - 1].value : PRIOR;
+      const cls = now > PRIOR + 0.005 ? "up" : now < PRIOR - 0.005 ? "down" : "";
       return `<tr><td class="name">${esc(s.label)}</td><td>${sparkline(s.points) || '<span class="label">no ratings yet</span>'}</td><td class="num ${cls}">${f2(now)}</td></tr>`;
     }).join("")}</tbody></table>`;
 
-  $("rw").innerHTML = d.reweightings.length ? `<table><thead><tr><th class="num">At ratings</th><th class="num">Pairs</th>
-      <th class="num">Old → new (data used)</th><th class="num">Next 15: old</th><th class="num">Next 15: new</th><th>Biggest weight changes</th></tr></thead><tbody>${
+  const cr = d.controls_by_rank;
+  $("rank-bars").innerHTML = cr.n ? `<div class="bars">${cr.bins.map((b) => {
+      const w = b.mean == null ? 0 : 100 * (b.mean - 1) / (SCALE - 1);
+      return `<div class="bar-row"><span>${b.name}</span>
+        <div class="bar-track" title="${b.mean == null ? "no controls here yet" : f2(b.mean)}"><div class="bar-fill" style="width:${w}%"></div></div>
+        <span class="n">${b.mean == null ? "–" : f2(b.mean)} · n=${b.n}</span></div>`;
+    }).join("")}</div>` : `<div class="empty">No control plays rated yet (about 1 in 5 plays is one).</div>`;
+  $("rank-note").textContent = cr.spearman == null ? "" :
+    `Rank vs rating across ${cr.n} controls: ${cr.spearman <= -0.2 ? "higher-ranked controls were rated higher"
+      : cr.spearman >= 0.2 ? "lower-ranked controls were rated higher" : "no clear link yet"} (correlation ${(-cr.spearman).toFixed(2)}; +1 would mean rank order matched your ratings exactly).`;
+
+  const wh = d.weight_history;
+  $("weight-history").innerHTML = `<table><thead><tr><th>Component</th><th>Over time</th><th class="num">Start</th><th class="num">Now</th></tr></thead><tbody>${
+    Object.keys(wh).map((c) => {
+      const pts = wh[c], start = pts[0].value, now = pts[pts.length - 1].value;
+      const delta = now - start, cls = delta > 0.005 ? "up" : delta < -0.005 ? "down" : "";
+      return `<tr><td class="name">${NAMES[c] || c}</td><td>${weightSpark(pts)}</td>
+        <td class="num">${start >= 0 ? "+" : ""}${start.toFixed(2)}</td><td class="num ${cls}">${now >= 0 ? "+" : ""}${now.toFixed(2)}</td></tr>`;
+    }).join("")}</tbody></table>`;
+
+  $("rw").innerHTML = d.reweightings.length ? `<table><thead><tr><th class="num">At ratings</th><th>Moved towards</th>
+      <th class="num">Fit before → after</th><th class="num">Next 15: before</th><th class="num">Next 15: after</th><th>Biggest weight changes</th></tr></thead><tbody>${
     d.reweightings.map((r) => {
       const changes = Object.keys(r.new_weights).map((c) => [c, r.new_weights[c] - r.old_weights[c]])
         .filter(([, dw]) => Math.abs(dw) > 0.005).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 3)
         .map(([c, dw]) => `${NAMES[c]} ${dw > 0 ? "+" : ""}${dw.toFixed(2)}`).join(", ") || "none";
       const better = r.eval_new_concordance != null && r.eval_new_concordance > r.eval_old_concordance ? "up"
                    : r.eval_new_concordance != null && r.eval_new_concordance < r.eval_old_concordance ? "down" : "";
-      return `<tr><td class="num">${r.at_ratings}</td><td class="num">${r.pairs}</td>
+      const towards = !r.target ? "–" : r.target === "current" ? "stayed put" : r.target === "search" ? "best fit found" : `earlier ${r.target}`;
+      return `<tr><td class="num">${r.at_ratings}</td><td>${towards}</td>
         <td class="num">${pct(r.old_concordance)} → ${pct(r.new_concordance)}</td>
         <td class="num">${r.eval_n ? pct(r.eval_old_concordance) : "pending"}</td>
         <td class="num ${better}">${r.eval_n ? pct(r.eval_new_concordance) : "pending"}</td>
         <td class="name">${esc(changes)}</td></tr>`;
-    }).join("")}</tbody></table>` : `<div class="empty">The first re-weighting runs at 30 learning ratings (${t.learning} so far).</div>`;
+    }).join("")}</tbody></table>` : `<div class="empty">The first update runs at 20 ranked ratings (${t.learning} so far).</div>`;
 
   $("totals").innerHTML = [
     ["Plays", t.plays], ["Rated", t.rated], ["Ranked", t.learning], ["Control", t.control], ["Skipped", t.skipped],
     ["Generations", t.generations],
     ["Personal model", t.personal_model_active ? "active" : `from ${t.personal_model_at} ranked ratings`],
+    ["Target BPM", d.tempo.target_bpm ?? "from seeds"], ["Match tempo", d.tempo.match_tempo ? "on" : "off"],
+    ["Plays stretched", d.tempo.stretched_plays],
   ].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
   $("weights").innerHTML = `<table><thead><tr><th>Current weights</th>${Object.keys(d.weights).map((c) => `<th class="num">${NAMES[c]}</th>`).join("")}</tr></thead>
     <tbody><tr><td></td>${Object.values(d.weights).map((w) => `<td class="num">${w >= 0 ? "+" : ""}${w.toFixed(2)}</td>`).join("")}</tr></tbody></table>`;

@@ -2,8 +2,10 @@
 # Sections are added as each milestone needs them (SPEC.md §13).
 
 [paths]
-references = "references"
-keepers = "keepers"
+seeds = "seeds"                  # v2: original seeds (provided files, or downloaded from Spotify links)
+collection = "collection"        # v2: tracks I Add (from milestone 3)
+references = "references"        # v1 only; retired in v2 milestone 3
+keepers = "keepers"              # v1 only; retired in v2 milestone 3
 cache = "cache"
 data = "data"
 db = "data/music_hunter.db"
@@ -25,6 +27,7 @@ batch_size = 16              # chunks per GPU batch
 lastfm_similar_artists = 10     # artist.getSimilar artists per seed (seed's own artist excluded)
 lastfm_top_tracks = 5            # artist.getTopTracks tracks per similar artist
 ytmusic_radio_limit = 50         # radio tracks per seed (seed itself excluded)
+deezer_radio_limit = 50          # v2: Deezer artist-radio tracks per seed (all credited artists, interleaved)
 yt_search_limit = 10             # results inspected per YouTube Music search
 duration_tolerance_seconds = 5   # seed and Last.fm matching
 api_delay_seconds = 0.5          # pause between Last.fm / YouTube Music API calls
@@ -43,29 +46,41 @@ refill_min_best_score = 0.0
 
 [averages]
 # SPEC.md §5 — seed and source averages (learning ratings only)
-prior = 3.0
+prior = 2.5                      # v2: midpoint of the 1–4 scale (was 3 on 1–5)
 prior_strength = 3               # k
 decay = 0.5
 
 [ratings]
-# SPEC.md §3 — weights within the positive (4–5) and negative (1–2) reference sets.
-# The 5 originals count as rated 5.
-positive_weights = { "5" = 2.0, "4" = 1.0 }
-negative_weights = { "1" = 2.0, "2" = 1.0 }
+# SPEC.md §15.2 — v2 buttons: 1 Off, 2 Close, 3 On target, 4 Add. Rating = direction (learning);
+# Add also saves the track to collection/. Seeds count as Add.
+labels = ["Off", "Close", "On target", "Add"]
+add = 4
+positive_weights = { "4" = 2.0, "3" = 1.0 }   # Add, On target
+negative_weights = { "1" = 1.0 }              # Off only; Close is neutral
 
 [controls]
-# SPEC.md §8 — one control play (median-scored track) in each block of this many plays.
-# Its position within the block is random, so the pattern can't be counted.
-block_size = 5
+# SPEC.md §15.4 — each play is a control with this probability, decided independently;
+# a control is a random unplayed pool track.
+probability = 0.2
 
 [reweighting]
-# SPEC.md §9
-first_at = 30                    # learning ratings before the first re-weighting
-every = 15                       # then every this many learning ratings
-eval_window = 15                 # later: old vs new weights on the next this-many learning ratings
-random_samples = 3000            # random weight vectors tried (sign-constrained)
+# SPEC.md §15.8 — small steps, guardrails, continuous re-evaluation against the whole history
+first_at = 20                    # learning ratings before the first update
+every = 5                        # then an update every this many learning ratings
+step = 0.05                      # each weight moves at most this much per update
+recency_half_life = 30           # ratings: a rating 30 back counts half in the objective
+eval_window = 15                 # logged only: weights before vs after on the next this-many ratings
+random_samples = 3000            # random weight vectors tried by the search
 refine_rounds = 12               # local refinement rounds around the best so far
 refine_batch = 250               # perturbations per refinement round
+
+[reweighting.min_weight]         # guardrails: magnitude never below these (keeps the core idea alive)
+audio_match = 0.20
+agreement = 0.10
+
+[reweighting.max_weight]         # guardrails: penalties never stronger than these
+dislike_match = 0.30
+diversity_penalty = 0.20
 
 [personal_model]
 # SPEC.md §7 — ridge regression from CLAP embedding to rating; strength chosen per fit
@@ -76,14 +91,18 @@ alphas = [0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0]
 [results]
 # SPEC.md §11–12
 rolling_window = 25
-success_margin = 0.5             # ranked average must beat control by this many stars
-usual_keep_rate = 0.2            # "my usual ~1 in 5"
+usual_keep_rate = 0.2            # "my usual ~1 in 5", shown against the Add rate (v2 has no pass criterion)
 
 [scoring]
 # SPEC.md §7
 audio_match_top_k = 3            # most similar positive references averaged…
 audio_match_min_refs = 5         # …but k = 1 while there are fewer references than this
+dislike_top_k = 3                # v2: dislike_match = mean similarity to this many closest Off tracks
 diversity_last_n = 5             # recent plays compared for diversity_penalty
+# agreement = log(1 + distinct (seed, source) suggestions + credit × other sources that suggested
+# the same artist but not this track). v1 check: artist suggested by 2 sources averaged 2.90 vs 2.10,
+# even when the track came from one source (2.72). 0 turns it off.
+artist_agreement_credit = 0.5
 personal_model_min_ratings = 50  # personal_model stays 0 until this many learning ratings
 
 [scoring.weights]
@@ -92,9 +111,26 @@ audio_match = 0.45
 dislike_match = -0.30
 source_score = 0.15
 seed_score = 0.15
-agreement = 0.10
+agreement = 0.25                 # raised from 0.10 for v2: the strongest signal in v1 (+0.41)
 personal_model = 0.20            # contributes nothing until the model is active
 diversity_penalty = -0.10
+bpm_match = 0.15                 # v2: closeness to the target BPM (set in the player, or from liked tracks)
+year_match = 0.10                # v2: closeness to the release years of liked tracks (v1: newer rated higher, +0.21)
+
+[bpm]
+# SPEC.md §15.6 — tempo measured from the audio, folded into [min, max) to undo half/double errors
+min = 85.0
+max = 175.0
+analysis_sample_rate = 22050
+hop_length = 256                 # analysis step (~12 ms); finer = more precise beat times
+prior_width_octaves = 0.5        # 3:2 tie-break: gentle preference for tempos near the seeds' median BPM
+sigma = 4.0                      # bpm_match fall-off: ~0.6 at sigma BPM from the target (or beyond the window)
+max_stretch = 0.12               # Match tempo stretches at most ±12%; with a target set, tracks within ±12%
+                                 # can all be played at the target and get bpm_match credit:
+window_edge_credit = 0.5         # 1 at the target, falling to this at ±12%, then dropping away beyond
+
+[year]
+sigma = 3.0                      # year_match: closeness to the target year falls to ~0.6 at ±sigma years
 
 [loudness]
 # Loudness normalisation: files are kept untouched; each gets a playback gain
@@ -112,6 +148,7 @@ host = "127.0.0.1"
 port = 8765
 early_start_tracks = 20          # first pull: playback starts once this many tracks are analysed
 hide_names_until_rated = true    # artist and title stay hidden until the track is rated (from 2026-10-29)
+play_to_end = [3, 4]             # ratings that keep playing to the end (On target, Add); others skip at once
 
 [versions]
 # Bracket or " - " suffix labels that mark a length/edit version of the SAME song.

@@ -8,20 +8,16 @@ Personal music recommender prototype. Design: [SPEC.md](SPEC.md). Tunable number
 uv sync
 ```
 
-## Milestone 1 — CLAP references
+## Seeds (v2)
 
-1. Put the 5 original reference tracks in `references/`, tagged with artist and title (or named `Artist - Title.ext`).
-2. Embed them (chunked, stored in `data/music_hunter.db`):
+```sh
+uv run music-hunter add-seeds <Spotify track or playlist links>   # or --file links.txt
+uv run music-hunter embed-seeds                                   # audio files you put in seeds/ yourself
+uv run music-hunter similarity [extra.mp3 ...]                    # how the seeds relate
+```
 
-   ```sh
-   uv run music-hunter embed-references          # --force to re-embed
-   ```
-
-3. Check the similarity matrix, optionally against extra test files (not stored):
-
-   ```sh
-   uv run music-hunter similarity [similar.mp3 different.mp3 ...]
-   ```
+Spotify links are read from public pages (no account), matched on YouTube Music (same song, ±5 s),
+downloaded into `seeds/` and analysed. v1's data is archived in `runs/v1/`.
 
 ## Milestones 2–3 — candidates and pool
 
@@ -49,10 +45,14 @@ uv run pytest                       # scripted ratings check (runs on a temporar
 uv run music-hunter serve           # then open http://127.0.0.1:8765
 ```
 
-Keys: 1–5 rate · space play/pause · N skip · B back. Ratings 3–5 play to the end; 1–2 skip straight away.
+Buttons (v2): 1 Off · 2 Close · 3 On target · 4 Add (keys 1–4) · space play/pause · N skip · B back.
+On target and Add play to the end; Off and Close skip straight away. Only Add saves the track (to `collection/`).
+Nothing about scores, sources or controls is ever shown in the player; artist, title and artwork appear after rating.
+Tempo: set a target BPM (empty = median of seeds and liked tracks); "Match tempo" plays tracks within ±12% at that
+tempo with pitch kept. The target also steers ranking (`bpm_match`). `music-hunter analyse-bpm` fills in missing BPMs.
 Back returns to the previous track: change its rating there (or rate it, if you skipped it); N returns
 to the current track where you left it.
-The score, sources and control status appear only after rating. The most recent rating can be changed.
+The most recent rating can be changed.
 If no pull has run yet (or the pool fill was interrupted), `serve` runs it in the background and
 playback starts once 20 tracks are analysed.
 
@@ -61,10 +61,13 @@ playback starts once 20 tracks are analysed.
 All of this runs inside `music-hunter serve`:
 
 - 1 play in each block of 5 is a control (the median-scored track), revealed only after rating.
-- Re-weighting runs at 30, 45, 60, 75 learning ratings, then every 15; each is evaluated on the next 15.
+- Re-weighting (v2): from 20 learning ratings, every 5 — small steps (≤0.05 per weight) within guardrails, choosing
+  between the search's optimum and every earlier weight set by how well each fits the whole rating history.
 - The personal model joins the score from 50 learning ratings.
 - When fewer than 25 unplayed tracks remain, a new generation is pulled in the background.
-- Results: http://127.0.0.1:8765/results
+- Results: http://127.0.0.1:8765/results — ranked vs control (average and Add rate, with 95% ranges and a plain
+  reading, no pass mark), whether higher-ranked random controls were rated higher, weight changes over time, sources,
+  seeds and tempo use.
 
 `uv run pytest` includes a simulated ~110-play session (offline, on a temporary copy of the DB).
 

@@ -1,8 +1,9 @@
-"""Localhost player — SPEC.md §11 (player view), §8 (blind), §4.1 step 8 (early start).
+"""Localhost player — SPEC.md §15.3 (blind), §15.9 (player), §4.1 step 8 (early start).
 
-The page never receives a score, breakdown or control flag for a track until it has
-been rated. Audio is served by track ID, so a file that moves when it is rated (to
-references/, keepers/ or data/undo/) keeps playing.
+The player never receives a score, rank, breakdown, sources or control flag, before or
+after rating (v2). Artist, title and artwork arrive only once a track is rated. Audio is
+served by track ID, so a file that moves when it is rated (to collection/ or data/undo/)
+keeps playing.
 """
 
 import contextlib
@@ -71,6 +72,8 @@ class Worker:
         from .scoring import score_pool
 
         pool_cfg = CONFIG["pool"]
+        if not conn.execute("SELECT count(*) FROM tracks WHERE origin = 'original_reference'").fetchone()[0]:
+            return None                       # nothing to pull from until seeds are added
         gen = conn.execute("SELECT max(id) FROM generations").fetchone()[0]
         if gen is None:
             return "pull"
@@ -107,14 +110,14 @@ class Worker:
     def _job(self, conn, job: str) -> None:
         from .pool import fill
         from .pull import Pull, match_seeds
-        from .sources import LastFM, YouTubeMusic
+        from .sources import Deezer, LastFM, YouTubeMusic
 
         if job == "pull":
             first = conn.execute("SELECT count(*) FROM generations").fetchone()[0] == 0
             self.message = ("Finding candidates" if first else "Refilling the pool: finding candidates") + \
-                " (Last.fm and YouTube Music)…"
+                " (Last.fm, YouTube Music and Deezer)…"
             yt = YouTubeMusic()
-            gen = Pull(conn, yt, LastFM()).run(match_seeds(conn, yt))
+            gen = Pull(conn, yt, LastFM(), Deezer()).run(match_seeds(conn, yt))
         else:
             gen = conn.execute("SELECT max(id) FROM generations").fetchone()[0]
         self.message = "Downloading and analysing tracks…"
@@ -143,6 +146,13 @@ class RateBody(BaseModel):
     play_id: int
     rating: int
     played_seconds: float | None = None
+    played_bpm: float | None = None        # tempo it was played at (target-BPM playback)
+    playback_rate: float | None = None
+
+
+class SettingsBody(BaseModel):
+    target_bpm: float | None = None        # None: use the default (median of liked tracks)
+    match_tempo: bool = False              # play tracks stretched to the target BPM
 
 
 class SkipBody(BaseModel):
@@ -164,31 +174,19 @@ CLIENT_EVENTS = {"playing", "stall", "audio_error", "ended", "page_error", "back
 
 
 def track_info(conn, play) -> dict:
-    """What the player may know before rating: no score, no sources, no control flag.
+    """Everything the player is ever told about a play (SPEC.md §15.3).
 
-    With [ui] hide_names_until_rated, artist and title are withheld too until the play is rated.
+    Never a score, rank, breakdown, source or control flag. Artist, title and artwork only
+    once the play is rated (when [ui] hide_names_until_rated is on).
     """
     t = conn.execute("SELECT * FROM tracks WHERE id = ?", (play["track_id"],)).fetchone()
     hidden = UI["hide_names_until_rated"] and play["rating"] is None
     return {"play_id": play["id"], "track_id": t["id"],
             "artist": None if hidden else t["artist"], "title": None if hidden else t["title"],
-            "duration_s": t["duration_s"], "gain_db": t["gain_db"] or 0.0, "audio": f"/audio/{t['id']}"}
-
-
-def reveal(conn, play_id: int) -> dict:
-    """Everything about a rated play, for display after rating."""
-    play = conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone()
-    weights = json.loads(conn.execute("SELECT weights FROM weight_sets WHERE id = ?",
-                                      (play["weight_set_id"],)).fetchone()[0])
-    components = json.loads(play["components"])
-    return {
-        **track_info(conn, play),
-        "rating": play["rating"], "control": bool(play["is_control"]),
-        "score": play["score"], "rank": play["rank"], "pool_size": play["pool_size"],
-        "components": [{"name": c, "norm": v["norm"], "raw": v["raw"], "weight": weights.get(c, 0.0),
-                        "contribution": weights.get(c, 0.0) * v["norm"]} for c, v in components.items()],
-        "provenance": json.loads(play["provenance"]),
-    }
+            "art": None if hidden or not t["art_path"] else f"/art/{t['id']}",
+            "rating": play["rating"], "duration_s": t["duration_s"], "gain_db": t["gain_db"] or 0.0,
+            "bpm": t["bpm"],
+            "audio": f"/audio/{t['id']}"}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -208,13 +206,15 @@ def state() -> dict:
         "ready": ready, "unplayed": unplayed, "early_start": UI["early_start_tracks"],
         "plays": plays[0], "rated": plays[1],
         "worker": {"state": worker.state, "message": worker.message},
-        "last": reveal(conn, last["id"]) if last else None,
+        "last": track_info(conn, last) if last else None,
+        "labels": ratings.LABELS, "add": ratings.ADD, "play_to_end": UI["play_to_end"],
+        "seeds": conn.execute("SELECT count(*) FROM tracks WHERE origin = 'original_reference'").fetchone()[0],
     }
 
 
 @app.post("/api/next")
 def next_track() -> dict:
-    """The play awaiting a rating, or a new one: top-scored, or median-scored for a control (§8)."""
+    """The play awaiting a rating, or a new one: top-scored, or a random pool track for a control."""
     conn = db.connect()
     play = ratings.current_play(conn)
     if play is None:
@@ -231,7 +231,7 @@ def previous(exclude: int | None = None) -> dict:
     """The track the back button returns to (`exclude`: the track on screen, if already rated).
 
     can_change: its rating can still be changed, or given late if it was skipped. A skipped
-    track stays blind (no score) because it has not been rated.
+    track stays blind (no names) because it has not been rated.
     """
     conn = db.connect()
     play = ratings.previous_play(conn, exclude)
@@ -239,20 +239,19 @@ def previous(exclude: int | None = None) -> dict:
         raise HTTPException(404, "No previous track yet")
     latest = ratings.previous_play(conn)
     can_change = latest is not None and latest["id"] == play["id"]
-    info = {**track_info(conn, play), "rating": None} if play["rating"] is None else reveal(conn, play["id"])
-    return {**info, "can_change": can_change}
+    return {**track_info(conn, play), "can_change": can_change}
 
 
 @app.post("/api/rate")
 def rate(body: RateBody) -> dict:
     conn = db.connect()
     try:
-        ratings.rate(conn, body.play_id, body.rating, body.played_seconds)
+        ratings.rate(conn, body.play_id, body.rating, body.played_seconds, body.played_bpm, body.playback_rate)
     except ValueError as e:
         raise HTTPException(400, str(e))
     reweight.after_rating(conn)
     worker.start_if_needed()
-    return reveal(conn, body.play_id)
+    return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone())
 
 
 @app.post("/api/skip")
@@ -269,7 +268,31 @@ def change(body: ChangeBody) -> dict:
         play_id = ratings.change_last_rating(conn, body.rating)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return reveal(conn, play_id)
+    return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone())
+
+
+@app.get("/api/settings")
+def get_settings() -> dict:
+    from .scoring import target_bpm
+
+    conn = db.connect()
+    target, source = target_bpm(conn)
+    return {"target_bpm": db.get_setting(conn, "target_bpm"), "match_tempo": db.get_setting(conn, "match_tempo", False),
+            "effective_target_bpm": target, "target_source": source,
+            "max_stretch": CONFIG["bpm"]["max_stretch"]}
+
+
+@app.post("/api/settings")
+def set_settings(body: SettingsBody) -> dict:
+    """Target BPM steers ranking (bpm_match) and, with match_tempo, playback speed. Changes are logged."""
+    conn = db.connect()
+    if body.target_bpm is not None and not (40 <= body.target_bpm <= 220):
+        raise HTTPException(400, "Target BPM must be between 40 and 220")
+    if db.get_setting(conn, "target_bpm") != body.target_bpm:
+        db.set_setting(conn, "target_bpm", body.target_bpm)
+    if db.get_setting(conn, "match_tempo", False) != body.match_tempo:
+        db.set_setting(conn, "match_tempo", body.match_tempo)
+    return get_settings()
 
 
 @app.post("/api/event")
@@ -301,6 +324,18 @@ def audio(track_id: int) -> FileResponse:
     if not rel or not resolve(rel).exists():
         raise HTTPException(404, "Audio not available")
     return FileResponse(resolve(rel))
+
+
+@app.get("/art/{track_id}")
+def art(track_id: int) -> FileResponse:
+    """Cover art, only for rated tracks (blind until then)."""
+    conn = db.connect()
+    t = conn.execute("SELECT art_path, rating FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if not t or not t["art_path"] or (UI["hide_names_until_rated"] and t["rating"] is None):
+        raise HTTPException(404, "No artwork")
+    if not resolve(t["art_path"]).exists():
+        raise HTTPException(404, "No artwork")
+    return FileResponse(resolve(t["art_path"]))
 
 
 def serve() -> None:

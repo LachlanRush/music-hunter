@@ -3,7 +3,12 @@ __pycache__/
 .env
 
 # Audio and data (personal, large)
-references/
-keepers/
+seeds/
+collection/
 cache/
 data/
+references/
+keepers/
+
+# Archived runs (earlier databases, logs and audio)
+runs/

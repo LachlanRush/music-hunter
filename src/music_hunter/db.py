@@ -26,7 +26,12 @@ CREATE TABLE IF NOT EXISTS tracks (
     video_id      TEXT,
     loudness_lufs REAL,             -- integrated loudness (EBU R128)
     true_peak_db  REAL,             -- dBTP
-    gain_db       REAL              -- playback gain to reach [loudness] target_lufs
+    gain_db       REAL,             -- playback gain to reach [loudness] target_lufs
+    -- seeds from Spotify links (v2):
+    spotify_id    TEXT,
+    release_date  TEXT,
+    art_path      TEXT,             -- cover art (pool tracks), shown only after rating
+    bpm           REAL              -- measured from the audio (v2), folded into [bpm] min–max
 );
 CREATE UNIQUE INDEX IF NOT EXISTS tracks_file_path ON tracks(file_path);
 
@@ -78,7 +83,9 @@ CREATE TABLE IF NOT EXISTS candidates (
     is_extended   INTEGER NOT NULL,
     status        TEXT NOT NULL DEFAULT 'candidate',  -- candidate | pool | download_failed | not_selected
     fail_reason   TEXT,
-    track_id      INTEGER REFERENCES tracks(id)       -- set once downloaded and analysed
+    track_id      INTEGER REFERENCES tracks(id),      -- set once downloaded and analysed
+    isrc          TEXT,                               -- from Deezer, when known
+    release_date  TEXT                                -- from Deezer, when known
 );
 
 -- Every raw suggestion from every (seed, source), with what happened to it.
@@ -87,7 +94,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
     id            INTEGER PRIMARY KEY,
     generation    INTEGER NOT NULL REFERENCES generations(id),
     seed_track_id INTEGER NOT NULL REFERENCES tracks(id),
-    source        TEXT NOT NULL,    -- 'lastfm' | 'ytmusic'
+    source        TEXT NOT NULL,    -- 'lastfm' | 'ytmusic' | 'deezer'
     rank          INTEGER NOT NULL, -- position in the source's list (1-based)
     artist        TEXT NOT NULL,
     title         TEXT NOT NULL,
@@ -135,7 +142,9 @@ CREATE TABLE IF NOT EXISTS reweightings (
     eval_pairs           INTEGER,
     eval_old_concordance REAL,                     -- on the next eval_window learning ratings
     eval_new_concordance REAL,
-    evaluated_at         TEXT
+    evaluated_at         TEXT,
+    target               TEXT,                     -- v2: what the update moved towards ('current', 'search', 'set N')
+    candidates           TEXT                      -- v2: JSON {target: {full, step}} objective scores
 );
 
 -- Operational log: timings, background jobs, errors, rating changes, player-side events.
@@ -147,6 +156,13 @@ CREATE TABLE IF NOT EXISTS events (
     data     TEXT                       -- JSON
 );
 CREATE INDEX IF NOT EXISTS events_kind ON events(kind, at);
+
+-- Listener settings that affect ranking or playback (v2: target BPM), with history in events.
+CREATE TABLE IF NOT EXISTS settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT,                -- JSON
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 CREATE TABLE IF NOT EXISTS weight_sets (
     id          INTEGER PRIMARY KEY,
@@ -168,6 +184,17 @@ MIGRATIONS = [
     ("candidates", "fail_reason", "TEXT"),
     ("candidates", "track_id", "INTEGER REFERENCES tracks(id)"),
     ("plays", "skipped_at", "TEXT"),
+    ("tracks", "spotify_id", "TEXT"),
+    ("tracks", "release_date", "TEXT"),
+    ("candidates", "isrc", "TEXT"),
+    ("candidates", "release_date", "TEXT"),
+    ("tracks", "art_path", "TEXT"),
+    ("tracks", "bpm", "REAL"),
+    ("plays", "target_bpm", "REAL"),
+    ("plays", "played_bpm", "REAL"),
+    ("plays", "playback_rate", "REAL"),
+    ("reweightings", "target", "TEXT"),
+    ("reweightings", "candidates", "TEXT"),
 ]
 
 
@@ -205,6 +232,19 @@ def setup_logging() -> None:
     file = RotatingFileHandler(path("data") / "music-hunter.log", maxBytes=5_000_000, backupCount=5)
     file.setFormatter(fmt)
     root.addHandler(file)
+
+
+def get_setting(conn: sqlite3.Connection, key: str, default=None):
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return json.loads(row[0]) if row else default
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value) -> None:
+    with conn:
+        conn.execute("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))"
+                     " ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                     (key, json.dumps(value)))
+    log_event(conn, "setting_changed", key=key, value=value)
 
 
 def store_embedding(conn: sqlite3.Connection, track_id: int, model: str, emb) -> None:

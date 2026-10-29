@@ -10,6 +10,7 @@ from collections import Counter
 from datetime import datetime
 
 from .config import CONFIG, path
+from .ratings import LABELS
 
 GAP_MINUTES = CONFIG["report"]["session_gap_minutes"]
 
@@ -71,7 +72,7 @@ def report(conn: sqlite3.Connection) -> None:
     for label, group in (("ranked", [p for p in rated if not p["is_control"]]),
                          ("control", [p for p in rated if p["is_control"]])):
         dist = Counter(p["rating"] for p in group)
-        print(f"  {label:8s} ratings 1–5: " + " ".join(f"{r}:{dist.get(r, 0)}" for r in range(1, 6)))
+        print(f"  {label:8s} " + " · ".join(f"{name} {dist.get(r, 0)}" for r, name in enumerate(LABELS, 1)))
     print("  time from shown to rated: " + spread(
         [(ts(p["rated_at"]) - ts(p["shown_at"])).total_seconds() for p in rated], " s", 0))
     print("  listened before rating:   " + spread([p["played_seconds"] for p in rated if p["played_seconds"] is not None], " s", 0))
@@ -91,13 +92,23 @@ def report(conn: sqlite3.Connection) -> None:
             print(f"    {n:3d}× {msg}")
     print("  scoring the pool (per track shown): " + spread([d["score_ms"] for _, d in events(conn, "shown")], " ms"))
 
-    print("\nRE-WEIGHTING")
+    print("\nRE-WEIGHTING (every update; v2: steps ≤ 0.05 towards the best fit to the whole history)")
     rw = events(conn, "reweighted")
     for _, d in rw:
-        print(f"  at {d['at_ratings']:3d} ratings: {d['seconds'] * 1000:.0f} ms, {d['pairs']} pairs,"
-              f" concordance {d['old_concordance'] or 0:.3f} → {d['new_concordance'] or 0:.3f}")
+        towards = d.get("moved_towards", "–")
+        print(f"  at {d['at_ratings']:3d} ratings: {towards:9s} largest change {d.get('largest_change', 0):.2f},"
+              f" fit {d['old_concordance'] or 0:.3f} → {d['new_concordance'] or 0:.3f}"
+              f"  ({d['seconds'] * 1000:.0f} ms, {d['pairs']} pairs)")
     if not rw:
         print("  none yet")
+
+    print("\nTEMPO")
+    target = conn.execute("SELECT value FROM settings WHERE key = 'target_bpm'").fetchone()
+    match = conn.execute("SELECT value FROM settings WHERE key = 'match_tempo'").fetchone()
+    stretched = [p for p in rated if p["playback_rate"] and abs(p["playback_rate"] - 1) > 0.005]
+    print(f"  target BPM {json.loads(target[0]) if target and target[0] != 'null' else 'from seeds'} · match tempo"
+          f" {'on' if match and json.loads(match[0]) else 'off'} · setting changes {len(events(conn, 'setting_changed'))}"
+          f" · ratings given while stretched {len(stretched)}")
 
     print("\nPOOL PIPELINE (per generation)")
     ready = events(conn, "track_ready")
@@ -113,6 +124,12 @@ def report(conn: sqlite3.Connection) -> None:
         print(f"    candidates: {st.get('candidates', '?')} in {st.get('candidate_phase_seconds', '?')} s"
               + (f" · {api_txt}" if api_txt else ""))
         print(f"    fill: {len(r)} ready, {len(f)} failed in {st.get('fill_seconds', '?')} s · pool {st.get('pool_size', '?')}")
+        cov = conn.execute("SELECT count(*), count(bpm), count(art_path), count(release_date) FROM tracks"
+                           " WHERE origin = 'pool' AND generation = ?", (g["id"],)).fetchone()
+        if cov[0]:
+            print(f"    coverage: BPM {cov[1]}/{cov[0]} · artwork {cov[2]}/{cov[0]} · release year {cov[3]}/{cov[0]}"
+                  f" · failures: BPM {len([1 for _, d in events(conn, 'bpm_failed') if d.get('generation') == g['id']])},"
+                  f" artwork {len([1 for _, d in events(conn, 'art_failed') if d.get('generation') == g['id']])}")
         if r:
             print("    download: " + spread([d["download_s"] for d in r], " s"))
             print("    analysis: " + spread([d["analysis_s"] for d in r], " s"))

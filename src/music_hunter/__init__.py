@@ -9,44 +9,46 @@ import numpy as np
 from . import audio, db
 from .config import CONFIG, path
 
+SOURCE_CODES = {"lastfm": "LF", "ytmusic": "YT", "deezer": "DZ"}
 
-def embed_references(force: bool) -> None:
-    """Milestone 1: embed the original reference tracks in references/ (treated as rated 5)."""
-    from .clap import Embedder
 
-    folder = path("references")
-    folder.mkdir(exist_ok=True)
-    files = audio.audio_files(folder)
-    if not files:
-        sys.exit(f"No audio files in {folder}. Add the 5 original reference tracks first.")
+def embed_seeds(force: bool) -> None:
+    """Embed audio files placed in seeds/ by hand (treated as rated top)."""
+    from .seeds import add_local_files
+
+    add_local_files(db.connect(), force)
+
+
+def add_seeds(links: list[str], file: Path | None) -> None:
+    """v2: seeds from Spotify track or playlist links (SPEC.md §15.1)."""
+    from .seeds import add_from_spotify
+
+    if file:
+        links = links + [l.strip() for l in file.read_text().splitlines() if l.strip() and not l.startswith("#")]
+    if not links:
+        sys.exit("Give Spotify links, or --file with one link per line.")
+    add_from_spotify(db.connect(), links)
+
+
+def analyse_bpm(seeds: bool) -> None:
+    """Measure BPM for tracks that have audio but no BPM yet; --seeds re-reads the seeds (two passes)."""
+    from .bpm import estimate, seeds_median
+    from .config import resolve
 
     conn = db.connect()
-    embedder = Embedder()
+    if seeds:
+        from .seeds import refresh_seed_bpms
+        refresh_seed_bpms(conn)
+        return
+    around = seeds_median(conn)
     sr = CONFIG["clap"]["sample_rate"]
-    for file in files:
-        rel = str(file.relative_to(path("references").parent))
-        row = conn.execute(
-            "SELECT t.id, e.model FROM tracks t LEFT JOIN track_embeddings e ON e.track_id = t.id"
-            " WHERE t.file_path = ?", (rel,)).fetchone()
-        if row and row["model"] == embedder.model_name and not force:
-            print(f"  skip (already embedded)  {file.name}")
-            continue
-
-        artist, title = audio.artist_title(file)
-        samples = audio.decode(file, sr)
-        emb = embedder.embed_track(samples)
+    rows = conn.execute("SELECT id, artist, title, file_path FROM tracks WHERE bpm IS NULL AND file_path IS NOT NULL").fetchall()
+    for r in rows:
+        tempo = estimate(audio.decode(resolve(r["file_path"]), sr), sr, around)
         with conn:
-            if row:
-                track_id = row["id"]
-                conn.execute("UPDATE tracks SET artist=?, title=?, duration_s=? WHERE id=?",
-                             (artist, title, len(samples) / sr, track_id))
-            else:
-                track_id = conn.execute(
-                    "INSERT INTO tracks (artist, title, file_path, duration_s, origin, rating)"
-                    " VALUES (?, ?, ?, ?, 'original_reference', 5)",
-                    (artist, title, rel, len(samples) / sr)).lastrowid
-            db.store_embedding(conn, track_id, embedder.model_name, emb)
-        print(f"  embedded {len(emb.chunks):3d} chunks  {artist} – {title}")
+            conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", (tempo, r["id"]))
+        print(f"  {tempo or '–':>7} BPM  {r['artist']} – {r['title']}")
+    print(f"{len(rows)} tracks measured")
 
 
 def similarity(extra_files: list[Path]) -> None:
@@ -57,11 +59,11 @@ def similarity(extra_files: list[Path]) -> None:
         " JOIN track_embeddings e ON e.track_id = t.id"
         " WHERE t.origin = 'original_reference' ORDER BY t.id").fetchall()
     if not rows:
-        sys.exit("No reference embeddings yet. Run: music-hunter embed-references")
+        sys.exit("No seed embeddings yet. Run: music-hunter add-seeds <Spotify links>")
 
     model = CONFIG["clap"]["checkpoint"]
     if any(r["model"] != model for r in rows):
-        sys.exit(f"Some references were embedded with a different model than {model}; re-run with --force.")
+        sys.exit(f"Some seeds were embedded with a different model than {model}; re-run embed-seeds --force.")
 
     labels = [f"{r['artist']} – {r['title']}" for r in rows]
     vecs = [db.from_blob(r["embedding"]) for r in rows]
@@ -106,10 +108,10 @@ def similarity(extra_files: list[Path]) -> None:
             print(f"  {i + 1:2d}. {labels[i]}: max {to_refs[0]:.3f}  top-3 mean {to_refs[:3].mean():.3f}")
 
 
-def pull(fresh: bool, no_lastfm: bool, no_fill: bool) -> None:
+def pull(fresh: bool, no_lastfm: bool, no_fill: bool, no_deezer: bool = False) -> None:
     """One generation: candidates from both sources (Milestone 2), then fill the pool (Milestone 3)."""
     from .pull import Pull, match_seeds, reset
-    from .sources import LastFM, YouTubeMusic
+    from .sources import Deezer, LastFM, YouTubeMusic
 
     conn = db.connect()
     if fresh:
@@ -117,7 +119,7 @@ def pull(fresh: bool, no_lastfm: bool, no_fill: bool) -> None:
     yt = YouTubeMusic()
     lastfm = None if no_lastfm else LastFM()
     seed_list = match_seeds(conn, yt)
-    generation = Pull(conn, yt, lastfm).run(seed_list)
+    generation = Pull(conn, yt, lastfm, None if no_deezer else Deezer()).run(seed_list)
     candidate_stats(conn, generation)
     if not no_fill:
         fill(generation)
@@ -150,11 +152,13 @@ def show_pool() -> None:
                             (t["candidate_id"],)).fetchall()
         for p in prov:
             per_list[(seed_names[p["seed_track_id"]], p["source"])] += 1
-        sources = ", ".join(f"{'LF' if p['source'] == 'lastfm' else 'YT'}:{seed_names[p['seed_track_id']]}"
+        sources = ", ".join(f"{SOURCE_CODES[p['source']]}:{seed_names[p['seed_track_id']]}"
                             for p in prov)
         analysed = f"{t['n_chunks']} chunks" if t["n_chunks"] else "NOT ANALYSED"
-        print(f"  {t['id']:4d}  {t['artist']} – {t['title']}  [{t['duration_s'] / 60:.1f} min, {analysed},"
-              f" {t['loudness_lufs']:.1f} LUFS → gain {t['gain_db']:+.1f} dB]\n          {sources}")
+        tempo = f"{t['bpm']:.1f} BPM" if t["bpm"] else "BPM ?"
+        year = (t["release_date"] or "?")[:4]
+        print(f"  {t['id']:4d}  {t['artist']} – {t['title']}  [{t['duration_s'] / 60:.1f} min, {tempo}, {year},"
+              f" {analysed}, {t['loudness_lufs']:.1f} LUFS → gain {t['gain_db']:+.1f} dB]\n          {sources}")
 
     gen = latest_generation(conn)
     stats = json.loads(conn.execute("SELECT stats FROM generations WHERE id = ?", (gen,)).fetchone()[0] or "{}")
@@ -230,7 +234,7 @@ def candidates(generation: int | None) -> None:
         prov = conn.execute("SELECT seed_track_id, source, rank, via FROM suggestions WHERE candidate_id = ?"
                             " ORDER BY source, rank", (c["id"],)).fetchall()
         sources = ", ".join(
-            f"{'LF' if p['source'] == 'lastfm' else 'YT'}:{seed_names[p['seed_track_id']]}#{p['rank']}"
+            f"{SOURCE_CODES[p['source']]}:{seed_names[p['seed_track_id']]}#{p['rank']}"
             + (f" via {p['via']}" if p["via"] else "") for p in prov)
         dur = f"{c['duration_s'] // 60:.0f}:{c['duration_s'] % 60:02.0f}" if c["duration_s"] else "?"
         ext = " [ext]" if c["is_extended"] else ""
@@ -250,6 +254,12 @@ def candidate_stats(conn, generation: int) -> None:
         print(f"  {n:4d}  {reason}")
     if stats.get("seed_match_failures"):
         print("\nSeeds not matched on YouTube Music: " + "; ".join(stats["seed_match_failures"]))
+    if stats.get("source_combinations"):
+        print("\nCandidates by which sources suggested them (agreement):")
+        for combo, n in stats["source_combinations"].items():
+            print(f"  {n:4d}  {combo}")
+        a = stats.get("artists_by_source_count", {})
+        print("Artists suggested by 1 / 2 / 3 sources: " + " / ".join(str(a.get(str(k), 0)) for k in (1, 2, 3)))
     print(f"\nDistinct candidates: {stats.get('candidates')}")
 
 
@@ -269,7 +279,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="music-hunter")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("embed-references", help="Embed the original tracks in references/")
+    p = sub.add_parser("add-seeds", help="Add seeds from Spotify track or playlist links")
+    p.add_argument("links", nargs="*", help="Spotify track or playlist links")
+    p.add_argument("--file", type=Path, help="Text file with one link per line")
+
+    p = sub.add_parser("embed-seeds", help="Embed audio files placed in seeds/ by hand")
     p.add_argument("--force", action="store_true", help="Re-embed even if already stored")
 
     p = sub.add_parser("similarity", help="Show the reference similarity matrix")
@@ -280,6 +294,7 @@ def main() -> None:
     p.add_argument("--fresh", action="store_true", help="Forget earlier pulls and seed matches first")
     p.add_argument("--no-lastfm", action="store_true", help="YouTube Music only (e.g. before the API key is set)")
     p.add_argument("--no-fill", action="store_true", help="Candidates only; don't download or analyse")
+    p.add_argument("--no-deezer", action="store_true", help="Skip the Deezer source")
 
     p = sub.add_parser("fill", help="Fill the pool from a generation's candidates (resumes)")
     p.add_argument("--generation", type=int, help="Defaults to the latest pull")
@@ -291,6 +306,9 @@ def main() -> None:
 
     sub.add_parser("averages", help="Seed and source averages, reference sets")
 
+    p = sub.add_parser("analyse-bpm", help="Measure BPM for tracks that don't have it yet")
+    p.add_argument("--seeds", action="store_true", help="Re-read the seeds' BPM (two passes, 3:2 tie-break)")
+
     sub.add_parser("serve", help="Start the localhost player")
 
     sub.add_parser("report", help="Operational report: sessions, delays, pipeline timings, errors")
@@ -300,12 +318,14 @@ def main() -> None:
 
     args = parser.parse_args()
     db.setup_logging()
-    if args.command == "embed-references":
-        embed_references(args.force)
+    if args.command == "add-seeds":
+        add_seeds(args.links, args.file)
+    elif args.command == "embed-seeds":
+        embed_seeds(args.force)
     elif args.command == "similarity":
         similarity(args.files)
     elif args.command == "pull":
-        pull(args.fresh, args.no_lastfm, args.no_fill)
+        pull(args.fresh, args.no_lastfm, args.no_fill, args.no_deezer)
     elif args.command == "fill":
         fill(args.generation)
     elif args.command == "pool":
@@ -314,6 +334,8 @@ def main() -> None:
         scores(args.top)
     elif args.command == "averages":
         averages()
+    elif args.command == "analyse-bpm":
+        analyse_bpm(args.seeds)
     elif args.command == "serve":
         from .web import serve
         serve()

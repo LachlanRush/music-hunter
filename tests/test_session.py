@@ -7,12 +7,14 @@ test runs offline on a temporary copy of the database.
 """
 
 import json
+import random
 
 import numpy as np
 
 import music_hunter.config as config
 from music_hunter import db, pool, web
 from music_hunter.reweight import CFG as RW
+from music_hunter.scoring import COMPONENTS
 
 PLAYS = 112
 
@@ -84,6 +86,7 @@ def test_session(conn, monkeypatch):
     from fastapi.testclient import TestClient
 
     c = conn
+    random.seed(5)                                   # control draws are random (SPEC.md §15.4); keep the test repeatable
     monkeypatch.setattr(pool, "Filler", FakeFiller)
     # The real pool size changes as listening goes on; set thresholds so a refill happens mid-session.
     from music_hunter.config import CONFIG
@@ -109,18 +112,23 @@ def test_session(conn, monkeypatch):
         e = db.from_blob(c.execute("SELECT embedding FROM track_embeddings WHERE track_id = ?",
                                    (track_id,)).fetchone()[0])
         sim = np.sort(refs @ e)[-3:].mean()
-        return int(np.clip(round(3 + (sim - 0.975) * 80 + rng.normal(0, 0.7)), 1, 5))
+        return int(np.clip(round(2.5 + (sim - 0.975) * 60 + rng.normal(0, 0.6)), 1, 4))   # Off … Add
 
     with TestClient(web.app) as client:
+        settings = client.post("/api/settings", json={"target_bpm": 128.0, "match_tempo": True}).json()
+        assert settings["effective_target_bpm"] == 128.0
         for i in range(PLAYS):
             t = client.post("/api/next").json()
-            assert "score" not in t and "control" not in t        # blind until rated
+            assert not {"score", "rank", "control", "components", "provenance"} & set(t)   # blind
+            assert t["title"] is None and t["art"] is None                               # names hidden
             if i % 23 == 11:
                 client.post("/api/skip", json={"play_id": t["play_id"], "played_seconds": 8})
                 continue
+            stretched = {"played_bpm": 128.0, "playback_rate": 1.04} if i % 3 == 0 else {}
             rev = client.post("/api/rate", json={"play_id": t["play_id"], "rating": listener(t["track_id"]),
-                                                 "played_seconds": 60 + i}).json()
-            assert {"score", "rank", "control", "components", "provenance"} <= set(rev)
+                                                 "played_seconds": 60 + i, **stretched}).json()
+            assert not {"score", "rank", "control", "components", "provenance"} & set(rev)  # still blind
+            assert rev["title"] is not None                                             # names revealed
             if i == 40:                                            # mis-tap correction
                 client.post("/api/change", json={"rating": max(1, rev["rating"] - 1)})
             if i == 3:                                             # player-side events
@@ -136,19 +144,15 @@ def test_session(conn, monkeypatch):
     # Every play logged with all components, provenance, rank, generation, timing.
     for p in plays:
         comps = json.loads(p["components"])
-        assert set(comps) == {"audio_match", "dislike_match", "source_score", "seed_score", "agreement",
-                              "personal_model", "diversity_penalty"}
+        assert set(comps) == set(COMPONENTS)
         assert json.loads(p["provenance"]) and p["rank"] >= 1 and p["generation"] >= 1
         assert p["played_seconds"] is not None and p["shown_at"]
 
-    # Controls: exactly one per complete block of 5, always the median-scored track.
-    for b in range(PLAYS // 5):
-        assert sum(p["is_control"] for p in plays[b * 5:b * 5 + 5]) == 1
-    for p in plays:
-        if p["is_control"]:
-            assert p["rank"] == (p["pool_size"] - 1) // 2 + 1
-    positions = {next(i for i in range(5) if plays[b * 5 + i]["is_control"]) for b in range(PLAYS // 5)}
-    assert len(positions) > 1                                      # not a countable pattern
+    # Controls: about 1 in 5, independently; a random pool track (ranks vary), not the top pick.
+    controls = [p for p in plays if p["is_control"]]
+    assert 0.08 < len(controls) / PLAYS < 0.35
+    assert len({p["rank"] for p in controls}) > 1
+    assert all(p["rank"] == 1 for p in plays if not p["is_control"])
 
     # Re-weighting on schedule, each logged with a new weight set and later evaluated.
     learning = c.execute("SELECT count(*) FROM plays WHERE is_control = 0 AND rating IS NOT NULL").fetchone()[0]
@@ -194,16 +198,33 @@ def test_session(conn, monkeypatch):
     from music_hunter.report import report
     report(c)
 
-    # Results view has everything to show.
-    assert results["verdict"] in ("meets", "below")
+    # Add saves to collection/ (learning or control); nothing else is kept, apart from the latest
+    # rating's held audio (the back button can still change it).
+    from music_hunter.ratings import ADD
+    added = [p for p in plays if p["rating"] == ADD]
+    assert len(list((config.ROOT / "collection").glob("*"))) == len(added) > 0
+    held = c.execute("SELECT count(*) FROM plays WHERE undo_path IS NOT NULL").fetchone()[0]
+    assert held <= 1
+    assert all(p["target_bpm"] == 128.0 for p in plays)
+    assert sum(1 for p in plays if p["playback_rate"] == 1.04) > 20
+
+    # Results view has everything to show (v2: no pass mark).
+    assert results["reading"] in ("clearly_higher", "clearly_lower", "unclear")
+    cr = results["controls_by_rank"]
+    assert cr["n"] == sum(1 for p in plays if p["is_control"] and p["rating"] is not None)
+    assert sum(b["n"] for b in cr["bins"]) == cr["n"] and len({b["n"] > 0 for b in cr["bins"]}) >= 1
+    assert all(len(v) == len(rws) + 1 for v in results["weight_history"].values())
+    assert results["tempo"]["stretched_plays"] > 20 and results["tempo"]["setting_changes"] == 2
+    assert results["add_difference"]["diff"] is not None
     assert results["ranked"]["n"] and results["control"]["n"]
     assert results["rolling"]["ranked"] and results["rolling"]["control"]
     assert all(s["points"] for s in results["source_averages"])
     assert len(results["reweightings"]) == len(rws)
     assert results["totals"]["skipped"] == sum(1 for p in plays if p["skipped_at"])
     print(f"\nranked {results['ranked']['mean']:.2f} vs control {results['control']['mean']:.2f} "
-          f"(diff {results['difference']['diff']:+.2f}), keep {results['ranked']['keep']:.0%} vs "
-          f"{results['control']['keep']:.0%}; re-weightings at {expected}; generations {len(gens)}")
-    for r in rws:
-        print(f"  at {r['at_ratings']}: concordance {r['old_concordance']:.3f} -> {r['new_concordance']:.3f};"
-              f" next 15: old {r['eval_old_concordance']}, new {r['eval_new_concordance']}")
+          f"(diff {results['difference']['diff']:+.2f}, {results['reading']}), Add rate {results['ranked']['keep']:.0%} vs "
+          f"{results['control']['keep']:.0%}; updates at {expected}; generations {len(gens)}")
+    print("controls by rank:", [(b["name"], b["n"], b["mean"] and round(b["mean"], 2)) for b in cr["bins"]],
+          "spearman", cr["spearman"] and round(cr["spearman"], 2))
+    for r in rws[::4]:
+        print(f"  at {r['at_ratings']}: towards {r['target']:8s} fit {r['old_concordance']:.3f} -> {r['new_concordance']:.3f}")

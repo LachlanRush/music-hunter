@@ -31,17 +31,31 @@
 input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 
 /* Rating strip */
-.rate { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.rate { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .rate button {
   border: 1px solid var(--line); background: var(--surface); border-radius: 6px;
   padding: 12px 4px 10px; display: grid; gap: 2px; justify-items: center;
 }
-.rate button b { font: 800 26px/1 var(--display); font-variant-numeric: tabular-nums; }
+.rate button b { font: 800 clamp(16px, 3.4vw, 22px)/1.1 var(--display); }
 .rate button span { font: 400 12px/1.2 var(--body); color: var(--muted); }
 .rate button:hover:not(:disabled) { border-color: var(--fg); }
 .rate button.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 .rate button.on span { color: inherit; }
 .rate button:disabled:not(.on) { opacity: 0.45; cursor: default; }
+.rate button.add { border-color: var(--accent); }
+.rate button.add b { color: var(--accent); }
+.rate button.add.on b { color: inherit; }
+.now-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: end; }
+.art { width: 104px; height: 104px; border-radius: 6px; background: var(--line); object-fit: cover; display: grid;
+  place-items: center; color: var(--muted); font: 800 34px/1 var(--display); }
+.below { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 18px; }
+.volume { display: flex; align-items: center; gap: 8px; }
+.volume input { width: 120px; }
+.tempo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 14px; }
+.tempo label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.tempo input[type=number] { width: 76px; font: 500 14px var(--mono); padding: 4px 6px; border: 1px solid var(--line);
+  border-radius: 4px; background: var(--surface); color: var(--fg); }
+.tempo-note { font: 400 12px var(--mono); color: var(--muted); }
 .hint { font: 400 12px/1.5 var(--mono); color: var(--muted); }
 
 /* Preparing the pool */
@@ -51,36 +65,21 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 .meter { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; max-width: 420px; }
 .meter i { display: block; height: 100%; background: var(--accent); width: 0; transition: width 0.4s; }
 
-/* Reveal of the most recent rating */
-.reveal { border-top: 1px solid var(--line); padding-top: 22px; display: grid; gap: 18px; }
-.reveal-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; justify-content: space-between; }
-.reveal h2 { font: 700 20px/1.2 var(--display); margin: 4px 0 0; overflow-wrap: anywhere; }
+/* The most recent rating: names, artwork and a way to change it (no scores, ever) */
+.reveal { border-top: 1px solid var(--line); padding-top: 22px; display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center; }
+.reveal .art { width: 64px; height: 64px; font-size: 22px; }
+.reveal-text { min-width: 0; flex: 1 1 220px; }
+.reveal h2 { font: 700 18px/1.2 var(--display); margin: 4px 0 0; overflow-wrap: anywhere; }
 .reveal .by { color: var(--muted); font-size: 14px; }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { font: 500 12px/1 var(--mono); padding: 6px 8px; border-radius: 4px; border: 1px solid var(--line); white-space: nowrap; }
-.chip.control { border-color: var(--accent); color: var(--accent); }
-.scoreline { font: 400 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
-.scoreline b { color: var(--fg); font-weight: 500; }
-.table-wrap { overflow-x: auto; }
-table { border-collapse: collapse; width: 100%; font: 400 13px var(--mono); font-variant-numeric: tabular-nums; }
-th { text-align: left; font-weight: 500; color: var(--muted); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; padding: 0 10px 6px 0; }
-td { padding: 6px 10px 6px 0; border-top: 1px solid var(--line); white-space: nowrap; }
-td.num, th.num { text-align: right; }
-.bar { width: 120px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
-.bar i { display: block; height: 100%; background: var(--fg); }
-.neg { color: var(--bad); }
-.pos { color: var(--good); }
-.sources { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 14px; }
-.sources li { display: flex; gap: 10px; flex-wrap: wrap; }
-.sources .src { font: 500 12px/1.6 var(--mono); color: var(--muted); min-width: 140px; }
 .change { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.change button { border: 1px solid var(--line); background: var(--surface); border-radius: 4px; width: 34px; height: 30px; font: 500 13px var(--mono); }
+.change button { border: 1px solid var(--line); background: var(--surface); border-radius: 4px; padding: 6px 10px; font: 500 13px var(--body); }
 .change button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .error { color: var(--bad); font-size: 14px; }
 
 @media (max-width: 480px) {
   .rate button span { font-size: 10px; }
-  .bar { width: 64px; }
+  .art { width: 72px; height: 72px; }
 }
 @media (prefers-reduced-motion: reduce) { .meter i { transition: none; } }
 </style>
@@ -100,10 +99,13 @@ td.num, th.num { text-align: right; }
   </section>
 
   <section class="now" id="now" hidden>
-    <div>
-      <div class="label" id="now-label">Now playing</div>
-      <div class="artist" id="artist"></div>
-      <h1 class="title" id="title"></h1>
+    <div class="now-head">
+      <div class="art" id="art-box" aria-hidden="true">?</div>
+      <div>
+        <div class="label" id="now-label">Now playing</div>
+        <div class="artist" id="artist"></div>
+        <h1 class="title" id="title"></h1>
+      </div>
     </div>
     <div class="transport">
       <button class="round" id="back" aria-label="Back to the previous track">
@@ -121,13 +123,21 @@ td.num, th.num { text-align: right; }
       </button>
     </div>
     <div class="rate" id="rate" role="group" aria-label="Rate this track">
-      <button data-r="1"><b>1</b><span>Terrible</span></button>
-      <button data-r="2"><b>2</b><span>Bad</span></button>
-      <button data-r="3"><b>3</b><span>Good</span></button>
-      <button data-r="4"><b>4</b><span>Great</span></button>
-      <button data-r="5"><b>5</b><span>Amazing</span></button>
+      <button data-r="1"><b>Off</b><span>1 · wrong direction</span></button>
+      <button data-r="2"><b>Close</b><span>2 · near, or a bad part</span></button>
+      <button data-r="3"><b>On target</b><span>3 · right sound</span></button>
+      <button data-r="4" class="add"><b>Add</b><span>4 · save it</span></button>
     </div>
-    <div class="hint" id="hint">Keys: 1–5 rate · space play/pause · N skip · B back</div>
+    <div class="below">
+      <div class="hint" id="hint">Keys: 1–4 rate · space play/pause · N skip · B back</div>
+      <div class="volume"><label class="label" for="volume">Volume</label>
+        <input type="range" id="volume" min="0" max="100" value="100"></div>
+    </div>
+    <div class="tempo">
+      <label><input type="checkbox" id="match-tempo"> Match tempo</label>
+      <label>Target <input type="number" id="target-bpm" min="40" max="220" step="0.5" aria-label="Target BPM"> BPM</label>
+      <span class="tempo-note" id="tempo-note"></span>
+    </div>
     <div class="error" id="error" hidden></div>
   </section>
 
@@ -136,13 +146,8 @@ td.num, th.num { text-align: right; }
 
 <script>
 const $ = (id) => document.getElementById(id);
-const LABELS = {1: "Terrible", 2: "Bad", 3: "Good", 4: "Great", 5: "Amazing"};
-const COMPONENT_NAMES = {
-  audio_match: "Audio match", dislike_match: "Dislike match", source_score: "Source average",
-  seed_score: "Seed average", agreement: "Source agreement", personal_model: "Personal model",
-  diversity_penalty: "Diversity penalty",
-};
-const SOURCE_NAMES = {lastfm: "Last.fm similar artists", ytmusic: "YouTube Music radio"};
+const LABELS = {1: "Off", 2: "Close", 3: "On target", 4: "Add"};
+let PLAY_TO_END = new Set([3, 4]);      // updated from the server's settings
 
 const audio = new Audio();
 audio.preload = "auto";
@@ -190,6 +195,7 @@ async function poll() {
     const err = s.worker.state === "error" ? ` · <span class="neg">Pool worker failed: ${s.worker.message}</span>` : "";
     $("status").innerHTML = `${s.unplayed} unplayed · ${s.rated} rated${busy}${err}`;
     if (!started) renderGate(s);
+    if (s.play_to_end) PLAY_TO_END = new Set(s.play_to_end);
     if (s.last && !$("reveal").dataset.loaded) renderReveal(s.last);
   } catch (e) {
     $("status").textContent = "Can't reach the music-hunter server. Is `music-hunter serve` running?";
@@ -202,6 +208,11 @@ function renderGate(s) {
     $("gate").hidden = true;
     $("now").hidden = false;
     loadNext({autoplay: false});            // shown paused; the play button is the first click
+  } else if (s.seeds === 0) {
+    $("gate-label").textContent = "No seeds yet";
+    $("gate-title").textContent = "Add your seed tracks first";
+    $("gate-text").textContent = "Run `music-hunter add-seeds <Spotify links>`, then restart `music-hunter serve`.";
+    $("gate-meter").hidden = true;
   } else if (s.unplayed === 0 && s.worker.state !== "running") {
     $("gate-label").textContent = "Pool empty";
     $("gate-title").textContent = "No unplayed tracks";
@@ -217,12 +228,21 @@ function renderGate(s) {
 }
 
 // --- playback ----------------------------------------------------------------------
+let volumeNode = null;
 function ensureAudioGraph() {
   if (ctx) return;
   ctx = new AudioContext();
-  gainNode = ctx.createGain();
-  ctx.createMediaElementSource(audio).connect(gainNode).connect(ctx.destination);
+  gainNode = ctx.createGain();                   // per-track loudness normalisation
+  volumeNode = ctx.createGain();                 // the volume slider, applied after it
+  volumeNode.gain.value = Number($("volume").value) / 100;
+  ctx.createMediaElementSource(audio).connect(gainNode).connect(volumeNode).connect(ctx.destination);
 }
+try { const v = localStorage.getItem("volume"); if (v !== null) $("volume").value = v; } catch (e) {}
+$("volume").addEventListener("input", () => {
+  const v = Number($("volume").value);
+  if (volumeNode) volumeNode.gain.value = v / 100;
+  try { localStorage.setItem("volume", String(v)); } catch (e) {}
+});
 
 async function loadNext({autoplay = true} = {}) {
   showError("");
@@ -249,6 +269,7 @@ async function loadTrack(track, startAt, alreadyPlayed, autoplay = true) {
   gainNode.gain.value = Math.pow(10, track.gain_db / 20);   // loudness normalisation
   audio.src = track.audio;
   if (startAt) audio.addEventListener("loadedmetadata", () => { audio.currentTime = startAt; }, {once: true});
+  applyTempo(track);
   loadStart = performance.now(); awaitingFirstPlay = autoplay; stallStart = null;
   $("seek").value = 0;
   $("dur").textContent = fmt(track.duration_s);
@@ -262,12 +283,60 @@ async function loadTrack(track, startAt, alreadyPlayed, autoplay = true) {
   }
 }
 
+// --- tempo: target BPM steers ranking (server) and, with "Match tempo", playback speed ---------
+let settings = {target_bpm: null, match_tempo: false, effective_target_bpm: null, max_stretch: 0.12};
+
+async function loadSettings() {
+  try { settings = await api("/api/settings"); } catch (e) { return; }
+  $("match-tempo").checked = settings.match_tempo;
+  $("target-bpm").value = settings.target_bpm ?? "";
+  $("target-bpm").placeholder = settings.effective_target_bpm ? settings.effective_target_bpm.toFixed(1) : "";
+  if (onAir()) applyTempo(onAir());
+}
+
+async function saveSettings() {
+  const v = $("target-bpm").value.trim();
+  try {
+    settings = await api("/api/settings", {target_bpm: v === "" ? null : Number(v), match_tempo: $("match-tempo").checked});
+  } catch (e) { showError(`Couldn't save the tempo setting: ${e.message}`); return; }
+  $("target-bpm").placeholder = settings.effective_target_bpm ? settings.effective_target_bpm.toFixed(1) : "";
+  if (onAir()) applyTempo(onAir());
+}
+
+function applyTempo(track) {
+  let rate = 1, note = "";
+  const target = settings.effective_target_bpm;
+  if (settings.match_tempo && target && track.bpm) {
+    const r = target / track.bpm, pct = Math.round((r - 1) * 100);
+    if (Math.abs(r - 1) <= settings.max_stretch) {
+      rate = r; note = `Playing at ${target.toFixed(1)} BPM (${pct >= 0 ? "+" : ""}${pct}%)`;
+    } else {
+      note = `Original tempo: matching needs ${pct >= 0 ? "+" : ""}${pct}%, beyond ±${Math.round(settings.max_stretch * 100)}%`;
+    }
+  } else if (settings.match_tempo && !track.bpm) {
+    note = "Original tempo: no BPM measured for this track";
+  }
+  audio.preservesPitch = audio.mozPreservesPitch = audio.webkitPreservesPitch = true;
+  audio.defaultPlaybackRate = rate;
+  audio.playbackRate = rate;
+  $("tempo-note").textContent = note;
+}
+$("match-tempo").addEventListener("change", saveSettings);
+$("target-bpm").addEventListener("change", saveSettings);
+
+function tempoReport() {
+  const t = onAir();
+  return {played_bpm: t && t.bpm ? Math.round(t.bpm * audio.playbackRate * 10) / 10 : null,
+          playback_rate: Math.round(audio.playbackRate * 1000) / 1000};
+}
+
 // Artist and title arrive only once a track is rated (server setting hide_names_until_rated).
 function showNames(track) {
   const hidden = track.title == null;
-  $("artist").textContent = hidden ? "Artist and title appear once you rate" : track.artist;
+  $("artist").textContent = hidden ? "Artist, title and artwork appear once you rate" : track.artist;
   $("title").textContent = hidden ? "Hidden until rated" : track.title;
   $("title").classList.toggle("hidden-name", hidden);
+  $("art-box").innerHTML = track.art ? `<img class="art" src="${track.art}" alt="">` : "?";
 }
 
 // Browsers only allow sound after a click or key press; any of them unlocks it.
@@ -312,13 +381,13 @@ function renderRating() {
   if (onPrev) {
     const back = resume ? "N returns to the current track where you left it" : "N moves on";
     $("hint").textContent = !prev.can_change
-      ? `Rated ${prev.rating ?? "–"} · only your most recent rating can be changed · ${back}`
-      : prev.rating === null ? `You skipped this one · rate it now with 1–5 · ${back}`
-      : `Rated ${prev.rating} · press another number to change it · ${back}`;
+      ? `${LABELS[prev.rating] ?? "Not rated"} · only your most recent rating can be changed · ${back}`
+      : prev.rating === null ? `You skipped this one · rate it now with 1–4 · ${back}`
+      : `${LABELS[prev.rating]} · press another number to change it · ${back}`;
   } else {
     $("hint").textContent = ratedCurrent === null
-      ? "Keys: 1–5 rate · space play/pause · N skip · B back"
-      : `Rated ${ratedCurrent} · plays to the end, then the next track starts · N skips ahead · B back`;
+      ? "Keys: 1–4 rate · space play/pause · N skip · B back"
+      : `${LABELS[ratedCurrent]} · plays to the end, then the next track starts · N skips ahead · B back`;
   }
 }
 
@@ -326,11 +395,11 @@ async function ratePrevious(r) {
   if (!prev.can_change || r === prev.rating) return;
   try {
     const rev = prev.rating === null
-      ? await api("/api/rate", {play_id: prev.play_id, rating: r, played_seconds: Math.round(played)})
+      ? await api("/api/rate", {play_id: prev.play_id, rating: r, played_seconds: Math.round(played), ...tempoReport()})
       : await api("/api/change", {rating: r});
     renderReveal(rev);
     prev = {...prev, ...rev, can_change: true};
-    if (r <= 2) { goForward(); return; }      // 1–2 skip immediately
+    if (!PLAY_TO_END.has(r)) { goForward(); return; }   // Off / Close skip at once
     showNames(prev);
     renderRating();
     if (audio.ended) goForward();
@@ -342,10 +411,11 @@ async function rate(r) {
   if (viewing === "previous") return ratePrevious(r);
   if (!current || ratedCurrent !== null) return;
   try {
-    const rev = await api("/api/rate", {play_id: current.play_id, rating: r, played_seconds: Math.round(played)});
+    const rev = await api("/api/rate", {play_id: current.play_id, rating: r, played_seconds: Math.round(played),
+                                        ...tempoReport()});
     renderReveal(rev);
-    current = {...current, artist: rev.artist, title: rev.title};
-    if (r <= 2) { loadNext(); return; }       // 1–2 skip immediately
+    current = {...current, artist: rev.artist, title: rev.title, art: rev.art};
+    if (!PLAY_TO_END.has(r)) { loadNext(); return; }    // Off / Close skip at once
     showNames(current);
     ratedCurrent = r;                         // 3–5 play to the end
     renderRating();
@@ -371,9 +441,9 @@ async function changeRating(r) {
     renderReveal(rev);
     if (viewing === "previous" && prev && rev.play_id === prev.play_id) {
       prev = {...prev, ...rev, can_change: true};
-      if (r <= 2) goForward(); else renderRating();
+      if (!PLAY_TO_END.has(r)) goForward(); else renderRating();
     } else if (current && rev.play_id === current.play_id) {
-      if (r <= 2) { loadNext(); } else { ratedCurrent = r; renderRating(); }
+      if (!PLAY_TO_END.has(r)) { loadNext(); } else { ratedCurrent = r; renderRating(); }
     }
   } catch (e) { showError(`Couldn't change the rating: ${e.message}`); }
   poll();
@@ -439,7 +509,7 @@ document.addEventListener("pointerdown", () => { if (ctx) unlockAudio(); });
 document.addEventListener("keydown", (e) => {
   if (!started || e.metaKey || e.ctrlKey || e.altKey) return;
   unlockAudio();
-  if (e.key >= "1" && e.key <= "5") { rate(Number(e.key)); e.preventDefault(); }
+  if (e.key >= "1" && e.key <= "4") { rate(Number(e.key)); e.preventDefault(); }
   else if (e.key === " " && e.target.tagName !== "BUTTON") { togglePlay(); e.preventDefault(); }
   else if (e.key === "n" || e.key === "N") { skip(); }
   else if (e.key === "b" || e.key === "B") { goBack(); }
@@ -449,50 +519,27 @@ document.addEventListener("keydown", (e) => {
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c])); }
 
 function renderReveal(rev) {
+  // The most recent rating: names, artwork and a way to change it. Never a score (SPEC.md §15.3).
   const el = $("reveal");
   el.dataset.loaded = "1";
-  const rows = rev.components.map((c) => {
-    const cls = c.contribution < 0 ? "neg" : c.contribution > 0 ? "pos" : "";
-    return `<tr>
-      <td>${COMPONENT_NAMES[c.name] || c.name}</td>
-      <td><div class="bar"><i style="width:${(100 * c.norm).toFixed(0)}%"></i></div></td>
-      <td class="num">${c.norm.toFixed(2)}</td>
-      <td class="num">${c.weight >= 0 ? "+" : ""}${c.weight.toFixed(2)}</td>
-      <td class="num ${cls}">${c.contribution >= 0 ? "+" : ""}${c.contribution.toFixed(3)}</td>
-    </tr>`;
-  }).join("");
-  const sources = rev.provenance.map(([seed, src]) =>
-    `<li><span class="src">${SOURCE_NAMES[src] || src}</span><span>from ${esc(seed)}</span></li>`).join("");
-  const change = [1, 2, 3, 4, 5].map((r) =>
-    `<button class="${r === rev.rating ? "on" : ""}" data-change="${r}" aria-label="Change rating to ${r}">${r}</button>`).join("");
+  const change = [1, 2, 3, 4].map((r) =>
+    `<button class="${r === rev.rating ? "on" : ""}" data-change="${r}">${LABELS[r]}</button>`).join("");
   el.innerHTML = `
-    <div class="reveal-head">
-      <div>
-        <div class="label">Last rated</div>
-        <h2>${esc(rev.title)}</h2>
-        <div class="by">${esc(rev.artist)}</div>
-      </div>
-      <div class="chips">
-        <span class="chip">${rev.rating} · ${LABELS[rev.rating]}</span>
-        <span class="chip ${rev.control ? "control" : ""}">${rev.control ? "Control play" : "Ranked play"}</span>
-      </div>
+    ${rev.art ? `<img class="art" src="${rev.art}" alt="">` : `<div class="art" aria-hidden="true">♪</div>`}
+    <div class="reveal-text">
+      <div class="label">Last rated</div>
+      <h2>${esc(rev.title)}</h2>
+      <div class="by">${esc(rev.artist)}</div>
     </div>
-    <div class="scoreline">Score <b>${rev.score.toFixed(3)}</b> · rank <b>${rev.rank}</b> of ${rev.pool_size} when shown</div>
-    <div class="table-wrap"><table>
-      <thead><tr><th>Component</th><th>Normalised</th><th class="num">Value</th><th class="num">Weight</th><th class="num">Effect</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>
-    <div>
-      <div class="label">Suggested by</div>
-      <ul class="sources">${sources || "<li>No source recorded</li>"}</ul>
-    </div>
-    <div class="change"><span class="label">Change rating</span>${change}</div>`;
+    <span class="chip">${LABELS[rev.rating]}</span>
+    <div class="change"><span class="label">Change</span>${change}</div>`;
   el.hidden = false;
   el.querySelectorAll("[data-change]").forEach((b) =>
     b.addEventListener("click", () => changeRating(Number(b.dataset.change))));
 }
 
 poll();
+loadSettings();
 setInterval(poll, 4000);
 </script>
 </body>

@@ -309,6 +309,8 @@ Based on the first 100-play test (§14, and the review on 2026-10-29: ranked 2.3
 | **Add** (4) | right sound, and I want it | positive set, weight 2; becomes a seed | yes, to `collection/` |
 - Rating = direction (learning only); Add = saving. A good-sounding track with a bad part is On target or Close, never Off.
 - Audio of tracks not Added is deleted after the next rating (held until then so the back button can still change it).
+- Playback (built 2026-10-29, configurable `play_to_end`): On target and Add keep playing to the end; Off and Close move straight to the next track.
+- Skipped tracks' audio is deleted once a later rating makes them unreachable with the back button.
 - Averages (§5) use the 1–4 values, with the prior at the scale midpoint (2.5).
 
 ### 15.3 Blind listening (replaces the §11 reveal)
@@ -322,18 +324,18 @@ Based on the first 100-play test (§14, and the review on 2026-10-29: ranked 2.3
 
 ### 15.5 Sources (changes §1, §4.1)
 - Add **Deezer artist radio** as a third source (free API, no key; covered all 7 seeds tested on 2026-10-29). Deezer also supplies **ISRCs** (exact duplicate detection) and **release dates**.
-- Agreement was the strongest signal, so: starting agreement weight raised; more sources mean more chances for overlap. Consider partial credit when two sources suggest the same artist but different tracks.
-- Watch: Deezer artist radio leans on the seed artist's own tracks.
+- Agreement was the strongest signal, so: starting agreement weight raised (0.10 → 0.25); more sources mean more chances for overlap. **Partial artist credit** (built 2026-10-29): `agreement = log(1 + distinct (seed, source) suggestions + 0.5 × other sources that suggested the same artist but not this track)`. Checked on v1 ratings: artist-level agreement tracked ratings as well as track-level (+0.37 vs +0.35); artists suggested by 2 sources averaged 2.90 vs 2.10, and 2.72 even when the track itself came from one source. In the first v2 pull it reaches 146 of 446 candidates, against 24 for exact-track agreement.
+- Deezer has no track radio, and artist radio is thin for new artists (2–3 tracks for Leon Vera and Deaf Toucan, 2026-10-29), so the source uses the artist radio of **every artist credited on the seed**, interleaved (e.g. La Musica gets 50 via NewTone). Own-artist share was low where radio was full (3–4 of 50). A seed whose artists have thin radios simply contributes fewer Deezer candidates; quotas pass its unused share to the other sources.
 - Spotify (recommendations closed to new apps since 2024-11) stays out. TIDAL (track-level similar tracks; needs a developer account) is a possible later fourth source.
 
 ### 15.6 New score components
-- **BPM**: measured from the audio at analysis time (Deezer's BPM field is empty for these tracks), folded into a configurable range to avoid half/double-tempo errors. `bpm_match` rewards closeness to a target BPM: by default the BPM of my On target/Add tracks; or a target I set in the player.
+- **BPM**: measured from the audio at analysis time (Deezer's BPM field is empty for these tracks), folded into a configurable range (85–175) to avoid half/double-tempo errors. Built 2026-10-29: librosa beat tracking, then the mean of the steady beat gaps across the whole track (single gaps are quantised to ~12 ms); exact to ±0.3 BPM on synthetic beats. **3:2 tie-break** (built 2026-10-29, at my suggestion): a dotted rhythm can lock the tracker onto 2/3 of the tempo (Sam Alfred – No More read 94.6, really ~140), which folding can't undo; so the reading and its 3:2-related readings are compared by repetition strength (onset autocorrelation at one and two beats) × a gentle preference for the seeds' median BPM (half an octave wide). Seeds are read twice: plain readings give the median, then each is re-read with it. Result: No More 142.1, the other seeds unchanged; straight synthetic beats at 95 and 174 keep their tempo even with a 138 BPM preference. `bpm_match`: with no target set, it rewards closeness to the median BPM of seeds and On target/Add tracks; when I set a Target BPM in the player, tracks within ±12% of it (the window Match tempo can stretch) get credit that is highest at the target and falls linearly to half at the window's edge — closer is better — then drops away quickly beyond it. No range sliders (decided 2026-10-29).
 - **Play at target BPM**: when a target is set, tracks play time-stretched to it with pitch preserved, within a maximum stretch (configurable, e.g. ±12%); tracks needing less stretch score higher via `bpm_match`. The tempo played is logged with each rating.
 - **Release year** (§14 item 9): `year_match` rewards closeness to the release years of my On target/Add tracks (soft fall-off; no year = neutral). In v1, newer tracks rated slightly higher (+0.21).
 - Key, popularity (no link in v1), attribute sliders (§14 6–7), reason tags and vocal separation (§14 4) stay parked.
 
 ### 15.7 Dislike fix (§14 item 13)
-- Only **Off** feeds the negative set. `dislike_match` becomes the mean similarity to the few closest disliked tracks (not the single closest), so one match can't dominate.
+- Only **Off** feeds the negative set. `dislike_match` becomes the mean similarity to the few closest disliked tracks (not the single closest), so one match can't dominate. Built 2026-10-29: mean of the 3 closest Off tracks, min–max normalised like the other components.
 
 ### 15.8 Re-weighting v2 (replaces §9)
 - **When**: after 20 learning ratings, then every 5.
@@ -342,6 +344,7 @@ Based on the first 100-play test (§14, and the review on 2026-10-29: ranked 2.3
 - **Guardrails**: audio_match ≥ 0.20, agreement ≥ 0.10, dislike ≥ −0.30, diversity ≥ −0.20; no weight changes sign.
 - **Continuous re-evaluation (agreed 2026-10-29)**: at every update, the current weights, the proposed small step and every earlier weight set are re-scored against the **whole rating history** (recency-weighted, top-weighted objective, control ratings included). The best is re-decided each time, so no set stays the target because of a few lucky picks: as new ratings arrive, a set that would rank them badly loses its place. Live results of each set's own picks are logged but don't drive decisions.
 - Moving to an earlier set still respects the ±0.05 step limit (it is approached gradually), unless config says otherwise.
+- Built 2026-10-29: objective = share of correctly ordered pairs of rated plays (learning and control), each pair weighted by recency (half-life 30 ratings) × the gap in 2^rating, so Add-vs-Off mistakes count far more than Close-vs-Off. Each update tries the step towards the search's optimum and towards every earlier set, and adopts the best-scoring step — staying put included, so the fit to history never gets worse. Logged per update: what it moved towards, and every candidate's score. Simulated check: a set that fitted the first 20 ratings best (0.978) fell to 0.628 by 100 as later ratings contradicted it, while the weights drifted ≤0.05 per update in the right direction.
 - No separate pool check or escalation rule (dropped 2026-10-29): continuous re-evaluation against the full history is the only mechanism.
 - All numbers live in the config file.
 

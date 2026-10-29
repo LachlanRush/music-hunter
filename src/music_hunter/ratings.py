@@ -1,13 +1,15 @@
-"""Ratings and their effects — SPEC.md §3, §5 and §8 (control handling).
+"""Ratings and their effects — SPEC.md §15.2 (v2 buttons), §5 and §15.4 (controls).
 
 Everything derived from ratings (averages, reference sets, seeds) is computed from the
 `plays` table on demand, so changing the most recent rating only has to update that
 play and move its audio file.
 
-Rating effects on the audio file:
-  learning 4–5 → references/      learning 3, control 3–5 → keepers/
-  1–2 → deleted. The file is held in data/undo/ until the next rating, so a mis-tap
-  can still be corrected; it is deleted for good when the next rating is made.
+v2 buttons: 1 Off (negative set), 2 Close (neutral), 3 On target (positive, weight 1),
+4 Add (positive, weight 2; seed; saved). Effects on the audio file:
+  Add (learning or control) → collection/
+  anything else → held in data/undo/ until the next rating (so the back button can still
+  change it), then deleted. Learning only needs the stored embedding, not the file.
+  Skipped tracks' audio is deleted once a later rating makes them unreachable.
 """
 
 import json
@@ -23,10 +25,12 @@ import numpy as np
 from . import db
 from .config import CONFIG, path, relative, resolve
 
-SOURCES = ("lastfm", "ytmusic")
+SOURCES = ("lastfm", "ytmusic", "deezer")
 AVG = CONFIG["averages"]
 POSITIVE_WEIGHTS = {int(k): v for k, v in CONFIG["ratings"]["positive_weights"].items()}
 NEGATIVE_WEIGHTS = {int(k): v for k, v in CONFIG["ratings"]["negative_weights"].items()}
+LABELS = CONFIG["ratings"]["labels"]
+ADD = CONFIG["ratings"]["add"]
 
 
 def current_generation(conn: sqlite3.Connection) -> int:
@@ -77,18 +81,22 @@ def _embedding_set(conn: sqlite3.Connection, query: str, weights: dict[int, floa
     return ids, vecs, np.array([weights[r["rating"]] for r in rows], dtype=np.float32)
 
 
+def _in(ratings: dict) -> str:
+    return "(" + ", ".join(str(int(r)) for r in ratings) + ")"
+
+
 def positive_set(conn: sqlite3.Connection):
-    """(track ids, embeddings, weights): originals (as 5) and learning plays rated 4–5."""
+    """(track ids, embeddings, weights): seeds (as Add) and learning plays rated On target or Add."""
     return _embedding_set(conn,
-        "SELECT id, 5 AS rating FROM tracks WHERE origin = 'original_reference'"
-        " UNION SELECT track_id, rating FROM plays WHERE is_control = 0 AND rating >= 4",
+        f"SELECT id, {ADD} AS rating FROM tracks WHERE origin = 'original_reference'"
+        f" UNION SELECT track_id, rating FROM plays WHERE is_control = 0 AND rating IN {_in(POSITIVE_WEIGHTS)}",
         POSITIVE_WEIGHTS)
 
 
 def negative_set(conn: sqlite3.Connection):
-    """(track ids, embeddings, weights): learning plays rated 1–2."""
-    return _embedding_set(conn, "SELECT track_id AS id, rating FROM plays WHERE is_control = 0 AND rating <= 2",
-                          NEGATIVE_WEIGHTS)
+    """(track ids, embeddings, weights): learning plays rated Off."""
+    return _embedding_set(conn, "SELECT track_id AS id, rating FROM plays"
+                          f" WHERE is_control = 0 AND rating IN {_in(NEGATIVE_WEIGHTS)}", NEGATIVE_WEIGHTS)
 
 
 def learning_ratings(conn: sqlite3.Connection) -> int:
@@ -96,23 +104,17 @@ def learning_ratings(conn: sqlite3.Connection) -> int:
 
 
 def next_is_control(conn: sqlite3.Connection, rng=random) -> bool:
-    """One control per block of plays, at a random position (SPEC.md §8)."""
-    size = CONFIG["controls"]["block_size"]
-    shown = conn.execute("SELECT count(*) FROM plays").fetchone()[0]
-    start = shown - shown % size
-    if conn.execute("SELECT count(*) FROM plays WHERE play_number > ? AND is_control = 1", (start,)).fetchone()[0]:
-        return False
-    remaining = size - shown % size          # positions left in this block, including this one
-    return rng.random() < 1 / remaining
+    """Each play is a control with [controls] probability, independently (SPEC.md §15.4)."""
+    return rng.random() < CONFIG["controls"]["probability"]
 
 
 # --- showing and rating --------------------------------------------------------------------
 
-def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = False) -> int:
+def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = False, rng=random) -> int:
     """Log a track as shown, with its score breakdown at this moment. Returns the play ID.
 
-    Without track_id: a learning play shows the top-scored track, a control play the
-    median-scored one (SPEC.md §8).
+    Without track_id: a learning play shows the top-scored track, a control play a random
+    unplayed pool track (SPEC.md §15.4).
     """
     from .scoring import score_pool
 
@@ -124,23 +126,24 @@ def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = 
     if track_id:
         row = next(r for r in scored if r["track_id"] == track_id)
     else:
-        row = scored[(len(scored) - 1) // 2] if control else scored[0]
+        row = rng.choice(scored) if control else scored[0]
     play_number = conn.execute("SELECT count(*) FROM plays").fetchone()[0] + 1
     components = {c: {"raw": row["raw"][c], "norm": row["norm"][c]} for c in row["raw"]}
     with conn:
         play_id = conn.execute(
             "INSERT INTO plays (track_id, generation, play_number, is_control, weight_set_id, components,"
-            " score, rank, pool_size, provenance, shown_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))",
+            " score, rank, pool_size, provenance, target_bpm, shown_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))",
             (row["track_id"], current_generation(conn), play_number, int(control), row["weight_set_id"],
              json.dumps(components), row["score"], row["rank"], len(scored),
-             json.dumps(row["provenance"]))).lastrowid
+             json.dumps(row["provenance"]), row.get("target_bpm"))).lastrowid
     db.log_event(conn, "shown", play_id, control=control, rank=row["rank"], pool_size=len(scored),
                  score_ms=round(score_ms, 1))
     return play_id
 
 
-def rate(conn: sqlite3.Connection, play_id: int, rating: int, played_seconds: float | None = None) -> None:
+def rate(conn: sqlite3.Connection, play_id: int, rating: int, played_seconds: float | None = None,
+         played_bpm: float | None = None, playback_rate: float | None = None) -> None:
     _check(rating)
     play = conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone()
     if play is None or play["rating"] is not None:
@@ -148,11 +151,13 @@ def rate(conn: sqlite3.Connection, play_id: int, rating: int, played_seconds: fl
     if play["skipped_at"] and previous_play(conn)["id"] != play_id:
         raise ValueError("Only the most recent skipped track can still be rated")
     _purge_undo(conn)
+    _purge_skipped(conn)
     with conn:
         _place(conn, play, rating)
         conn.execute("UPDATE plays SET rating = ?, rated_at = strftime('%Y-%m-%d %H:%M:%f', 'now'),"
-                     " played_seconds = coalesce(?, played_seconds), skipped_at = NULL WHERE id = ?",
-                     (rating, played_seconds, play_id))
+                     " played_seconds = coalesce(?, played_seconds), played_bpm = ?, playback_rate = ?,"
+                     " skipped_at = NULL WHERE id = ?",
+                     (rating, played_seconds, played_bpm, playback_rate, play_id))
         conn.execute("UPDATE tracks SET rating = ? WHERE id = ?", (rating, play["track_id"]))
 
 
@@ -200,8 +205,8 @@ def change_last_rating(conn: sqlite3.Connection, rating: int) -> int:
 
 
 def _check(rating: int) -> None:
-    if rating not in (1, 2, 3, 4, 5):
-        raise ValueError(f"Rating must be 1–5, got {rating}")
+    if rating not in range(1, len(LABELS) + 1):
+        raise ValueError(f"Rating must be 1–{len(LABELS)}, got {rating}")
 
 
 def _place(conn: sqlite3.Connection, play, rating: int) -> None:
@@ -209,13 +214,12 @@ def _place(conn: sqlite3.Connection, play, rating: int) -> None:
     track = conn.execute("SELECT * FROM tracks WHERE id = ?", (play["track_id"],)).fetchone()
     play = conn.execute("SELECT * FROM plays WHERE id = ?", (play["id"],)).fetchone()  # fresh undo_path
     src = resolve(track["file_path"] or play["undo_path"])
-    if rating <= 2:
+    if rating == ADD:
+        dest = _unique(path("collection") / f"{_safe(track['artist'])} - {_safe(track['title'])}{src.suffix}", src)
+        file_path, undo_path = relative(dest), None
+    else:
         dest = _unique(path("data") / "undo" / src.name, src)
         file_path, undo_path = None, relative(dest)
-    else:
-        folder = path("keepers") if play["is_control"] or rating == 3 else path("references")
-        dest = _unique(folder / f"{_safe(track['artist'])} - {_safe(track['title'])}{src.suffix}", src)
-        file_path, undo_path = relative(dest), None
     if dest != src:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(src, dest)
@@ -223,8 +227,18 @@ def _place(conn: sqlite3.Connection, play, rating: int) -> None:
     conn.execute("UPDATE plays SET undo_path = ? WHERE id = ?", (undo_path, play["id"]))
 
 
+def _purge_skipped(conn: sqlite3.Connection) -> None:
+    """After a new rating, earlier skips can no longer be reached with back: delete their audio."""
+    with conn:
+        for r in conn.execute("SELECT t.id, t.file_path FROM plays p JOIN tracks t ON t.id = p.track_id"
+                              " WHERE p.skipped_at IS NOT NULL AND p.rating IS NULL AND t.file_path IS NOT NULL"
+                              ).fetchall():
+            resolve(r["file_path"]).unlink(missing_ok=True)
+            conn.execute("UPDATE tracks SET file_path = NULL WHERE id = ?", (r["id"],))
+
+
 def _purge_undo(conn: sqlite3.Connection) -> None:
-    """A new rating makes earlier ones final: delete audio held for 1–2 ratings."""
+    """A new rating makes earlier ones final: delete audio held for tracks not Added."""
     with conn:
         for r in conn.execute("SELECT id, undo_path FROM plays WHERE undo_path IS NOT NULL").fetchall():
             resolve(r["undo_path"]).unlink(missing_ok=True)

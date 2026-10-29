@@ -13,19 +13,34 @@ import music_hunter.config as config
 from music_hunter import db
 
 REAL_DB = config.path("db")
+ARCHIVE_DB = config.ROOT / "runs" / "v1" / "data" / "music_hunter.db"
+
+
+def source_db():
+    """The live database if it has a pool, else the archived v1 run's (its pool is all that's used)."""
+    for candidate in (REAL_DB, ARCHIVE_DB):
+        if candidate.exists():
+            with sqlite3.connect(candidate) as c:
+                if c.execute("SELECT count(*) FROM sqlite_master WHERE name = 'tracks'").fetchone()[0] and \
+                        c.execute("SELECT count(*) FROM tracks WHERE origin = 'pool'").fetchone()[0]:
+                    return candidate
+    return None
 
 
 @pytest.fixture
 def conn(tmp_path, monkeypatch):
-    if not REAL_DB.exists():
+    db_file = source_db()
+    if db_file is None:
         pytest.skip("needs a filled pool: run `music-hunter pull` first")
     (tmp_path / "data").mkdir()
-    src = sqlite3.connect(REAL_DB)
+    src = sqlite3.connect(db_file)
     with sqlite3.connect(tmp_path / "data" / "music_hunter.db") as dst:
         src.backup(dst)
     src.close()
     monkeypatch.setattr(config, "ROOT", tmp_path)
     c = db.connect()
+    if not c.execute("SELECT count(*) FROM tracks WHERE origin = 'pool'").fetchone()[0]:
+        pytest.skip("needs a filled pool: run `music-hunter pull` first")
     with c:
         for table in ("plays", "events", "reweightings"):
             c.execute(f"DELETE FROM {table}")

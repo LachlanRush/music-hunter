@@ -13,7 +13,8 @@ from dataclasses import dataclass
 
 from . import db, names
 from .config import CONFIG
-from .sources import Item, LastFM, YouTubeMusic
+from .ratings import ADD
+from .sources import Deezer, Item, LastFM, YouTubeMusic
 
 TOLERANCE = CONFIG["sources"]["duration_tolerance_seconds"]
 
@@ -32,7 +33,7 @@ class Seed:
 
 
 def seeds(conn: sqlite3.Connection) -> list[Seed]:
-    """The originals plus every learning play rated 5 (SPEC.md §3).
+    """The originals plus every learning play rated Add (SPEC.md §15.2).
 
     Rated pool tracks came from YouTube Music, so they already have their video ID.
     """
@@ -40,7 +41,7 @@ def seeds(conn: sqlite3.Connection) -> list[Seed]:
         "SELECT t.id, t.artist, t.title, t.duration_s, coalesce(m.video_id, t.video_id) FROM tracks t"
         " LEFT JOIN seed_matches m ON m.track_id = t.id"
         " WHERE t.origin = 'original_reference'"
-        "    OR t.id IN (SELECT track_id FROM plays WHERE is_control = 0 AND rating = 5)"
+        f"    OR t.id IN (SELECT track_id FROM plays WHERE is_control = 0 AND rating = {ADD})"
         " ORDER BY t.id").fetchall()
     return [Seed(*r) for r in rows]
 
@@ -76,8 +77,9 @@ class Candidate:
 
 
 class Pull:
-    def __init__(self, conn: sqlite3.Connection, yt: YouTubeMusic, lastfm: LastFM | None):
-        self.conn, self.yt, self.lastfm = conn, yt, lastfm
+    def __init__(self, conn: sqlite3.Connection, yt: YouTubeMusic, lastfm: LastFM | None,
+                 deezer: Deezer | None = None):
+        self.conn, self.yt, self.lastfm, self.deezer = conn, yt, lastfm, deezer
         with conn:
             self.generation = conn.execute("INSERT INTO generations DEFAULT VALUES").lastrowid
         # Already rated or shown: originals, rated tracks and anything played.
@@ -89,8 +91,16 @@ class Pull:
             "SELECT c.id, c.song_title, c.song_artists, c.is_extended FROM candidates c"
             " JOIN tracks t ON t.id = c.track_id WHERE c.status = 'pool' AND t.rating IS NULL"
             " AND t.id NOT IN (SELECT track_id FROM plays)")]
+        # Same by ISRC (exact): known/shown tracks and the pool, where their ISRC is known.
+        self.known_isrc = {r[0] for r in conn.execute(
+            "SELECT c.isrc FROM candidates c JOIN tracks t ON t.id = c.track_id WHERE c.isrc IS NOT NULL"
+            " AND (t.rating IS NOT NULL OR t.id IN (SELECT track_id FROM plays))")}
+        self.pool_isrc = {r[0]: r[1] for r in conn.execute(
+            "SELECT c.isrc, c.id FROM candidates c JOIN tracks t ON t.id = c.track_id WHERE c.isrc IS NOT NULL"
+            " AND c.status = 'pool' AND t.rating IS NULL AND t.id NOT IN (SELECT track_id FROM plays)")}
         self.current: list[Candidate] = []
         self.by_video: dict[str, int] = {}
+        self.by_isrc: dict[str, int] = {}
 
     @staticmethod
     def _candidate(r) -> Candidate:
@@ -117,10 +127,22 @@ class Pull:
                     self.process(seed, "ytmusic", rank, item)
             else:
                 print(f"  YT radio skipped for {seed.label}: seed not matched on YouTube Music")
+            if self.deezer:
+                try:
+                    found = self.deezer.find(seed.artist, seed.title, seed.duration_s)
+                    items = self.deezer.artist_radio(found) if found else []
+                except Exception as e:
+                    found, items = True, []
+                    print(f"  Deezer failed for {seed.label}: {e}")
+                print(f"  Deezer   {len(items):3d} from artist radio of {seed.label}"
+                      + ("" if found else " (seed not found on Deezer)"))
+                for rank, item in enumerate(items, 1):
+                    self.process(seed, "deezer", rank, item)
 
         stats = summary(self.conn, self.generation)
         stats["candidate_phase_seconds"] = round(time.monotonic() - started, 1)
-        stats["api"] = {"ytmusic": self.yt.stats.as_dict(), "lastfm": self.lastfm.stats.as_dict() if self.lastfm else None}
+        stats["api"] = {"ytmusic": self.yt.stats.as_dict(), "lastfm": self.lastfm.stats.as_dict() if self.lastfm else None,
+                        "deezer": self.deezer.stats.as_dict() if self.deezer else None}
         with self.conn:
             self.conn.execute("UPDATE generations SET finished_at = datetime('now'), stats = ? WHERE id = ?",
                               (json.dumps(stats), self.generation))
@@ -140,27 +162,51 @@ class Pull:
             if song.same_song(c.song):
                 return rec("merged", "already_in_pool", c.id)
 
+        if source == "deezer":
+            self.deezer.details(item)              # ISRC and release date
+            if item.isrc in self.known_isrc:
+                return rec("dropped", "already_rated_or_shown_isrc")
+            if item.isrc in self.pool_isrc:
+                return rec("merged", "already_in_pool_isrc", self.pool_isrc[item.isrc])
+
         chosen, match_note = item, None
-        existing = self._find(song) or (item.video_id and self.by_video.get(item.video_id))
-        if not existing and source == "lastfm":
-            matched, reason = self._match_lastfm(item, song)
+        existing = (self._find(song) or (item.video_id and self.by_video.get(item.video_id))
+                    or (item.isrc and self.by_isrc.get(item.isrc)))
+        if not existing and source in ("lastfm", "deezer"):
+            matched, reason = self._match_youtube(item, song, source)
             if not matched:
                 return rec("dropped", reason)
+            matched.isrc, matched.release_date = item.isrc, item.release_date
             chosen, match_note = matched, reason
             song = names.song(chosen.artist, chosen.title)
             existing = self.by_video.get(chosen.video_id) or self._find(song)
         if existing:
-            return rec("merged", self._merge(chosen, song, existing), existing, chosen)
+            by_isrc = bool(item.isrc) and self.by_isrc.get(item.isrc) == existing
+            self._add_ids(existing, item)
+            return rec("merged", "duplicate_isrc" if by_isrc else self._merge(chosen, song, existing),
+                       existing, chosen)
 
         with self.conn:
             cid = self.conn.execute(
                 "INSERT INTO candidates (generation, video_id, artist, title, duration_s,"
-                " song_title, song_artists, is_extended) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                " song_title, song_artists, is_extended, isrc, release_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (self.generation, chosen.video_id, chosen.artist, chosen.title, chosen.duration_s,
-                 song.title, json.dumps(sorted(song.artists)), int(song.is_extended))).lastrowid
+                 song.title, json.dumps(sorted(song.artists)), int(song.is_extended),
+                 item.isrc, item.release_date)).lastrowid
         self.current.append(Candidate(cid, song))
         self.by_video[chosen.video_id] = cid
+        if item.isrc:
+            self.by_isrc[item.isrc] = cid
         rec("new", match_note, cid, chosen)
+
+    def _add_ids(self, cid: int, item: Item) -> None:
+        """Keep an ISRC or release date learnt from a later source for an existing candidate."""
+        if item.isrc or item.release_date:
+            with self.conn:
+                self.conn.execute("UPDATE candidates SET isrc = coalesce(isrc, ?), release_date ="
+                                  " coalesce(release_date, ?) WHERE id = ?", (item.isrc, item.release_date, cid))
+            if item.isrc:
+                self.by_isrc.setdefault(item.isrc, cid)
 
     def _find(self, song: names.Song) -> int | None:
         return next((c.id for c in self.current if song.same_song(c.song)), None)
@@ -180,12 +226,12 @@ class Pull:
             self.by_video[item.video_id] = cid
         return "other_version"
 
-    def _match_lastfm(self, item: Item, song: names.Song) -> tuple[Item | None, str | None]:
-        """Find a Last.fm suggestion on YouTube Music (SPEC.md §4.1 step 4).
+    def _match_youtube(self, item: Item, song: names.Song, source: str) -> tuple[Item | None, str | None]:
+        """Find a Last.fm or Deezer suggestion on YouTube Music (SPEC.md §4.1 step 4).
 
-        Same normalised song required; duration within tolerance of Last.fm's (from
-        track.getInfo) when Last.fm has one, otherwise the name match alone is accepted.
-        Prefers an Extended version of the same song if the search already returned one.
+        Same normalised song required; duration within tolerance of the source's (Deezer gives
+        one; Last.fm's comes from track.getInfo) when known, otherwise the name match alone is
+        accepted. Prefers an Extended version of the same song if the search already returned one.
         Returns (match, note) where note is a drop reason, or 'name_only_match' on success.
         """
         results = self.yt.search_songs(f"{item.artist} {item.title}")
@@ -194,7 +240,8 @@ class Pull:
         same = [r for r in results if r.duration_s and names.song(r.artist, r.title).same_song(song)]
         if not same:
             return None, "yt_match_failed:no_name_match"
-        item.duration_s = self.lastfm.duration(item.artist, item.title)
+        if source == "lastfm":
+            item.duration_s = self.lastfm.duration(item.artist, item.title)
         extended = [r for r in same if names.song(r.artist, r.title).is_extended]
         if item.duration_s is None:
             return (extended or same)[0], "name_only_match"
@@ -227,8 +274,21 @@ def summary(conn: sqlite3.Connection, generation: int) -> dict:
         "SELECT t.artist || ' – ' || t.title FROM seed_matches m JOIN tracks t ON t.id = m.track_id"
         " WHERE m.video_id IS NULL")]
     n = conn.execute("SELECT count(*) FROM candidates WHERE generation = ?", (generation,)).fetchone()[0]
+    # Overlap between sources (agreement was the strongest signal in v1).
+    combos = Counter()
+    for (srcs,) in conn.execute(
+            "SELECT group_concat(DISTINCT source) FROM (SELECT candidate_id, source FROM suggestions"
+            " WHERE generation = ? AND candidate_id IS NOT NULL ORDER BY source) GROUP BY candidate_id", (generation,)):
+        combos["+".join(sorted(srcs.split(",")))] += 1
+    artist_sources: dict[str, set] = {}
+    for r in conn.execute("SELECT artist, source FROM suggestions WHERE generation = ?", (generation,)):
+        for a in names.split_artists(r["artist"]):
+            artist_sources.setdefault(a, set()).add(r["source"])
+    artist_overlap = Counter(len(v) for v in artist_sources.values())
     return {"raw_suggestions": raw, "filter_reasons": dict(sorted(reasons.items())),
-            "seed_match_failures": seed_failures, "candidates": n}
+            "seed_match_failures": seed_failures, "candidates": n,
+            "source_combinations": dict(sorted(combos.items(), key=lambda kv: -kv[1])),
+            "artists_by_source_count": {str(k): v for k, v in sorted(artist_overlap.items())}}
 
 
 def reset(conn: sqlite3.Connection) -> None:

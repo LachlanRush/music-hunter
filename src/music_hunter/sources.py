@@ -1,4 +1,5 @@
-"""Candidate sources: Last.fm artist similarity and YouTube Music radio/search (SPEC.md §4.1).
+"""Candidate sources: Last.fm artist similarity, YouTube Music radio/search and Deezer artist
+radio (SPEC.md §4.1, §15.5).
 
 Calls are paced by [sources] api_delay_seconds. These return lists only — no downloads.
 """
@@ -6,6 +7,7 @@ Calls are paced by [sources] api_delay_seconds. These return lists only — no d
 import os
 import time
 from dataclasses import dataclass
+from itertools import zip_longest
 
 import requests
 
@@ -22,7 +24,10 @@ class Item:
     title: str
     duration_s: float | None
     video_id: str | None = None   # YouTube Music ID, when known
-    via: str | None = None        # Last.fm: the similar artist this came through
+    via: str | None = None        # Last.fm: the similar artist; Deezer: the artist whose radio
+    isrc: str | None = None       # Deezer: industry track ID (exact duplicate detection)
+    release_date: str | None = None
+    deezer_id: int | None = None
 
 
 def _pause() -> None:
@@ -158,3 +163,57 @@ class LastFM:
         except RuntimeError:
             return None
         return ms / 1000 if ms else None
+
+
+DEEZER_URL = "https://api.deezer.com"
+
+
+class Deezer:
+    """Deezer's public API (no key). Source: the artist radio of every artist credited on a seed."""
+
+    def __init__(self):
+        self.stats = CallStats()
+
+    def _get(self, path: str, **params) -> dict:
+        _pause()
+        resp = self.stats.timed(requests.get, DEEZER_URL + path, params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        if "error" in data:
+            raise RuntimeError(f"Deezer {path}: {data['error'].get('message')}")
+        return data
+
+    def find(self, artist: str, title: str, duration_s: float) -> dict | None:
+        """The seed on Deezer: same normalised song, length within tolerance. Full track object."""
+        from .names import song
+
+        target = song(artist, title)
+        hits = self._get("/search", q=f"{artist.split(',')[0]} {title}").get("data", [])
+        close = [h for h in hits if song(h["artist"]["name"], h["title"]).same_song(target)
+                 and abs(h["duration"] - duration_s) <= CFG["duration_tolerance_seconds"]]
+        if not close:
+            return None
+        best = min(close, key=lambda h: abs(h["duration"] - duration_s))
+        return self._get(f"/track/{best['id']}")
+
+    def artist_radio(self, seed_track: dict) -> list[Item]:
+        """Interleaved artist radio of each credited artist, without repeats, capped at deezer_radio_limit."""
+        contributors = seed_track.get("contributors") or [seed_track["artist"]]
+        lists = []
+        for artist in contributors:
+            radio = self._get(f"/artist/{artist['id']}/radio", limit=CFG["deezer_radio_limit"]).get("data", [])
+            lists.append([(t, artist["name"]) for t in radio if t["id"] != seed_track["id"]])
+        items, seen = [], set()
+        for row in zip_longest(*lists):
+            for entry in row:
+                if entry and entry[0]["id"] not in seen:
+                    seen.add(entry[0]["id"])
+                    t, via = entry
+                    items.append(Item(t["artist"]["name"], t["title"], float(t["duration"]), via=via,
+                                      deezer_id=t["id"]))
+        return items[:CFG["deezer_radio_limit"]]
+
+    def details(self, item: Item) -> None:
+        """Fill in ISRC and release date (one call per track, only for tracks that get this far)."""
+        t = self._get(f"/track/{item.deezer_id}")
+        item.isrc, item.release_date = t.get("isrc") or None, t.get("release_date") or None
