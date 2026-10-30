@@ -364,10 +364,23 @@ def art(track_id: int) -> FileResponse:
 
 
 def serve() -> None:
+    """Listens on [ui] host and any extra_hosts (e.g. the Tailscale address, for the phone)."""
+    import socket
+
     import uvicorn
 
     db.setup_logging()
-    print(f"Player: http://{UI['host']}:{UI['port']}")
-    print(f"Results: http://{UI['host']}:{UI['port']}/results")
+    sockets = []
+    for host in [UI["host"], *UI.get("extra_hosts", [])]:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, UI["port"]))
+        except OSError as e:                       # e.g. Tailscale not running: carry on without that address
+            print(f"Can't listen on {host}:{UI['port']} ({e}); skipping it")
+            sock.close()
+            continue
+        sockets.append(sock)
+        print(f"Player: http://{host}:{UI['port']}   Results: http://{host}:{UI['port']}/results")
     print("Log: data/music-hunter.log")
-    uvicorn.run(app, host=UI["host"], port=UI["port"], log_level="warning")
+    uvicorn.Server(uvicorn.Config(app, log_level="warning")).run(sockets=sockets)

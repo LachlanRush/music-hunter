@@ -196,6 +196,10 @@ session_gap_minutes = 30         # plays further apart than this start a new ses
 # SPEC.md §11 — localhost player
 host = "127.0.0.1"
 port = 8765
+# Also listen on these addresses — the PC's Tailscale IP, so my phone can open the player over Tailscale
+# (http://lachlandesktop:8765). Only devices on my tailnet can reach it; nothing is opened on the home network.
+# Added 2026-10-30 at my request (phone access was out of scope in §1). [] = this PC only.
+extra_hosts = ["100.68.159.86"]
 early_start_tracks = 20          # first pull: playback starts once this many tracks are analysed
 hide_names_until_rated = true    # artist and title stay hidden until the track is rated (from 2026-10-29)
 play_to_end = [3]                # ratings that keep playing to the end (Add); Off and Close skip at once
