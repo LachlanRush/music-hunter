@@ -51,12 +51,14 @@ tidal = "tidal"
 # SPEC.md §4.1 steps 5–7
 target_size = 250                # unplayed, analysed tracks to fill the pool to (v3; 150 in v2, 75 in v1)
 # v3 (SPEC.md §16.4): each seed has its own share of the pool (by seed average, with the floor below), so
-# seeds that few sources know (new, obscure releases) are as present as well-known ones. Within a seed's
-# share, candidates suggested by 2+ source families go in first (most families first), then the source
-# quotas fill the rest. With multi_source_always_added, multi-source candidates join even beyond their
-# seed's share (the pool can exceed target_size); other seeds' shares are unaffected.
-multi_source_first = true
-multi_source_always_added = true
+# seeds that few sources know (new, obscure releases) are as present as well-known ones. A share is filled
+# from the top of each of the seed's source lists, by source average.
+# multi_source_first: off since 2026-10-30 (my decision) — agreed tracks land naturally: they sit near the top
+# of the source lists anyway (first v3 pull: 41% of a quota-filled pool), and agreement counts in the score.
+# Forcing them in first filled every seed's share with them (273 for 250 places), leaving no single-source
+# tracks and making controls (random pool tracks) all multi-source.
+multi_source_first = false
+multi_source_always_added = true    # only used when multi_source_first is on
 min_seed_share = 0.3333          # floor on a seed's share, as a fraction of an equal share
 download_delay_seconds = 5       # minimum gap between downloads (analysis runs in the gap)
 download_format = "bestaudio"    # yt-dlp format; kept in its original container, no re-encode
