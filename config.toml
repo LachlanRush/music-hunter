@@ -23,23 +23,47 @@ min_last_chunk_seconds = 5.0
 batch_size = 16              # chunks per GPU batch
 
 [sources]
-# SPEC.md §4.1
-lastfm_similar_artists = 10     # artist.getSimilar artists per seed (seed's own artist excluded)
-lastfm_top_tracks = 5            # artist.getTopTracks tracks per similar artist
-ytmusic_radio_limit = 50         # radio tracks per seed (seed itself excluded)
-deezer_radio_limit = 50          # v2: Deezer artist-radio tracks per seed (all credited artists, interleaved)
+# SPEC.md §4.1, §15.5, §16.3–16.4 — v3: ~100 suggestions per source per seed (was ~50)
+lastfm_similar_artists = 20     # artist.getSimilar artists per seed (seed's own artist excluded)
+lastfm_top_tracks = 5            # artist.getTopTracks tracks per similar artist (20 × 5 = 100)
+ytmusic_radio_limit = 100        # radio tracks per seed (seed itself excluded)
+ytmusic_related_limit = 20       # v3: "You might also like" tracks per seed (YouTube gives at most ~20)
+deezer_radio_limit = 100         # Deezer artist-radio tracks per seed (all credited artists, interleaved)
+tidal_similar_limit = 100        # v3: TIDAL similar tracks per seed (pages of 20); seed found by ISRC via Deezer
+tidal_country = "AU"
 yt_search_limit = 10             # results inspected per YouTube Music search
-duration_tolerance_seconds = 5   # seed and Last.fm matching
-api_delay_seconds = 0.5          # pause between Last.fm / YouTube Music API calls
+duration_tolerance_seconds = 5   # seed and Last.fm/Deezer/TIDAL matching
+api_delay_seconds = 0.5          # pause between API calls (each service)
+
+[sources.families]
+# v3: "multi-source" (agreement, multi-source-first filling) counts distinct families. Giving two sources the
+# same family makes them count as one. YouTube radio and "You might also like" are kept separate for now
+# (decided 2026-10-30; to be analysed after the run).
+lastfm = "lastfm"
+ytmusic = "ytmusic"
+ytrelated = "ytrelated"
+deezer = "deezer"
+tidal = "tidal"
 
 [pool]
 # SPEC.md §4.1 steps 5–7
-target_size = 150                # unplayed, analysed tracks to fill the pool to (was 75 until 2026-10-29)
+target_size = 250                # unplayed, analysed tracks to fill the pool to (v3; 150 in v2, 75 in v1)
+# v3 (SPEC.md §16.4): each seed has its own share of the pool (by seed average, with the floor below), so
+# seeds that few sources know (new, obscure releases) are as present as well-known ones. Within a seed's
+# share, candidates suggested by 2+ source families go in first (most families first), then the source
+# quotas fill the rest. With multi_source_always_added, multi-source candidates join even beyond their
+# seed's share (the pool can exceed target_size); other seeds' shares are unaffected.
+multi_source_first = true
+multi_source_always_added = true
 min_seed_share = 0.3333          # floor on a seed's share, as a fraction of an equal share
 download_delay_seconds = 5       # minimum gap between downloads (analysis runs in the gap)
 download_format = "bestaudio"    # yt-dlp format; kept in its original container, no re-encode
 # SPEC.md §4.2 refills (run in the background while listening)
 refill_below = 100               # pull a new generation when fewer unplayed tracks remain (was 25)
+# v3: …or when fewer than this many unplayed multi-source tracks remain, once refill_min_plays tracks
+# have been played since the last pull (so a pull that finds no new agreement doesn't repeat at once).
+refill_multi_source_below = 5
+refill_min_plays = 10
 # …or when the best unplayed track scores below this. Scores are relative to the current
 # pool (components are normalised across it), so this is off (0) by default.
 refill_min_best_score = 0.0
@@ -101,8 +125,8 @@ dislike_top_k = 3                # v2: dislike_match = mean similarity to this m
 diversity_last_n = 5             # recent plays compared for diversity_penalty
 # agreement = log(1 + distinct (seed, source) suggestions + credit × other sources that suggested
 # the same artist but not this track). v1 check: artist suggested by 2 sources averaged 2.90 vs 2.10,
-# even when the track came from one source (2.72). 0 turns it off.
-artist_agreement_credit = 0.5
+# even when the track came from one source (2.72). 0 turns it off — off in v3 (v2: −0.06, SPEC.md §16.2).
+artist_agreement_credit = 0.0
 personal_model_min_ratings = 50  # personal_model stays 0 until this many learning ratings
 
 [scoring.weights]

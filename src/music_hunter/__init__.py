@@ -9,7 +9,7 @@ import numpy as np
 from . import audio, db
 from .config import CONFIG, path
 
-SOURCE_CODES = {"lastfm": "LF", "ytmusic": "YT", "deezer": "DZ"}
+SOURCE_CODES = {"lastfm": "LF", "ytmusic": "YT", "ytrelated": "YR", "deezer": "DZ", "tidal": "TD"}
 
 
 def embed_seeds(force: bool) -> None:
@@ -108,10 +108,10 @@ def similarity(extra_files: list[Path]) -> None:
             print(f"  {i + 1:2d}. {labels[i]}: max {to_refs[0]:.3f}  top-3 mean {to_refs[:3].mean():.3f}")
 
 
-def pull(fresh: bool, no_lastfm: bool, no_fill: bool, no_deezer: bool = False) -> None:
-    """One generation: candidates from both sources (Milestone 2), then fill the pool (Milestone 3)."""
-    from .pull import Pull, match_seeds, reset
-    from .sources import Deezer, LastFM, YouTubeMusic
+def pull(fresh: bool, no_lastfm: bool, no_fill: bool, no_deezer: bool = False, no_tidal: bool = False) -> None:
+    """One generation: candidates from every source, then fill the pool."""
+    from .pull import Pull, match_seeds, optional, reset
+    from .sources import Deezer, LastFM, Tidal, YouTubeMusic
 
     conn = db.connect()
     if fresh:
@@ -119,7 +119,8 @@ def pull(fresh: bool, no_lastfm: bool, no_fill: bool, no_deezer: bool = False) -
     yt = YouTubeMusic()
     lastfm = None if no_lastfm else LastFM()
     seed_list = match_seeds(conn, yt)
-    generation = Pull(conn, yt, lastfm, None if no_deezer else Deezer()).run(seed_list)
+    generation = Pull(conn, yt, lastfm, None if no_deezer else Deezer(),
+                      None if no_tidal else optional(Tidal)).run(seed_list)
     candidate_stats(conn, generation)
     if not no_fill:
         fill(generation)
@@ -139,6 +140,8 @@ def show_pool() -> None:
     """Milestone 3 check: analysed pool tracks, per-list counts, quotas and failures."""
     import json
     from collections import Counter
+
+    from .pool import multi_source_unplayed
 
     conn = db.connect()
     rows = conn.execute(
@@ -170,6 +173,17 @@ def show_pool() -> None:
     print("\nPool tracks suggested by each (seed, source) — a track can count for several:")
     for (seed, src), n in sorted(per_list.items()):
         print(f"  {n:3d}  {seed} / {src}")
+    if stats.get("seed_pools"):
+        print("\nEach seed's share of the pool (target / unplayed now / multi-source added this pull):")
+        for seed, p in stats["seed_pools"].items():
+            print(f"  {p['target']:4d} / {p['unplayed']:4d} / {p['multi_source_added']:3d}  {seed}")
+    if stats.get("multi_source_candidates") is not None:
+        print(f"\nMulti-source candidates (2+ source families): {stats['multi_source_candidates']},"
+              f" added first: {stats['multi_source_added']}; unplayed multi-source in pool: {multi_source_unplayed(conn)}")
+    if stats.get("unusable_at_selection"):
+        print("Not usable when selected (YouTube match failed, or a duplicate found by ISRC / YouTube ID):")
+        for reason, n in stats["unusable_at_selection"].items():
+            print(f"  {n:4d}  {reason}")
     failed = conn.execute("SELECT artist, title, fail_reason FROM candidates WHERE status = 'download_failed'").fetchall()
     print(f"\nDownload/analysis failures: {len(failed)}")
     for f in failed:
@@ -186,7 +200,8 @@ def scores(top: int) -> None:
     rows = score_pool(conn)
     _, weights = current_weights(conn)
     short = {"audio_match": "audio", "dislike_match": "dislike", "source_score": "source", "seed_score": "seed",
-             "agreement": "agree", "personal_model": "model", "diversity_penalty": "divers"}
+             "agreement": "agree", "personal_model": "model", "diversity_penalty": "divers",
+             "bpm_match": "bpm", "year_match": "year"}
     print("Weights: " + ", ".join(f"{short[c]} {weights[c]:+.2f}" for c in COMPONENTS))
     print(f"\n rank  score  " + " ".join(f"{short[c]:>7}" for c in COMPONENTS) + "  track")
     for r in rows[:top]:
@@ -228,8 +243,11 @@ def candidates(generation: int | None) -> None:
     generation = generation or latest_generation(conn)
     seed_names = {r["id"]: r["title"] for r in conn.execute("SELECT id, title FROM tracks")}
 
-    print(f"\nCandidates — generation {generation}:")
+    print(f"\nCandidates — generation {generation} (most source families first):")
     rows = conn.execute("SELECT * FROM candidates WHERE generation = ? ORDER BY id", (generation,)).fetchall()
+    from .pull import families
+    fams = families(conn, [c["id"] for c in rows])
+    rows.sort(key=lambda c: -len(fams[c["id"]]))
     for c in rows:
         prov = conn.execute("SELECT seed_track_id, source, rank, via FROM suggestions WHERE candidate_id = ?"
                             " ORDER BY source, rank", (c["id"],)).fetchall()
@@ -238,7 +256,9 @@ def candidates(generation: int | None) -> None:
             + (f" via {p['via']}" if p["via"] else "") for p in prov)
         dur = f"{c['duration_s'] // 60:.0f}:{c['duration_s'] % 60:02.0f}" if c["duration_s"] else "?"
         ext = " [ext]" if c["is_extended"] else ""
-        print(f"  {c['id']:4d}  {c['artist']} – {c['title']} ({dur}){ext}\n          {sources}")
+        yt = "" if c["matched"] else " [YouTube match when selected]"
+        print(f"  {c['id']:4d}  {c['artist']} – {c['title']} ({dur}){ext}{yt}  · {len(fams[c['id']])} families"
+              f"\n          {sources}")
     candidate_stats(conn, generation)
 
 
@@ -254,12 +274,21 @@ def candidate_stats(conn, generation: int) -> None:
         print(f"  {n:4d}  {reason}")
     if stats.get("seed_match_failures"):
         print("\nSeeds not matched on YouTube Music: " + "; ".join(stats["seed_match_failures"]))
+    if stats.get("seed_lookups"):
+        print("\nSeeds on Deezer / TIDAL:")
+        for seed, look in stats["seed_lookups"].items():
+            print(f"  {seed}: " + ", ".join(f"{k} {v}" for k, v in look.items()))
     if stats.get("source_combinations"):
         print("\nCandidates by which sources suggested them (agreement):")
         for combo, n in stats["source_combinations"].items():
             print(f"  {n:4d}  {combo}")
+        f = stats.get("candidates_by_family_count", {})
+        if f:
+            print("Candidates suggested by 1 / 2 / 3 / 4 source families (YouTube radio + related = one family): "
+                  + " / ".join(str(f.get(str(k), 0)) for k in (1, 2, 3, 4)))
         a = stats.get("artists_by_source_count", {})
-        print("Artists suggested by 1 / 2 / 3 sources: " + " / ".join(str(a.get(str(k), 0)) for k in (1, 2, 3)))
+        print("Artists suggested by 1 / 2 / 3 / 4 / 5 sources: "
+              + " / ".join(str(a.get(str(k), 0)) for k in (1, 2, 3, 4, 5)))
     print(f"\nDistinct candidates: {stats.get('candidates')}")
 
 
@@ -290,11 +319,12 @@ def main() -> None:
     p.add_argument("files", nargs="*", type=Path,
                    help="Extra audio files to compare against the references (not stored)")
 
-    p = sub.add_parser("pull", help="Fetch candidates from Last.fm and YouTube Music (one generation)")
+    p = sub.add_parser("pull", help="Fetch candidates from every source, then fill the pool (one generation)")
     p.add_argument("--fresh", action="store_true", help="Forget earlier pulls and seed matches first")
     p.add_argument("--no-lastfm", action="store_true", help="YouTube Music only (e.g. before the API key is set)")
     p.add_argument("--no-fill", action="store_true", help="Candidates only; don't download or analyse")
     p.add_argument("--no-deezer", action="store_true", help="Skip the Deezer source")
+    p.add_argument("--no-tidal", action="store_true", help="Skip the TIDAL source")
 
     p = sub.add_parser("fill", help="Fill the pool from a generation's candidates (resumes)")
     p.add_argument("--generation", type=int, help="Defaults to the latest pull")
@@ -325,7 +355,7 @@ def main() -> None:
     elif args.command == "similarity":
         similarity(args.files)
     elif args.command == "pull":
-        pull(args.fresh, args.no_lastfm, args.no_fill, args.no_deezer)
+        pull(args.fresh, args.no_lastfm, args.no_fill, args.no_deezer, args.no_tidal)
     elif args.command == "fill":
         fill(args.generation)
     elif args.command == "pool":

@@ -19,14 +19,19 @@ uv run music-hunter similarity [extra.mp3 ...]                    # how the seed
 Spotify links are read from public pages (no account), matched on YouTube Music (same song, ±5 s),
 downloaded into `seeds/` and analysed. v1's data is archived in `runs/v1/`.
 
-## Milestones 2–3 — candidates and pool
+## Candidates and pool
 
 ```sh
-uv run music-hunter pull            # candidates from Last.fm + YouTube Music, then fill the pool
-uv run music-hunter candidates      # candidate list with sources and filter-reason counts
+uv run music-hunter pull            # candidates from every source, then fill the pool
+uv run music-hunter candidates      # candidate list (most source families first), sources, overlap counts
 uv run music-hunter fill            # resume filling the pool (downloads + analysis) after an interruption
 uv run music-hunter pool            # analysed pool tracks, quotas, failures
 ```
+
+Sources (v3): Last.fm artist similarity, YouTube Music radio and "You might also like", Deezer artist radio, and
+TIDAL similar tracks (needs `TIDAL_CLIENT_ID` / `TIDAL_CLIENT_SECRET` in `.env`; skipped if missing). About 100
+suggestions per source per seed. Candidates suggested by two or more source families go into the pool first;
+YouTube matching happens when a candidate is selected. `pull --no-tidal` / `--no-deezer` / `--no-lastfm` skip one.
 
 `pull --fresh` forgets earlier pulls and pool tracks (downloaded files in `cache/` stay).
 Files are kept as downloaded; loudness normalisation is a per-track playback gain stored in the DB.

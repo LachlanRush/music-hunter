@@ -12,7 +12,7 @@ import pytest
 import music_hunter.config as config
 from music_hunter.pool import quotas
 from music_hunter.pull import Pull, seeds
-from music_hunter.ratings import (ADD, change_last_rating, negative_set, next_is_control, positive_set, rate,
+from music_hunter.ratings import (ADD, SOURCES, change_last_rating, negative_set, next_is_control, positive_set, rate,
                                   seed_averages, show, skip, source_averages)
 from music_hunter.scoring import score_pool
 from music_hunter.sources import Item
@@ -92,11 +92,13 @@ def test_scripted_ratings(conn):
     for key in set.union(*provenance(c, t1["id"])):
         assert expected_averages(c, history)[key] == pytest.approx((PRIOR * K + ADD) / (K + 1))
 
-    # Pool re-scores: rated track gone, audio match can only rise, diversity penalty active.
+    # Pool re-scores: rated track gone, diversity penalty active; audio match can only rise, unless this
+    # reference took the set to audio_match_min_refs (then the top 3 are averaged instead of the closest one).
     after = {r["track_id"]: r for r in score_pool(c)}
     assert len(after) == pool_size - 1 and t1["id"] not in after
     rises = [after[t]["raw"]["audio_match"] - before[t]["raw"]["audio_match"] for t in after]
-    assert min(rises) >= -1e-6
+    if len(originals) + 1 != config.CONFIG["scoring"]["audio_match_min_refs"]:
+        assert min(rises) >= -1e-6
     assert max(r["raw"]["diversity_penalty"] for r in after.values()) > 0
 
     # 2. Off: audio held in data/undo/, negative set (weight 1), dislike spans 0–1.
@@ -157,10 +159,10 @@ def test_scripted_ratings(conn):
     assert all(s.track_id != t6["id"] for s in seeds(c))
     assert all_averages(c) == before_avgs
 
-    # 7. Quotas follow seed averages across three sources.
+    # 7. Quotas follow seed averages across every source.
     avgs = seed_averages(c, [s.track_id for s in seeds(c)])
     q = quotas(150, avgs, source_averages(c), {})
-    assert sum(q.values()) == 150 and {src for _, src in q} == {"lastfm", "ytmusic", "deezer"}
+    assert sum(q.values()) == 150 and {src for _, src in q} == set(SOURCES)
     best, worst = max(avgs, key=avgs.get), min(avgs, key=avgs.get)
     if avgs[best] > avgs[worst]:
         assert sum(n for (s, _), n in q.items() if s == best) > sum(n for (s, _), n in q.items() if s == worst)

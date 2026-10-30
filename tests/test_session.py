@@ -28,7 +28,7 @@ class FakeFiller:
         self.base = [db.from_blob(r[0]) for r in conn.execute(
             "SELECT e.embedding FROM track_embeddings e JOIN tracks t ON t.id = e.track_id WHERE t.origin = 'pool'")]
 
-    def process(self, cid):
+    def process(self, cid, seed=None):
         from music_hunter.clap import TrackEmbedding
 
         c = self.conn.execute("SELECT * FROM candidates WHERE id = ?", (cid,)).fetchone()
@@ -42,7 +42,8 @@ class FakeFiller:
                 " video_id, loudness_lufs, true_peak_db, gain_db) VALUES (?, ?, ?, 200, 'pool', ?, ?, ?, -9, 0, -5)",
                 (c["artist"], c["title"], rel, cid, self.generation, c["video_id"])).lastrowid
             db.store_embedding(self.conn, tid, "laion/larger_clap_music", TrackEmbedding(v, v[None], [(0.0, 10.0)]))
-            self.conn.execute("UPDATE candidates SET status = 'pool', track_id = ? WHERE id = ?", (tid, cid))
+            self.conn.execute("UPDATE candidates SET status = 'pool', track_id = ?, pool_seed = ? WHERE id = ?",
+                              (tid, seed, cid))
         self.ready += 1
         return True
 

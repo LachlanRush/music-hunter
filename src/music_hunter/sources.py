@@ -1,5 +1,5 @@
-"""Candidate sources: Last.fm artist similarity, YouTube Music radio/search and Deezer artist
-radio (SPEC.md §4.1, §15.5).
+"""Candidate sources: Last.fm artist similarity, YouTube Music radio, "You might also like" and
+search, Deezer artist radio and TIDAL similar tracks (SPEC.md §4.1, §15.5, §16.3).
 
 Calls are paced by [sources] api_delay_seconds. These return lists only — no downloads.
 """
@@ -25,7 +25,7 @@ class Item:
     duration_s: float | None
     video_id: str | None = None   # YouTube Music ID, when known
     via: str | None = None        # Last.fm: the similar artist; Deezer: the artist whose radio
-    isrc: str | None = None       # Deezer: industry track ID (exact duplicate detection)
+    isrc: str | None = None       # Deezer (via details) and TIDAL: industry track ID (exact duplicates)
     release_date: str | None = None
     deezer_id: int | None = None
 
@@ -101,6 +101,22 @@ class YouTubeMusic:
                                     limit=CFG["ytmusic_radio_limit"] + 1)
         items = [self._item(t) for t in playlist.get("tracks", []) if t.get("videoId") != video_id]
         return items[:CFG["ytmusic_radio_limit"]]
+
+    def related(self, video_id: str) -> list[Item]:
+        """"You might also like" for a seed (v3): the related page's first section of songs. No durations."""
+        _pause()
+        browse_id = self.stats.timed(self.api.get_watch_playlist, video_id, limit=1).get("related")
+        if not browse_id:
+            return []
+        _pause()
+        try:
+            sections = self.stats.timed(self.api.get_song_related, browse_id)
+        except KeyError:            # "No extra content available" page (seen for new releases)
+            return []
+        songs = next((sec["contents"] for sec in sections
+                      if sec.get("contents") and all(c.get("videoId") for c in sec["contents"])), [])
+        items = [self._item(t) for t in songs if t["videoId"] != video_id]
+        return items[:CFG["ytmusic_related_limit"]]
 
 
 class LastFM:
@@ -217,3 +233,81 @@ class Deezer:
         """Fill in ISRC and release date (one call per track, only for tracks that get this far)."""
         t = self._get(f"/track/{item.deezer_id}")
         item.isrc, item.release_date = t.get("isrc") or None, t.get("release_date") or None
+
+
+TIDAL_AUTH = "https://auth.tidal.com/v1/oauth2/token"
+TIDAL_URL = "https://openapi.tidal.com/v2"
+
+
+def _iso_seconds(duration: str | None) -> float | None:
+    """ISO 8601 duration ("PT3M38S") in seconds."""
+    import re
+
+    m = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?", duration or "")
+    if not m:
+        return None
+    h, mins, secs = m.groups()
+    return int(h or 0) * 3600 + int(mins or 0) * 60 + float(secs or 0)
+
+
+class Tidal:
+    """TIDAL's developer API, app-only access (client ID and secret in .env). Source: similar tracks.
+
+    Seeds are found exactly by ISRC (from Deezer); suggestions come with ISRCs and durations.
+    """
+
+    def __init__(self):
+        load_env()
+        self.client = (os.environ.get("TIDAL_CLIENT_ID", ""), os.environ.get("TIDAL_CLIENT_SECRET", ""))
+        if not all(self.client):
+            raise RuntimeError("TIDAL_CLIENT_ID / TIDAL_CLIENT_SECRET are not set in .env")
+        self.stats = CallStats()
+        self.token, self.expires = None, 0.0
+
+    def _headers(self) -> dict:
+        if not self.token or time.monotonic() > self.expires - 60:
+            resp = self.stats.timed(requests.post, TIDAL_AUTH, data={"grant_type": "client_credentials"},
+                                    auth=self.client, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            self.token, self.expires = data["access_token"], time.monotonic() + data.get("expires_in", 3600)
+        return {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.api+json"}
+
+    def _get(self, url: str, params: dict | None = None) -> dict:
+        _pause()
+        resp = self.stats.timed(requests.get, url if url.startswith("http") else TIDAL_URL + url,
+                                params=params, headers=self._headers(), timeout=30)
+        if resp.status_code == 401:                     # token expired early: fetch a new one once
+            self.token = None
+            resp = self.stats.timed(requests.get, url if url.startswith("http") else TIDAL_URL + url,
+                                    params=params, headers=self._headers(), timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+
+    def find(self, isrc: str) -> str | None:
+        """TIDAL track ID for an ISRC, or None."""
+        data = self._get("/tracks", {"countryCode": CFG["tidal_country"], "filter[isrc]": isrc}).get("data", [])
+        return data[0]["id"] if data else None
+
+    def similar(self, track_id: str) -> list[Item]:
+        """Similar tracks, following pages until tidal_similar_limit."""
+        url = f"/tracks/{track_id}/relationships/similarTracks"
+        params = {"countryCode": CFG["tidal_country"], "include": "similarTracks.artists"}
+        items: list[Item] = []
+        while url and len(items) < CFG["tidal_similar_limit"]:
+            page = self._get(url, params)
+            included = {(d["type"], d["id"]): d for d in page.get("included", [])}
+            for ref in page.get("data", []):
+                t = included.get(("tracks", ref["id"]))
+                if not t:
+                    continue
+                a = t.get("attributes", {})
+                artists = [included.get(("artists", x["id"]), {}).get("attributes", {}).get("name")
+                           for x in t.get("relationships", {}).get("artists", {}).get("data", [])]
+                title = a.get("title", "")
+                if a.get("version"):                    # e.g. "Extended Mix": kept so versions are recognised
+                    title = f"{title} ({a['version']})"
+                items.append(Item(", ".join(n for n in artists if n), title, _iso_seconds(a.get("duration")),
+                                  isrc=a.get("isrc") or None))
+            url, params = page.get("links", {}).get("next"), None   # the next link carries its own query
+        return items[:CFG["tidal_similar_limit"]]

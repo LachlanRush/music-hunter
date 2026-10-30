@@ -12,6 +12,7 @@ Essentia's plain model file instead of the Hugging Face (remote-code) version.
 import json
 import os
 import sys
+import time
 import urllib.request
 
 import numpy as np
@@ -255,6 +256,48 @@ def run_maest():
                   meta={"model": "discogs-maest-30s-pw-2", "what": "400 Discogs style activations"})
 
 
+def run_maest_gpu():
+    """MAEST on the GPU: the Hugging Face PyTorch weights (standard transformers ASTForAudioClassification,
+    pinned revision) with its mel-spectrogram front end rebuilt from transformers' own audio utilities, so
+    no code from the model page runs. Same settings as its preprocessor_config.json. All 12 layers, one pass.
+    """
+    import torch
+    from transformers import ASTForAudioClassification
+    from transformers.audio_utils import mel_filter_bank, spectrogram, window_function
+
+    model_id, revision = "mtg-upf/discogs-maest-30s-pw-129e", "e5d670316c61b18aaef46ce66242fcd73870d792"
+    sr, n_fft, hop, frames, mean, std = 16000, 512, 256, 1876, 2.06755686098554, 1.268292820667291
+    model = ASTForAudioClassification.from_pretrained(model_id, revision=revision).to(DEVICE).eval()
+    window = window_function(n_fft, "hann")
+    mel_fb = mel_filter_bank(num_frequency_bins=n_fft // 2 + 1, num_mel_filters=96, min_frequency=0,
+                             max_frequency=sr / 2, sampling_rate=sr, norm="slaney", mel_scale="slaney")
+
+    def mel(y):
+        m = spectrogram(y, window=window, frame_length=n_fft, hop_length=hop, power=2, mel_filters=mel_fb,
+                        min_value=1e-30, mel_floor=1e-30, pad_mode="constant").T
+        m = np.log10(1 + m * 10000)[:frames]
+        m = np.pad(m, ((0, frames - len(m)), (0, 0)))
+        return ((m - mean) / (std * 2)).astype(np.float32)
+
+    keys, track, chunks, styles = [], [], [], []
+    for i, r in enumerate(tracks(), 1):
+        t0 = time.monotonic()
+        y = decode(r["audio"], sr)
+        pieces = split(y, sr, 30.0)
+        x = torch.from_numpy(np.stack([mel(p) for p in pieces])).to(DEVICE)
+        with torch.no_grad():
+            out = model(x, output_hidden_states=True)
+        per = torch.stack([h.mean(1) for h in out.hidden_states[1:]], 1).float().cpu().numpy()   # (patches, 12, 768)
+        keys.append(r["key"]); chunks.append(per.astype(np.float16)); track.append(per.mean(0))
+        styles.append(torch.sigmoid(out.logits).mean(0).float().cpu().numpy())
+        print(f"  maest_gpu {i}: {len(pieces)} patches, {time.monotonic() - t0:.2f} s", flush=True)
+    save_features("maest_gpu", keys, np.stack(track), chunks,
+                  meta={"model": model_id, "revision": revision, "layers": list(range(1, 13)), "chunk_seconds": 30})
+    save_features("maest_gpu_styles", keys, np.stack(styles),
+                  names=[model.config.id2label[i] for i in range(len(model.config.id2label))],
+                  meta={"model": model_id, "what": "400 Discogs style activations"})
+
+
 def run_signal():
     """Plain signal measurements: tempo-independent brightness, density and dynamics."""
     import librosa
@@ -306,7 +349,7 @@ def run_stems():
     save_features("stems", keys, np.array(rows), chunks, names=names, meta={"model": "htdemucs", "chunk_seconds": 10})
 
 
-RUNNERS = {"mert": run_mert, "muq": run_muq, "mulan": run_mulan, "omarrq": run_omarrq, "essentia": run_essentia, "maest": run_maest,
+RUNNERS = {"mert": run_mert, "muq": run_muq, "mulan": run_mulan, "omarrq": run_omarrq, "essentia": run_essentia, "maest": run_maest, "maest_gpu": run_maest_gpu,
            "signal": run_signal, "stems": run_stems}
 
 if __name__ == "__main__":

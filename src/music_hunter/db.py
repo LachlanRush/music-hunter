@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import sqlite3
 
 import numpy as np
@@ -74,18 +75,22 @@ CREATE TABLE IF NOT EXISTS generations (
 CREATE TABLE IF NOT EXISTS candidates (
     id            INTEGER PRIMARY KEY,
     generation    INTEGER NOT NULL REFERENCES generations(id),
-    video_id      TEXT NOT NULL,    -- chosen version (Extended preferred)
+    video_id      TEXT,             -- chosen version (Extended preferred); NULL until matched (v3)
     artist        TEXT NOT NULL,
     title         TEXT NOT NULL,
     duration_s    REAL,
     song_title    TEXT NOT NULL,    -- normalised, version labels removed
     song_artists  TEXT NOT NULL,    -- JSON list, normalised
     is_extended   INTEGER NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'candidate',  -- candidate | pool | download_failed | not_selected
+    status        TEXT NOT NULL DEFAULT 'candidate',  -- candidate | pool | download_failed | match_failed
+                                                      -- | merged | not_selected
     fail_reason   TEXT,
     track_id      INTEGER REFERENCES tracks(id),      -- set once downloaded and analysed
-    isrc          TEXT,                               -- from Deezer, when known
-    release_date  TEXT                                -- from Deezer, when known
+    isrc          TEXT,                               -- from Deezer or TIDAL, when known
+    release_date  TEXT,                               -- from Deezer, when known
+    matched       INTEGER NOT NULL DEFAULT 1,         -- v3: 0 = still to be found on YouTube Music
+    deezer_id     INTEGER,                            -- v3: for fetching ISRC and release date when selected
+    pool_seed     INTEGER REFERENCES tracks(id)       -- v3: the seed whose share of the pool it fills
 );
 
 -- Every raw suggestion from every (seed, source), with what happened to it.
@@ -94,7 +99,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
     id            INTEGER PRIMARY KEY,
     generation    INTEGER NOT NULL REFERENCES generations(id),
     seed_track_id INTEGER NOT NULL REFERENCES tracks(id),
-    source        TEXT NOT NULL,    -- 'lastfm' | 'ytmusic' | 'deezer'
+    source        TEXT NOT NULL,    -- 'lastfm' | 'ytmusic' | 'ytrelated' | 'deezer' | 'tidal'
     rank          INTEGER NOT NULL, -- position in the source's list (1-based)
     artist        TEXT NOT NULL,
     title         TEXT NOT NULL,
@@ -195,7 +200,31 @@ MIGRATIONS = [
     ("plays", "playback_rate", "REAL"),
     ("reweightings", "target", "TEXT"),
     ("reweightings", "candidates", "TEXT"),
+    ("candidates", "matched", "INTEGER NOT NULL DEFAULT 1"),
+    ("candidates", "deezer_id", "INTEGER"),
+    ("candidates", "pool_seed", "INTEGER REFERENCES tracks(id)"),
 ]
+
+
+def _nullable_video_id(conn: sqlite3.Connection) -> None:
+    """v3: candidates.video_id may be NULL (matched on YouTube Music only when selected for the pool).
+
+    SQLite can't drop a NOT NULL constraint, so the table is rebuilt from its current definition.
+    """
+    col = next(r for r in conn.execute("PRAGMA table_info(candidates)") if r["name"] == "video_id")
+    if not col["notnull"]:
+        return
+    sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'candidates'").fetchone()[0]
+    new_sql = re.sub(r"video_id(\s+)TEXT NOT NULL", r"video_id\1TEXT", sql, count=1)
+    cols = ", ".join(r["name"] for r in conn.execute("PRAGMA table_info(candidates)"))
+    conn.execute("PRAGMA foreign_keys = OFF")
+    with conn:
+        conn.execute(re.sub(r'CREATE TABLE\s+(IF NOT EXISTS\s+)?"?candidates"?', "CREATE TABLE candidates_new",
+                            new_sql, count=1))
+        conn.execute(f"INSERT INTO candidates_new ({cols}) SELECT {cols} FROM candidates")
+        conn.execute("DROP TABLE candidates")
+        conn.execute("ALTER TABLE candidates_new RENAME TO candidates")
+    conn.execute("PRAGMA foreign_keys = ON")
 
 
 def connect() -> sqlite3.Connection:
@@ -208,6 +237,7 @@ def connect() -> sqlite3.Connection:
     for table, column, definition in MIGRATIONS:
         if column not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    _nullable_video_id(conn)
     return conn
 
 

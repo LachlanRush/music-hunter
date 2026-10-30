@@ -68,7 +68,7 @@ class Worker:
         A refill needs at least one play since the latest pull started, so a pull that
         finds little new can't trigger another straight away.
         """
-        from .pool import unrated_pool_size
+        from .pool import multi_source_unplayed, unrated_pool_size
         from .scoring import score_pool
 
         pool_cfg = CONFIG["pool"]
@@ -87,6 +87,9 @@ class Worker:
             return None
         if unplayed < pool_cfg["refill_below"]:
             return "pull"
+        if played_since >= pool_cfg["refill_min_plays"] and \
+                multi_source_unplayed(conn) < pool_cfg["refill_multi_source_below"]:
+            return "pull"                     # v3: agreement has run out (SPEC.md §16.4)
         if pool_cfg["refill_min_best_score"] > 0:
             scored = score_pool(conn)
             if scored and scored[0]["score"] < pool_cfg["refill_min_best_score"]:
@@ -109,15 +112,15 @@ class Worker:
 
     def _job(self, conn, job: str) -> None:
         from .pool import fill
-        from .pull import Pull, match_seeds
-        from .sources import Deezer, LastFM, YouTubeMusic
+        from .pull import Pull, match_seeds, optional
+        from .sources import Deezer, LastFM, Tidal, YouTubeMusic
 
         if job == "pull":
             first = conn.execute("SELECT count(*) FROM generations").fetchone()[0] == 0
             self.message = ("Finding candidates" if first else "Refilling the pool: finding candidates") + \
-                " (Last.fm, YouTube Music and Deezer)…"
+                " (Last.fm, YouTube Music, Deezer and TIDAL)…"
             yt = YouTubeMusic()
-            gen = Pull(conn, yt, LastFM(), Deezer()).run(match_seeds(conn, yt))
+            gen = Pull(conn, yt, LastFM(), Deezer(), optional(Tidal)).run(match_seeds(conn, yt))
         else:
             gen = conn.execute("SELECT max(id) FROM generations").fetchone()[0]
         self.message = "Downloading and analysing tracks…"

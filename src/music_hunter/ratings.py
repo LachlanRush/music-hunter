@@ -25,7 +25,7 @@ import numpy as np
 from . import db
 from .config import CONFIG, path, relative, resolve
 
-SOURCES = ("lastfm", "ytmusic", "deezer")
+SOURCES = ("lastfm", "ytmusic", "ytrelated", "deezer", "tidal")
 AVG = CONFIG["averages"]
 POSITIVE_WEIGHTS = {int(k): v for k, v in CONFIG["ratings"]["positive_weights"].items()}
 NEGATIVE_WEIGHTS = {int(k): v for k, v in CONFIG["ratings"]["negative_weights"].items()}
