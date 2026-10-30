@@ -189,6 +189,8 @@ class Filler:
             self.conn.execute("UPDATE candidates SET status = 'pool', track_id = ?, pool_seed = ? WHERE id = ?",
                               (tid, seed, cid))
         self.ready += 1
+        if getattr(self, "progress", None):
+            self.progress(f"{unrated_pool_size(self.conn)} of {CFG['target_size']} tracks in the pool")
         db.log_event(self.conn, "track_ready", generation=self.generation, track_id=tid, video_id=c["video_id"],
                      download_s=round(t1 - t0, 2), analysis_s=round(t2 - t1, 2), waited_s=round(max(wait, 0), 2),
                      bytes=file.stat().st_size, duration_s=round(len(samples) / sr, 1), chunks=len(emb.chunks),
@@ -273,8 +275,10 @@ def unpulled_seeds(conn: sqlite3.Connection) -> list[int]:
     return [s.track_id for s in seeds(conn) if s.track_id not in queried]
 
 
-def fill(conn: sqlite3.Connection, generation: int) -> dict:
-    """Fill every seed's share of the pool from this generation's candidates. Safe to re-run (resumes)."""
+def fill(conn: sqlite3.Connection, generation: int, progress=None) -> dict:
+    """Fill every seed's share of the pool from this generation's candidates. Safe to re-run (resumes).
+
+    `progress(text)`, if given, is told the pool size after each track (shown in the player)."""
     from .pull import seeds
 
     started = time.monotonic()
@@ -284,7 +288,10 @@ def fill(conn: sqlite3.Connection, generation: int) -> dict:
     have = seed_pool_counts(conn)
     tried: set[int] = set()
     filler = None
-    get_filler = lambda: filler or Filler(conn, generation)
+    def get_filler():
+        f = filler or Filler(conn, generation)
+        f.progress = progress
+        return f
 
     # 1. Multi-source candidates, each counted for the suggesting seed whose share is least full.
     suggesters: dict[int, set[int]] = {}

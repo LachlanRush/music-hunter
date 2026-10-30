@@ -126,10 +126,13 @@ class Pull:
         return Candidate(r["id"], names.Song(r["song_title"], frozenset(json.loads(r["song_artists"])),
                                              bool(r["is_extended"])))
 
-    def run(self, seed_list: list[Seed]) -> int:
+    def run(self, seed_list: list[Seed], progress=None) -> int:
+        """`progress(text)`, if given, is told which seed is being queried (shown in the player)."""
         started = time.monotonic()
         db.log_event(self.conn, "pull_start", generation=self.generation, seeds=len(seed_list))
-        for seed in seed_list:
+        for i, seed in enumerate(seed_list, 1):
+            if progress:
+                progress(f"seed {i} of {len(seed_list)}, {len(self.current)} candidates so far")
             for source, items in self._lists(seed):
                 for rank, item in enumerate(items, 1):
                     self.process(seed, source, rank, item)

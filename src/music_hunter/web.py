@@ -117,14 +117,15 @@ class Worker:
 
         if job == "pull":
             first = conn.execute("SELECT count(*) FROM generations").fetchone()[0] == 0
-            self.message = ("Finding candidates" if first else "Refilling the pool: finding candidates") + \
-                " (Last.fm, YouTube Music, Deezer and TIDAL)…"
+            head = "Finding candidates" if first else "Refilling the pool: finding candidates"
+            self.message = f"{head} (Last.fm, YouTube Music, Deezer and TIDAL)…"
             yt = YouTubeMusic()
-            gen = Pull(conn, yt, LastFM(), Deezer(), optional(Tidal)).run(match_seeds(conn, yt))
+            gen = Pull(conn, yt, LastFM(), Deezer(), optional(Tidal)).run(
+                match_seeds(conn, yt), progress=lambda text: setattr(self, "message", f"{head}: {text}…"))
         else:
             gen = conn.execute("SELECT max(id) FROM generations").fetchone()[0]
         self.message = "Downloading and analysing tracks…"
-        fill(conn, gen)
+        fill(conn, gen, progress=lambda text: setattr(self, "message", f"Downloading and analysing: {text}"))
         self.state, self.message = "idle", ""
 
 
@@ -209,6 +210,7 @@ def state() -> dict:
     last = ratings.last_rated(conn)
     return {
         "ready": ready, "run_complete": complete, "unplayed": unplayed, "early_start": UI["early_start_tracks"],
+        "pool_target": CONFIG["pool"]["target_size"],
         "plays": plays[0], "rated": plays[1],
         "worker": {"state": worker.state, "message": worker.message},
         "last": track_info(conn, last) if last else None,

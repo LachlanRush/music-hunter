@@ -220,7 +220,7 @@ async function poll() {
     const s = await api("/api/state");
     const busy = s.worker.state === "running" ? ` · <span class="busy">${s.worker.message}</span>` : "";
     const err = s.worker.state === "error" ? ` · <span class="neg">Pool worker failed: ${s.worker.message}</span>` : "";
-    $("status").innerHTML = `${s.unplayed} unplayed · ${s.rated} rated${busy}${err}`;
+    $("status").innerHTML = `${s.unplayed} of ${s.pool_target} in the pool · ${s.rated} rated${busy}${err}`;
     if (!started) renderGate(s);
     if (s.play_to_end) PLAY_TO_END = new Set(s.play_to_end);
     PRELOAD = !!s.preload_next; STALL_MS = s.stall_log_ms ?? STALL_MS;
