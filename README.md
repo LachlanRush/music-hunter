@@ -68,18 +68,21 @@ The most recent rating can be changed.
 If no pull has run yet (or the pool fill was interrupted), `serve` runs it in the background and
 playback starts once 20 tracks are analysed.
 
-## Milestone 6 — learning and evaluation
+## Learning and evaluation
 
 All of this runs inside `music-hunter serve`:
 
-- 1 play in each block of 5 is a control (the median-scored track), revealed only after rating.
-- Re-weighting (v2): from 20 learning ratings, every 5 — small steps (≤0.05 per weight) within guardrails, choosing
-  between the search's optimum and every earlier weight set by how well each fits the whole rating history.
-- The personal model joins the score from 20 learning ratings (with at least 3 Offs and 3 Close/Add).
-- When fewer than 25 unplayed tracks remain, a new generation is pulled in the background.
-- Results: http://127.0.0.1:8765/results — ranked vs control (average and Add rate, with 95% ranges and a plain
-  reading, no pass mark), whether higher-ranked random controls were rated higher, weight changes over time, sources,
-  seeds and tempo use.
+- Controls (v3): each play is a random pool track with a probability the run draws for itself (1 in 4 to 1 in 10),
+  stores and never shows. The run ends by itself after 25 rated controls; until then the results page and `report`
+  are sealed (only the number of ratings). Control ratings count for learning, but a control never becomes a seed.
+- Re-weighting: from 20 ratings, every 5 — small steps (≤0.05 per weight) within guardrails (no weight above 0.35),
+  choosing between the search's optimum and every earlier weight set by how well each fits the whole rating history.
+- The personal model joins the score from 20 ratings (with at least 3 Offs and 3 Close/Add).
+- When fewer than 100 unplayed tracks remain, or fewer than 5 multi-source ones, a new generation is pulled in the
+  background.
+- Results: http://127.0.0.1:8765/results — after the run: ranked vs control (average and Add rate, with 95% ranges),
+  whether higher-ranked random controls were rated higher, ratings by number of sources, weight changes, sources,
+  seeds and tempo.
 
 `uv run pytest` includes a simulated ~110-play session (offline, on a temporary copy of the DB).
 

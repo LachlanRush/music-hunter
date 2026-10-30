@@ -66,11 +66,15 @@ def report(conn: sqlite3.Connection) -> None:
 
     print("\nLISTENING")
     rated = [p for p in plays if p["rating"] is not None]
+    from .ratings import run_complete
+    sealed = not run_complete(conn)            # SPEC.md §16.6: control counts would reveal the secret rate
     print(f"  plays {len(plays)} · rated {len(rated)} · skipped {sum(1 for p in plays if p['skipped_at'])}"
-          f" · control {sum(p['is_control'] for p in plays)} · awaiting rating"
-          f" {sum(1 for p in plays if p['rating'] is None and not p['skipped_at'])}")
-    for label, group in (("ranked", [p for p in rated if not p["is_control"]]),
-                         ("control", [p for p in rated if p["is_control"]])):
+          + ("" if sealed else f" · control {sum(p['is_control'] for p in plays)}")
+          + f" · awaiting rating {sum(1 for p in plays if p['rating'] is None and not p['skipped_at'])}")
+    if sealed:
+        print("  ranked vs control: sealed until the run completes")
+    for label, group in (() if sealed else (("ranked", [p for p in rated if not p["is_control"]]),
+                                             ("control", [p for p in rated if p["is_control"]]))):
         dist = Counter(p["rating"] for p in group)
         print(f"  {label:8s} " + " · ".join(f"{name} {dist.get(r, 0)}" for r, name in enumerate(LABELS, 1)))
     print("  time from shown to rated: " + spread(

@@ -86,9 +86,11 @@ positive_weights = { "3" = 2.0, "2" = 0.5 }   # Add strongest; Close a mild posi
 negative_weights = { "1" = 1.0 }              # Off only
 
 [controls]
-# SPEC.md §15.4 — each play is a control with this probability, decided independently;
-# a control is a random unplayed pool track.
-probability = 0.2
+# SPEC.md §16.6 — a control is a random unplayed pool track; each play is one independently, at a rate the
+# system draws for itself at the start of the run (uniform between these), stores and never shows.
+rate_min = 0.10                  # 1 in 10
+rate_max = 0.25                  # 1 in 4
+target = 25                      # the run ends when this many controls have been rated; results sealed until then
 
 [reweighting]
 # SPEC.md §15.8 — small steps, guardrails, continuous re-evaluation against the whole history

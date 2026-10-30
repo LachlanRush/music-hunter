@@ -1,4 +1,4 @@
-"""Ratings and their effects — SPEC.md §16.4 (v3 buttons), §5 and §15.4 (controls).
+"""Ratings and their effects — SPEC.md §16.4 (v3 buttons), §5 and §16.6 (controls).
 
 Everything derived from ratings (averages, reference sets, seeds) is computed from the
 `plays` table on demand, so changing the most recent rating only has to update that
@@ -10,6 +10,9 @@ weight 2; seed; saved) — weights in config [ratings]. Effects on the audio fil
   anything else → held in data/undo/ until the next rating (so the back button can still
   change it), then deleted. Learning only needs the stored embedding, not the file.
   Skipped tracks' audio is deleted once a later rating makes them unreachable.
+
+v3 (SPEC.md §16.6): control ratings count for learning like any other — likes and dislikes, seed and source
+credit, personal model — except that a control is never a seed (random picks don't steer the sources).
 """
 
 import json
@@ -41,7 +44,7 @@ def current_generation(conn: sqlite3.Connection) -> int:
 
 def _averages(conn: sqlite3.Connection, column: str, upto_play: int | None = None,
               generation: int | None = None) -> dict:
-    """Decayed average with prior, per seed or per source, over learning ratings.
+    """Decayed average with prior, per seed or per source, over every rating (controls included, v3).
 
     Each seed (or source) that suggested a track gets full credit for its rating, once.
     upto_play / generation replay the averages as they were at an earlier play (results view).
@@ -52,7 +55,7 @@ def _averages(conn: sqlite3.Connection, column: str, upto_play: int | None = Non
             f"SELECT DISTINCT p.id, s.{column} AS key, p.rating, p.generation FROM plays p"
             " JOIN tracks t ON t.id = p.track_id"
             " JOIN suggestions s ON s.candidate_id = t.candidate_id"
-            " WHERE p.is_control = 0 AND p.rating IS NOT NULL AND p.id <= ?", (upto_play or 1 << 62,)):
+            " WHERE p.rating IS NOT NULL AND p.id <= ?", (upto_play or 1 << 62,)):
         w = AVG["decay"] ** (gen - r["generation"])
         total[r["key"]] = total.get(r["key"], 0.0) + w * r["rating"]
         weight[r["key"]] = weight.get(r["key"], 0.0) + w
@@ -90,26 +93,45 @@ def _in(ratings: dict) -> str:
 
 
 def positive_set(conn: sqlite3.Connection):
-    """(track ids, embeddings, weights): seeds (as Add) and learning plays with a positive weight (Close, Add)."""
+    """(track ids, embeddings, weights): seeds (as Add) and plays with a positive weight (Close, Add)."""
     return _embedding_set(conn,
         f"SELECT id, {ADD} AS rating FROM tracks WHERE origin = 'original_reference'"
-        f" UNION SELECT track_id, rating FROM plays WHERE is_control = 0 AND rating IN {_in(POSITIVE_WEIGHTS)}",
+        f" UNION SELECT track_id, rating FROM plays WHERE rating IN {_in(POSITIVE_WEIGHTS)}",
         POSITIVE_WEIGHTS)
 
 
 def negative_set(conn: sqlite3.Connection):
-    """(track ids, embeddings, weights): learning plays rated Off."""
+    """(track ids, embeddings, weights): plays rated Off."""
     return _embedding_set(conn, "SELECT track_id AS id, rating FROM plays"
-                          f" WHERE is_control = 0 AND rating IN {_in(NEGATIVE_WEIGHTS)}", NEGATIVE_WEIGHTS)
+                          f" WHERE rating IN {_in(NEGATIVE_WEIGHTS)}", NEGATIVE_WEIGHTS)
 
 
 def learning_ratings(conn: sqlite3.Connection) -> int:
-    return conn.execute("SELECT count(*) FROM plays WHERE is_control = 0 AND rating IS NOT NULL").fetchone()[0]
+    """Ratings the system learns from: every rating in v3, controls included (SPEC.md §16.6)."""
+    return conn.execute("SELECT count(*) FROM plays WHERE rating IS NOT NULL").fetchone()[0]
+
+
+def control_rate(conn: sqlite3.Connection, rng=random) -> float:
+    """This run's secret control rate: drawn once (uniform in [controls] rate_min–rate_max), stored, never shown."""
+    rate = db.get_setting(conn, "control_rate")
+    if rate is None:
+        rate = rng.uniform(CONFIG["controls"]["rate_min"], CONFIG["controls"]["rate_max"])
+        db.set_setting(conn, "control_rate", rate, log=False)
+    return rate
 
 
 def next_is_control(conn: sqlite3.Connection, rng=random) -> bool:
-    """Each play is a control with [controls] probability, independently (SPEC.md §15.4)."""
-    return rng.random() < CONFIG["controls"]["probability"]
+    """Each play is a control independently, at this run's secret rate (SPEC.md §16.6)."""
+    return rng.random() < control_rate(conn, rng)
+
+
+def rated_controls(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT count(*) FROM plays WHERE is_control = 1 AND rating IS NOT NULL").fetchone()[0]
+
+
+def run_complete(conn: sqlite3.Connection) -> bool:
+    """The run ends by itself once [controls] target controls are rated; results are sealed until then."""
+    return rated_controls(conn) >= CONFIG["controls"]["target"]
 
 
 def upcoming(conn: sqlite3.Connection, rng=random) -> int | None:
@@ -169,8 +191,9 @@ def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = 
             (row["track_id"], current_generation(conn), play_number, int(control), row["weight_set_id"],
              json.dumps(components), row["score"], row["rank"], len(scored),
              json.dumps(row["provenance"]), row.get("target_bpm"), row.get("scored_for_seed"))).lastrowid
-    db.log_event(conn, "shown", play_id, control=control, rank=row["rank"], pool_size=len(scored),
-                 score_ms=round(score_ms, 1))
+    # Control status and rank stay out of the event log (and its text file): they're in the plays table, and
+    # seeing them during the run would reveal which plays are controls (SPEC.md §16.6).
+    db.log_event(conn, "shown", play_id, pool_size=len(scored), score_ms=round(score_ms, 1))
     return play_id
 
 

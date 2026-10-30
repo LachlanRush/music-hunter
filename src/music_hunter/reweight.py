@@ -184,7 +184,7 @@ def evaluate_pending(conn: sqlite3.Connection) -> None:
     """Weights before vs after each update, on the eval_window learning ratings that followed (logged only)."""
     window = CFG["eval_window"]
     rated = conn.execute("SELECT id, components, rating FROM plays"
-                         " WHERE is_control = 0 AND rating IS NOT NULL ORDER BY rated_at, id").fetchall()
+                         " WHERE rating IS NOT NULL ORDER BY rated_at, id").fetchall()
     for rw in conn.execute("SELECT * FROM reweightings WHERE eval_n IS NULL").fetchall():
         nxt = rated[rw["at_ratings"]:rw["at_ratings"] + window]
         if len(nxt) < window:

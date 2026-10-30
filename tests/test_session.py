@@ -104,6 +104,7 @@ def test_session(conn, monkeypatch):
         self.state, self.message = "idle", ""
     monkeypatch.setattr(web.Worker, "_job", run_job)
     monkeypatch.setitem(CONFIG["tempo"], "locked", False)        # exercises the player's tempo controls
+    monkeypatch.setitem(CONFIG["controls"], "target", 10**6)     # the run doesn't end during the session…
 
     refs = np.stack([db.from_blob(r[0]) for r in c.execute(
         "SELECT e.embedding FROM track_embeddings e JOIN tracks t ON t.id = e.track_id"
@@ -137,7 +138,13 @@ def test_session(conn, monkeypatch):
                 client.post("/api/event", json={"kind": "playing", "play_id": t["play_id"], "data": {"latency_ms": 180}})
                 client.post("/api/event", json={"kind": "stall", "play_id": t["play_id"], "data": {"ms": 900, "at_s": 30}})
                 assert client.post("/api/event", json={"kind": "bogus"}).status_code == 400
+        sealed = client.get("/api/results").json()                  # …so results stay sealed: nothing about controls
+        assert sealed == {"sealed": True, "rated": sealed["rated"], "target_controls": 10**6}
+        done = c.execute("SELECT count(*) FROM plays WHERE is_control = 1 AND rating IS NOT NULL").fetchone()[0]
+        monkeypatch.setitem(CONFIG["controls"], "target", done)      # …until the target is reached: the run ends
+        assert client.get("/api/state").json()["run_complete"] and client.post("/api/next").status_code == 409
         results = client.get("/api/results").json()
+        assert not results["sealed"]
         assert client.get("/results").status_code == 200
 
     plays = c.execute("SELECT * FROM plays ORDER BY play_number").fetchall()
@@ -150,14 +157,14 @@ def test_session(conn, monkeypatch):
         assert json.loads(p["provenance"]) and p["rank"] >= 1 and p["generation"] >= 1
         assert p["played_seconds"] is not None and p["shown_at"]
 
-    # Controls: about 1 in 5, independently; a random pool track (ranks vary), not the top pick.
+    # Controls: at the run's secret rate (1 in 4 to 1 in 10), independently; a random pool track (ranks vary).
     controls = [p for p in plays if p["is_control"]]
     assert 0.08 < len(controls) / PLAYS < 0.35
     assert len({p["rank"] for p in controls}) > 1
     assert all(p["rank"] == 1 for p in plays if not p["is_control"])
 
     # Re-weighting on schedule, each logged with a new weight set and later evaluated.
-    learning = c.execute("SELECT count(*) FROM plays WHERE is_control = 0 AND rating IS NOT NULL").fetchone()[0]
+    learning = c.execute("SELECT count(*) FROM plays WHERE rating IS NOT NULL").fetchone()[0]   # v3: controls learn too
     expected = list(range(RW["first_at"], learning + 1, RW["every"]))
     rws = c.execute("SELECT * FROM reweightings ORDER BY at_ratings").fetchall()
     assert [r["at_ratings"] for r in rws] == expected
@@ -168,7 +175,7 @@ def test_session(conn, monkeypatch):
             assert r["eval_n"] == RW["eval_window"]
             assert (r["eval_new_concordance"] is not None) == (r["eval_pairs"] > 0)  # all-equal ratings: no pairs
 
-    # Personal model: zero until the minimum learning ratings (with enough Offs and likes), then active;
+    # Personal model: zero until the minimum ratings (with enough Offs and likes), then active;
     # its value is the predicted rating on the rating scale.
     from music_hunter.scoring import CFG as SC
     from music_hunter.ratings import NEGATIVE_WEIGHTS, POSITIVE_WEIGHTS
@@ -180,7 +187,7 @@ def test_session(conn, monkeypatch):
             assert comp["raw"] == 0.0
         elif not p["is_control"]:
             assert comp["raw"] != 0.0 and 0.0 <= comp["norm"] <= 1.0
-        if not p["is_control"] and p["rating"] is not None:
+        if p["rating"] is not None:                       # v3: control ratings count too
             seen += 1
             likes += p["rating"] in POSITIVE_WEIGHTS
             offs += p["rating"] in NEGATIVE_WEIGHTS

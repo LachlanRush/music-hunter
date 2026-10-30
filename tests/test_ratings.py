@@ -150,15 +150,17 @@ def test_scripted_ratings(conn):
     history.append((t5["id"], CLOSE, gen))
     assert not skipped_file.exists() and track_of(c, p4)["file_path"] is None
 
-    # 6. Control Added: saved to collection/, but no credit, not a reference, not a seed.
-    before_avgs = all_averages(c)
+    # 6. Control Added (v3, SPEC.md §16.6): saved to collection/, counts for learning (positive set, seed and
+    #    source credit) — but never becomes a seed, so random picks don't steer the sources.
     p6 = show(c, control=True, rng=random.Random(3))
     t6 = track_of(c, p6)
     rate(c, p6, ADD)
+    history.append((t6["id"], ADD, gen))
     assert track_of(c, p6)["file_path"].startswith("collection/")
-    assert t6["id"] not in positive_set(c)[0]
+    ids, _, w = positive_set(c)
+    assert w[ids.index(t6["id"])] == 2.0
     assert all(s.track_id != t6["id"] for s in seeds(c))
-    assert all_averages(c) == before_avgs
+    check_averages(c, history)
 
     # 7. Quotas follow seed averages across every source.
     avgs = seed_averages(c, [s.track_id for s in seeds(c)])
@@ -181,10 +183,17 @@ def test_scripted_ratings(conn):
 
 
 def test_controls_are_random(conn):
-    """About 1 in 5 plays are controls, decided independently; a control is a random pool track."""
+    """The run draws its own secret control rate once (1 in 4 to 1 in 10); each play is a control independently
+    at that rate; a control is a random pool track."""
+    from music_hunter import db
+    from music_hunter.ratings import control_rate
+
     rng = random.Random(42)
     draws = [next_is_control(conn, rng) for _ in range(5000)]
-    assert 0.18 < sum(draws) / len(draws) < 0.22
+    rate_ = db.get_setting(conn, "control_rate")
+    assert 0.10 <= rate_ <= 0.25 and control_rate(conn, rng) == rate_      # drawn once, kept for the run
+    assert abs(sum(draws) / len(draws) - rate_) < 0.025
+    assert conn.execute("SELECT count(*) FROM events WHERE kind = 'setting_changed'").fetchone()[0] == 0  # never logged
     longest = run = 0                                  # no block structure: runs of non-controls vary freely
     for d in draws:
         run = 0 if d else run + 1
@@ -211,3 +220,27 @@ def test_upcoming_matches_next_play(conn):
         controls += row["is_control"]
         skip(conn, play)
     assert 0 < controls < 40
+
+
+def test_run_ends_and_results_unseal(conn, monkeypatch):
+    """SPEC.md §16.6: results stay sealed (nothing hinting at controls) until the target number of controls is rated;
+    then the run ends by itself."""
+    from fastapi.testclient import TestClient
+    from music_hunter import web
+    from music_hunter.config import CONFIG
+
+    monkeypatch.setattr(web.worker, "start_if_needed", lambda: None)
+    monkeypatch.setitem(CONFIG["controls"], "target", 2)
+    from music_hunter.ratings import control_rate
+    control_rate(conn)                                     # drawn at the run's first play
+    with TestClient(web.app) as client:
+        for _ in range(3):
+            assert client.get("/api/results").json()["sealed"]
+            rate(conn, show(conn, control=True, rng=random.Random(1)), CLOSE)
+            if client.get("/api/state").json()["run_complete"]:
+                break
+        state = client.get("/api/state").json()
+        assert state["run_complete"] and not state["ready"]
+        assert client.post("/api/next").status_code == 409
+        res = client.get("/api/results").json()
+        assert not res["sealed"] and res["control"]["n"] == 2 and 0.10 <= res["control_rate"] <= 0.25

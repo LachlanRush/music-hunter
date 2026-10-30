@@ -47,14 +47,14 @@ def current_weights(conn: sqlite3.Connection) -> tuple[int, dict[str, float]]:
 
 
 def personal_model(conn: sqlite3.Connection):
-    """Ridge regression from the audio embedding to rating, trained on learning ratings.
+    """Ridge regression from the audio embedding to rating, trained on every rating (controls included, v3).
 
     The ridge strength is picked from [personal_model] alphas by exact leave-one-out
     error. Returns a function mapping embeddings (n, dim) to predicted ratings.
     """
     rows = conn.execute(
         "SELECT p.rating, e.embedding FROM plays p JOIN track_embeddings e ON e.track_id = p.track_id"
-        " WHERE p.is_control = 0 AND p.rating IS NOT NULL").fetchall()
+        " WHERE p.rating IS NOT NULL").fetchall()
     X = np.stack([db.from_blob(r["embedding"]) for r in rows]).astype(np.float64)
     y = np.array([r["rating"] for r in rows], dtype=np.float64)
     x_mean, y_mean = X.mean(0), y.mean()
@@ -76,7 +76,7 @@ def personal_model_active(conn: sqlite3.Connection) -> bool:
     """Enough learning ratings, with both dislikes and likes among them, to fit the personal model."""
     def count(ratings) -> int:
         marks = ",".join("?" * len(ratings))
-        return conn.execute(f"SELECT count(*) FROM plays WHERE is_control = 0 AND rating IN ({marks})",
+        return conn.execute(f"SELECT count(*) FROM plays WHERE rating IN ({marks})",
                             [int(r) for r in ratings]).fetchone()[0]
 
     return (learning_ratings(conn) >= CFG["personal_model_min_ratings"]

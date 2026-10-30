@@ -484,6 +484,12 @@ Goal: more multi-source agreement, the strongest signal in both runs.
 - **Same-artist seeds count once per source** for agreement (agreed 2026-10-30): Last.fm and Deezer suggest by artist, so seeds by one artist get identical lists — three X CLUB. seeds would otherwise make one Last.fm + one Deezer suggestion look like six. Agreement between seeds by different artists still counts. Each artist's Last.fm and Deezer lists are fetched once per pull. Pool shares stay per seed (X CLUB. and 6 SENSE get three shares each) — to be judged from the run.
 - **Seeds chosen** (2026-10-30, not added yet): Spotify playlist `7pc3JHwWspD5BnZMRoX4PG`, 12 tracks, all readable — WOLTERS, X CLUB. ×3, Jas Van Houten, Basement Jaxx & Gorgon City, 6 SENSE ×3, TWOFACED ×2, Clouds.
 
+**As built — milestone 5 (2026-10-30)**
+- **Secret control rate**: drawn once per run, uniform between 1 in 10 and 1 in 4 (`[controls]`), stored in the database and never shown or logged as an event; each play is a control independently at that rate.
+- **The run ends** after 25 rated controls: the player shows "Run complete" with a link to the results, and no new plays start.
+- **Sealed results**: until then the results page and `report` show only the number of ratings. The "shown" event no longer records control status or rank (it's in the plays table), so the text log can't reveal controls either.
+- **Control ratings count for learning**: likes and dislikes, seed and source credit, the personal model, re-weighting's schedule and history; a control Added still never becomes a seed.
+
 ### 16.5 Milestones (build in order, stop after each for my check)
 1. **Taste-model test** (16.1) — offline comparison of audio models and analyses on my ~190 ratings. Check: results table and a recommendation on CLAP. **Done 2026-10-30: MuQ-MuLan replaces CLAP** (MAEST check pending).
 2. **Sources and pool** — TIDAL (ISRC lookup, similar tracks), YouTube Music related, deeper lists (~100 per source per seed), multi-source-first filling, refill when multi-source tracks run out, pool 250, artist-level credit off. Check: candidate list with four-plus sources and overlap counts.

@@ -87,6 +87,12 @@ td.name { white-space: normal; min-width: 180px; font-family: var(--body); }
     <div class="status" id="updated">Loading…</div>
   </header>
 
+  <section class="verdict" id="sealed" hidden aria-labelledby="h-sealed">
+    <div class="label">Run in progress</div>
+    <h2 id="h-sealed" class="big"><b>Results are sealed</b></h2>
+    <p class="sub" id="sealed-text"></p>
+  </section>
+
   <section class="verdict" aria-labelledby="h-test">
     <div class="label" id="h-test">Ranked minus control · average rating</div>
     <div class="big"><b id="diff">–</b><span id="diff-ci"></span><span id="verdict"></span></div>
@@ -118,7 +124,7 @@ td.name { white-space: normal; min-width: 180px; font-family: var(--body); }
 
   <section aria-labelledby="h-sources">
     <h2 id="h-sources">Source averages</h2>
-    <p class="sub">Decayed average rating of learning plays each source suggested, after each rating.</p>
+    <p class="sub">Decayed average rating of the tracks each source suggested (controls included), after each rating.</p>
     <div class="legend" id="src-legend"></div>
     <div class="chart" id="sources"></div>
     <details><summary>Show data</summary><div class="table-wrap" id="src-table"></div></details>
@@ -360,7 +366,16 @@ async function load() {
   try {
     const res = await fetch("/api/results");
     if (!res.ok) throw new Error(res.statusText);
-    render(await res.json());
+    const d = await res.json();
+    const sealed = !!d.sealed;
+    $("sealed").hidden = !sealed;
+    document.querySelectorAll("main > section:not(#sealed)").forEach((s) => { s.hidden = sealed; });
+    if (sealed) {
+      $("sealed-text").textContent = `${d.rated} tracks rated so far. Everything is revealed when the run completes`
+        + ` (after ${d.target_controls} control plays, at a rate kept secret so they can't be counted). Until then`
+        + " this page shows nothing that could hint at which plays were controls.";
+      $("updated").textContent = `Checked ${new Date().toLocaleTimeString()}`;
+    } else render(d);
   } catch (e) {
     $("updated").textContent = "Can't reach the music-hunter server. Is `music-hunter serve` running?";
   }

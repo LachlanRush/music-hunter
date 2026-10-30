@@ -203,10 +203,12 @@ def state() -> dict:
     unplayed = len(pool_tracks(conn))
     plays = conn.execute("SELECT count(*), count(rating) FROM plays").fetchone()
     first_pull = plays[0] == 0
-    ready = unplayed > 0 and (not first_pull or unplayed >= UI["early_start_tracks"] or worker.state != "running")
+    complete = ratings.run_complete(conn)
+    ready = not complete and unplayed > 0 and \
+        (not first_pull or unplayed >= UI["early_start_tracks"] or worker.state != "running")
     last = ratings.last_rated(conn)
     return {
-        "ready": ready, "unplayed": unplayed, "early_start": UI["early_start_tracks"],
+        "ready": ready, "run_complete": complete, "unplayed": unplayed, "early_start": UI["early_start_tracks"],
         "plays": plays[0], "rated": plays[1],
         "worker": {"state": worker.state, "message": worker.message},
         "last": track_info(conn, last) if last else None,
@@ -222,6 +224,8 @@ def next_track() -> dict:
     conn = db.connect()
     play = ratings.current_play(conn)
     if play is None:
+        if ratings.run_complete(conn):
+            raise HTTPException(409, "Run complete")
         if not pool_tracks(conn):
             worker.start_if_needed()
             raise HTTPException(409, "No unplayed tracks in the pool")
@@ -233,9 +237,10 @@ def next_track() -> dict:
 @app.get("/api/upcoming")
 def upcoming() -> dict:
     """The track most likely to play next (never names or anything else), for fetching its audio early."""
-    if not UI["preload_next"]:
-        raise HTTPException(404, "Preloading is off")
-    track_id = ratings.upcoming(db.connect())
+    conn = db.connect()
+    if not UI["preload_next"] or ratings.run_complete(conn):
+        raise HTTPException(404, "Nothing to preload")
+    track_id = ratings.upcoming(conn)
     if track_id is None:
         raise HTTPException(404, "No unplayed tracks")
     return {"track_id": track_id, "audio": f"/audio/{track_id}"}

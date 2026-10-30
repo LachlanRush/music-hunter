@@ -105,6 +105,13 @@ def reading(diff: dict) -> str:
 
 
 def results(conn: sqlite3.Connection) -> dict:
+    """Everything for the results page — sealed until the run is complete (SPEC.md §16.6): before then only
+    the total number of ratings, since ranked/control counts or comparisons would reveal the control rate."""
+    from .ratings import run_complete
+
+    if not run_complete(conn):
+        return {"sealed": True, "rated": conn.execute("SELECT count(*) FROM plays WHERE rating IS NOT NULL").fetchone()[0],
+                "target_controls": CONFIG["controls"]["target"]}
     plays = conn.execute("SELECT * FROM plays ORDER BY play_number").fetchall()
     rated = [p for p in plays if p["rating"] is not None]
     ranked = [(p["play_number"], p["rating"]) for p in rated if not p["is_control"]]
@@ -121,9 +128,7 @@ def results(conn: sqlite3.Connection) -> dict:
     prior = CONFIG["averages"]["prior"]
     seed_series = {sid: [] for sid in labels}
     source_series = {s: [] for s in SOURCES}
-    for p in rated:
-        if p["is_control"]:
-            continue
+    for p in rated:                              # every rating counts for the averages (v3), controls included
         s_avg = _averages(conn, "seed_track_id", upto_play=p["id"], generation=p["generation"])
         src_avg = _averages(conn, "source", upto_play=p["id"], generation=p["generation"])
         for sid in labels:
@@ -148,6 +153,7 @@ def results(conn: sqlite3.Connection) -> dict:
     stretched = [p for p in rated if p["playback_rate"] and abs(p["playback_rate"] - 1) > 0.005]
 
     return {
+        "sealed": False, "control_rate": db.get_setting(conn, "control_rate"),
         "totals": {
             "plays": len(plays), "rated": len(rated), "learning": len(ranked), "control": len(control),
             "skipped": sum(1 for p in plays if p["skipped_at"]),

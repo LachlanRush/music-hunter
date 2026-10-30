@@ -232,7 +232,12 @@ async function poll() {
 }
 
 function renderGate(s) {
-  if (s.ready) {
+  if (s.run_complete) {
+    $("gate-label").textContent = "Run complete";
+    $("gate-title").textContent = "That's the run";
+    $("gate-text").innerHTML = `${s.rated} tracks rated. The results are unsealed: <a href="/results">see them here</a>.`;
+    $("gate-meter").hidden = true;
+  } else if (s.ready) {
     started = true;
     $("gate").hidden = true;
     $("now").hidden = false;
