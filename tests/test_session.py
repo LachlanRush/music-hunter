@@ -103,6 +103,7 @@ def test_session(conn, monkeypatch):
         fake_job(job)
         self.state, self.message = "idle", ""
     monkeypatch.setattr(web.Worker, "_job", run_job)
+    monkeypatch.setitem(CONFIG["tempo"], "locked", False)        # exercises the player's tempo controls
 
     refs = np.stack([db.from_blob(r[0]) for r in c.execute(
         "SELECT e.embedding FROM track_embeddings e JOIN tracks t ON t.id = e.track_id"

@@ -112,6 +112,34 @@ def next_is_control(conn: sqlite3.Connection, rng=random) -> bool:
     return rng.random() < CONFIG["controls"]["probability"]
 
 
+def upcoming(conn: sqlite3.Connection, rng=random) -> int | None:
+    """The track the next play would show if it started now, so the player can fetch its audio early.
+
+    Whether the next play is a control (and, if so, which random pool track) is drawn here, ahead of time,
+    and kept until that play starts: it never depends on ratings, so drawing it early changes nothing. A
+    learning play's track is the current top score, which a rating in between can still change.
+    """
+    from .scoring import score_pool
+
+    scored = score_pool(conn)
+    if not scored:
+        return None
+    draw = db.get_setting(conn, "next_draw")
+    if draw is None or (draw["control"] and draw["track_id"] not in {r["track_id"] for r in scored}):
+        control = next_is_control(conn, rng)
+        draw = {"control": control, "track_id": rng.choice(scored)["track_id"] if control else None}
+        db.set_setting(conn, "next_draw", draw, log=False)
+    return draw["track_id"] if draw["control"] else scored[0]["track_id"]
+
+
+def show_next(conn: sqlite3.Connection, rng=random) -> int:
+    """Start the next play, as drawn by `upcoming`. Returns the play ID."""
+    upcoming(conn, rng)
+    draw = db.get_setting(conn, "next_draw")
+    db.set_setting(conn, "next_draw", None, log=False)
+    return show(conn, track_id=draw["track_id"], control=True) if draw["control"] else show(conn)
+
+
 # --- showing and rating --------------------------------------------------------------------
 
 def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = False, rng=random) -> int:

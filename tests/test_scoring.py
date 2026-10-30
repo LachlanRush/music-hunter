@@ -65,3 +65,25 @@ def test_guardrails():
     assert np.all(np.abs(w) >= FLOORS - 1e-12)
     for c, v in CFG["weights"].items():                                            # initial weights obey them
         assert floors[c] - 1e-12 <= abs(v) <= caps[c] + 1e-12, c
+
+
+def test_same_artist_seeds_count_once_per_source(conn):
+    """Last.fm and Deezer suggest by artist, so two seeds by one artist give the same list: not agreement."""
+    a, b = seeds(conn)[:2]
+    cid = conn.execute("SELECT s.candidate_id FROM suggestions s JOIN tracks t ON t.candidate_id = s.candidate_id"
+                       " WHERE t.origin = 'pool' AND t.id NOT IN (SELECT track_id FROM plays) GROUP BY s.candidate_id"
+                       " HAVING count(DISTINCT s.seed_track_id || s.source) = 1 LIMIT 1").fetchone()[0]
+    src = conn.execute("SELECT source FROM suggestions WHERE candidate_id = ?", (cid,)).fetchone()[0]
+    first = conn.execute("SELECT seed_track_id FROM suggestions WHERE candidate_id = ?", (cid,)).fetchone()[0]
+    other = b.track_id if first == a.track_id else a.track_id
+    agreement = lambda: next(r["raw"]["agreement"] for r in score_pool(conn) if r["candidate_id"] == cid)
+    alone = agreement()
+    with conn:
+        conn.execute("INSERT INTO suggestions (generation, seed_track_id, source, rank, artist, title, outcome, candidate_id)"
+                     " SELECT generation, ?, source, 99, artist, title, 'merged', candidate_id FROM suggestions"
+                     " WHERE candidate_id = ? LIMIT 1", (other, cid))
+        conn.execute("UPDATE tracks SET artist = (SELECT artist FROM tracks WHERE id = ?) WHERE id = ?", (first, other))
+    assert agreement() == alone                                    # same artist, same source: counted once
+    with conn:
+        conn.execute("UPDATE tracks SET artist = 'Someone Else Entirely' WHERE id = ?", (other,))
+    assert agreement() > alone, src                                # a different artist's seed agreeing does count

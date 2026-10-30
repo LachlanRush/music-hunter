@@ -103,12 +103,12 @@ def report(conn: sqlite3.Connection) -> None:
         print("  none yet")
 
     print("\nTEMPO")
-    target = conn.execute("SELECT value FROM settings WHERE key = 'target_bpm'").fetchone()
-    match = conn.execute("SELECT value FROM settings WHERE key = 'match_tempo'").fetchone()
+    from .scoring import tempo_settings
+    tempo = tempo_settings(conn)
     stretched = [p for p in rated if p["playback_rate"] and abs(p["playback_rate"] - 1) > 0.005]
-    print(f"  target BPM {json.loads(target[0]) if target and target[0] != 'null' else 'from seeds'} · match tempo"
-          f" {'on' if match and json.loads(match[0]) else 'off'} · setting changes {len(events(conn, 'setting_changed'))}"
-          f" · ratings given while stretched {len(stretched)}")
+    print(f"  target BPM {tempo['target_bpm'] or 'from seeds and liked tracks'} · match tempo"
+          f" {'on' if tempo['match_tempo'] else 'off'}{' · locked for the run' if tempo['locked'] else ''}"
+          f" · setting changes {len(events(conn, 'setting_changed'))} · ratings given while stretched {len(stretched)}")
 
     print("\nPOOL PIPELINE (per generation)")
     ready = events(conn, "track_ready")

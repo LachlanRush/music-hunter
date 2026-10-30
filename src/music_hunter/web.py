@@ -211,7 +211,7 @@ def state() -> dict:
         "worker": {"state": worker.state, "message": worker.message},
         "last": track_info(conn, last) if last else None,
         "labels": ratings.LABELS, "hints": CONFIG["ratings"]["hints"], "add": ratings.ADD,
-        "play_to_end": UI["play_to_end"],
+        "play_to_end": UI["play_to_end"], "preload_next": UI["preload_next"], "stall_log_ms": UI["stall_log_ms"],
         "seeds": conn.execute("SELECT count(*) FROM tracks WHERE origin = 'original_reference'").fetchone()[0],
     }
 
@@ -225,9 +225,20 @@ def next_track() -> dict:
         if not pool_tracks(conn):
             worker.start_if_needed()
             raise HTTPException(409, "No unplayed tracks in the pool")
-        play_id = ratings.show(conn, control=ratings.next_is_control(conn))
+        play_id = ratings.show_next(conn)
         play = conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone()
     return track_info(conn, play)
+
+
+@app.get("/api/upcoming")
+def upcoming() -> dict:
+    """The track most likely to play next (never names or anything else), for fetching its audio early."""
+    if not UI["preload_next"]:
+        raise HTTPException(404, "Preloading is off")
+    track_id = ratings.upcoming(db.connect())
+    if track_id is None:
+        raise HTTPException(404, "No unplayed tracks")
+    return {"track_id": track_id, "audio": f"/audio/{track_id}"}
 
 
 @app.get("/api/previous")
@@ -277,18 +288,21 @@ def change(body: ChangeBody) -> dict:
 
 @app.get("/api/settings")
 def get_settings() -> dict:
-    from .scoring import target_bpm
+    from .scoring import target_bpm, tempo_settings
 
     conn = db.connect()
     target, source = target_bpm(conn)
-    return {"target_bpm": db.get_setting(conn, "target_bpm"), "match_tempo": db.get_setting(conn, "match_tempo", False),
-            "effective_target_bpm": target, "target_source": source,
+    return {**tempo_settings(conn), "effective_target_bpm": target, "target_source": source,
             "max_stretch": CONFIG["bpm"]["max_stretch"]}
 
 
 @app.post("/api/settings")
 def set_settings(body: SettingsBody) -> dict:
-    """Target BPM steers ranking (bpm_match) and, with match_tempo, playback speed. Changes are logged."""
+    """Target BPM steers ranking (bpm_match) and, with match_tempo, playback speed. Changes are logged.
+
+    Refused while [tempo] locked is on (held steady for the evaluation run; change them in config.toml)."""
+    if CONFIG["tempo"]["locked"]:
+        raise HTTPException(409, "Tempo settings are locked for this run (config.toml [tempo])")
     conn = db.connect()
     if body.target_bpm is not None and not (40 <= body.target_bpm <= 220):
         raise HTTPException(400, "Target BPM must be between 40 and 220")

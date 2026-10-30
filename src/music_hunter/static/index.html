@@ -143,6 +143,27 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 const $ = (id) => document.getElementById(id);
 let LABELS = {};                        // rating -> button label, from config via /api/state
 let PLAY_TO_END = new Set();            // updated from the server's settings
+let PRELOAD = false, STALL_MS = 250;    // [ui] preload_next, stall_log_ms
+
+// Preloading: while a track plays, the likely next track's audio is fetched into memory, so it starts at once.
+const blobs = new Map();                // track_id -> object URL of its fetched audio (a few at most)
+let preloading = null, startedFromMemory = false;
+async function prefetchUpcoming() {
+  if (!PRELOAD || viewing !== "current") return;
+  try {
+    const up = await api("/api/upcoming");
+    if (blobs.has(up.track_id) || preloading === up.track_id) return;
+    preloading = up.track_id;
+    const res = await fetch(up.audio);
+    if (!res.ok) throw new Error(res.statusText);
+    blobs.set(up.track_id, URL.createObjectURL(await res.blob()));
+    for (const [id, url] of blobs) {        // keep the newest three, never the one playing
+      if (blobs.size <= 3) break;
+      if (url !== audio.src) { URL.revokeObjectURL(url); blobs.delete(id); }
+    }
+  } catch (e) { /* preloading is only a speed-up; the normal load still works */ }
+  finally { preloading = null; }
+}
 
 function buildButtons(labels, hints, add) {
   // The rating buttons, as configured ([ratings] labels and hints in config.toml).
@@ -202,6 +223,7 @@ async function poll() {
     $("status").innerHTML = `${s.unplayed} unplayed · ${s.rated} rated${busy}${err}`;
     if (!started) renderGate(s);
     if (s.play_to_end) PLAY_TO_END = new Set(s.play_to_end);
+    PRELOAD = !!s.preload_next; STALL_MS = s.stall_log_ms ?? STALL_MS;
     if (s.labels && !$("rate").children.length) buildButtons(s.labels, s.hints || [], s.add);
     if (s.last && !$("reveal").dataset.loaded) renderReveal(s.last);
   } catch (e) {
@@ -274,7 +296,9 @@ async function loadTrack(track, startAt, alreadyPlayed, autoplay = true) {
   played = alreadyPlayed; lastPos = startAt;
   showNames(track);
   gainNode.gain.value = Math.pow(10, track.gain_db / 20);   // loudness normalisation
-  audio.src = track.audio;
+  const cached = blobs.get(track.track_id);
+  startedFromMemory = !!cached;
+  audio.src = cached || track.audio;
   if (startAt) audio.addEventListener("loadedmetadata", () => { audio.currentTime = startAt; }, {once: true});
   applyTempo(track);
   loadStart = performance.now(); awaitingFirstPlay = autoplay; stallStart = null;
@@ -297,6 +321,8 @@ async function loadSettings() {
   try { settings = await api("/api/settings"); } catch (e) { return; }
   $("match-tempo").checked = settings.match_tempo;
   $("target-bpm").value = settings.target_bpm ?? "";
+  $("match-tempo").disabled = $("target-bpm").disabled = !!settings.locked;   // held steady for the run
+  $("target-bpm").title = settings.locked ? "Locked for this run: change it in config.toml [tempo]" : "";
   $("target-bpm").placeholder = settings.effective_target_bpm ? settings.effective_target_bpm.toFixed(1) : "";
   if (onAir()) applyTempo(onAir());
 }
@@ -323,6 +349,7 @@ function applyTempo(track) {
   } else if (settings.match_tempo && !track.bpm) {
     note = "Original tempo: no BPM measured for this track";
   }
+  if (settings.locked) note = note ? `${note} · locked for this run` : "Tempo locked for this run";
   audio.preservesPitch = audio.mozPreservesPitch = audio.webkitPreservesPitch = true;
   audio.defaultPlaybackRate = rate;
   audio.playbackRate = rate;
@@ -428,9 +455,10 @@ async function rate(r) {
     current = {...current, artist: rev.artist, title: rev.title, art: rev.art};
     if (!PLAY_TO_END.has(r)) { loadNext(); return; }    // Off / Close skip at once
     showNames(current);
-    ratedCurrent = r;                         // 3–5 play to the end
+    ratedCurrent = r;                         // Add plays to the end
     renderRating();
     if (audio.ended) loadNext();
+    else prefetchUpcoming();                  // the rating may have changed what comes next
   } catch (e) { showError(`Couldn't save the rating: ${e.message}`); }
   poll();
 }
@@ -472,8 +500,13 @@ audio.addEventListener("timeupdate", () => {
 audio.addEventListener("play", () => setPlayIcon(true));
 audio.addEventListener("playing", () => {
   const now = performance.now();
-  if (awaitingFirstPlay) { report("playing", {latency_ms: Math.round(now - loadStart)}); awaitingFirstPlay = false; }
-  else if (stallStart !== null) { report("stall", {ms: Math.round(now - stallStart), at_s: Math.round(audio.currentTime)}); }
+  if (awaitingFirstPlay) {
+    report("playing", {latency_ms: Math.round(now - loadStart), preloaded: startedFromMemory});
+    awaitingFirstPlay = false;
+    prefetchUpcoming();                       // fetch the likely next track while this one plays
+  } else if (stallStart !== null && now - stallStart >= STALL_MS) {
+    report("stall", {ms: Math.round(now - stallStart), at_s: Math.round(audio.currentTime)});
+  }
   stallStart = null;
 });
 audio.addEventListener("waiting", () => { if (!awaitingFirstPlay && !seeking) stallStart = performance.now(); });

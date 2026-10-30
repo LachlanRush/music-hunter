@@ -270,12 +270,13 @@ def get_setting(conn: sqlite3.Connection, key: str, default=None):
     return json.loads(row[0]) if row else default
 
 
-def set_setting(conn: sqlite3.Connection, key: str, value) -> None:
+def set_setting(conn: sqlite3.Connection, key: str, value, log: bool = True) -> None:
     with conn:
         conn.execute("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))"
                      " ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
                      (key, json.dumps(value)))
-    log_event(conn, "setting_changed", key=key, value=value)
+    if log:
+        log_event(conn, "setting_changed", key=key, value=value)
 
 
 def store_embedding(conn: sqlite3.Connection, track_id: int, model: str, emb) -> None:

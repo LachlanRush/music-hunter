@@ -60,6 +60,8 @@ pool shares and scores.
 Nothing about scores, sources or controls is ever shown in the player; artist, title and artwork appear after rating.
 Tempo: set a target BPM (empty = median of seeds and liked tracks); "Match tempo" plays tracks within ±12% at that
 tempo with pitch kept. The target also steers ranking (`bpm_match`). `music-hunter analyse-bpm` fills in missing BPMs.
+Tempo is locked during a run (`[tempo]` in config.toml: target BPM, Match tempo); set `locked = false` to use the
+player's controls. While a track plays, the likely next track is fetched into memory so it starts at once.
 Back returns to the previous track: change its rating there (or rate it, if you skipped it); N returns
 to the current track where you left it.
 The most recent rating can be changed.

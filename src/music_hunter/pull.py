@@ -119,6 +119,7 @@ class Pull:
         self.by_video: dict[str, int] = {}
         self.by_isrc: dict[str, int] = {}
         self.lookups: dict[str, dict] = {}       # per seed: was it found on Deezer / TIDAL
+        self.artist_lists: dict[tuple, list] = {}  # Last.fm / Deezer lists, which depend only on the seed's artists
 
     @staticmethod
     def _candidate(r) -> Candidate:
@@ -159,8 +160,15 @@ class Pull:
             print(f"  {source:9s} {len(items):3d} {what} {seed.label}")
             return items
 
+        def by_artist(key: tuple, fetch):
+            """Seeds by the same artist get the same Last.fm / Deezer list: fetched once per pull."""
+            if key not in self.artist_lists:
+                self.artist_lists[key] = fetch()
+            return self.artist_lists[key]
+
         if self.lastfm:
-            yield "lastfm", attempt("lastfm", lambda: self.lastfm.similar_by_artist(seed.artist),
+            key = ("lastfm", names.fold(seed.artist))
+            yield "lastfm", attempt("lastfm", lambda: by_artist(key, lambda: self.lastfm.similar_by_artist(seed.artist)),
                                     "via similar artists of")
         if seed.video_id:
             yield "ytmusic", attempt("ytmusic", lambda: self.yt.radio(seed.video_id), "radio from")
@@ -176,7 +184,9 @@ class Pull:
             except Exception as e:
                 look["deezer"] = f"error: {str(e)[:120]}"
             if found:
-                yield "deezer", attempt("deezer", lambda: self.deezer.artist_radio(found), "from artist radio of")
+                key = ("deezer", tuple(sorted(a["id"] for a in found.get("contributors") or [found["artist"]])))
+                yield "deezer", attempt("deezer", lambda: by_artist(key, lambda: self.deezer.artist_radio(found)),
+                                        "from artist radio of")
             else:
                 print(f"  deezer      – {seed.label}: {look['deezer']}")
         if self.tidal:

@@ -191,6 +191,15 @@ port = 8765
 early_start_tracks = 20          # first pull: playback starts once this many tracks are analysed
 hide_names_until_rated = true    # artist and title stay hidden until the track is rated (from 2026-10-29)
 play_to_end = [3]                # ratings that keep playing to the end (Add); Off and Close skip at once
+preload_next = true              # v3: while a track plays, fetch the likely next track's audio into memory
+stall_log_ms = 250               # v3: only log playback stalls at least this long (v2 logged ~500 of 0–20 ms)
+
+[tempo]
+# SPEC.md §16.4 — held steady during an evaluation run: a changing target changes what "top-scored" means.
+# With locked = true the player shows these and can't change them; edit them here between runs.
+locked = true
+target_bpm = 0.0                 # 0 = no target set: bpm_match uses the median BPM of seeds and liked tracks
+match_tempo = false              # play tracks time-stretched to the target (pitch kept), within [bpm] max_stretch
 
 [versions]
 # Bracket or " - " suffix labels that mark a length/edit version of the SAME song.

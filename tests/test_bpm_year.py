@@ -5,6 +5,7 @@ import pytest
 
 from music_hunter import db
 from music_hunter.bpm import estimate, fold
+from music_hunter.config import CONFIG
 from music_hunter.scoring import closeness, score_pool, target_bpm, target_year
 
 
@@ -48,7 +49,8 @@ def test_closeness_and_unknowns():
     assert closeness([120, None], None, 4).tolist() == [0.0, 0.0]          # no target → no effect
 
 
-def test_bpm_and_year_components(conn):
+def test_bpm_and_year_components(conn, monkeypatch):
+    monkeypatch.setitem(CONFIG["tempo"], "locked", False)        # the player's own target (unlocked mode)
     c = conn
     pool = c.execute("SELECT id FROM tracks WHERE origin = 'pool' ORDER BY id").fetchall()
     with c:
@@ -84,6 +86,7 @@ def test_settings_api(conn, monkeypatch):
     from music_hunter import web
 
     monkeypatch.setattr(web.worker, "start_if_needed", lambda: None)
+    monkeypatch.setitem(CONFIG["tempo"], "locked", False)
     with TestClient(web.app) as client:
         s = client.post("/api/settings", json={"target_bpm": 126, "match_tempo": True}).json()
         assert s["effective_target_bpm"] == 126 and s["match_tempo"] and s["target_source"] == "set"
@@ -98,3 +101,22 @@ def test_settings_api(conn, monkeypatch):
     with db.connect() as c2:
         row = c2.execute("SELECT played_bpm, playback_rate, target_bpm FROM plays WHERE id = ?", (t["play_id"],)).fetchone()
         assert tuple(row)[:2] == (126.0, 1.05)
+
+
+def test_tempo_locked_for_the_run(conn, monkeypatch):
+    """SPEC.md §16.4: during a run the tempo settings come from config and the player can't change them."""
+    from fastapi.testclient import TestClient
+    from music_hunter import web
+
+    monkeypatch.setattr(web.worker, "start_if_needed", lambda: None)
+    monkeypatch.setitem(CONFIG["tempo"], "locked", True)
+    monkeypatch.setitem(CONFIG["tempo"], "target_bpm", 138.0)
+    monkeypatch.setitem(CONFIG["tempo"], "match_tempo", True)
+    db.set_setting(conn, "target_bpm", 160.0)                    # a value left over from unlocked use is ignored
+    with TestClient(web.app) as client:
+        s = client.get("/api/settings").json()
+        assert s["locked"] and s["effective_target_bpm"] == 138.0 and s["match_tempo"] and s["target_source"] == "set"
+        assert client.post("/api/settings", json={"target_bpm": 126, "match_tempo": False}).status_code == 409
+    assert target_bpm(conn) == (138.0, "set")
+    monkeypatch.setitem(CONFIG["tempo"], "target_bpm", 0.0)      # 0 = no target: median of seeds and liked tracks
+    assert target_bpm(conn)[1] == "from liked tracks"

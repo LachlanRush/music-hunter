@@ -193,3 +193,21 @@ def test_controls_are_random(conn):
     ranks = {c_rank for c_rank in (conn.execute("SELECT rank FROM plays WHERE id = ?",
              (show(conn, control=True, rng=rng),)).fetchone()[0] for _ in range(6))}
     assert len(ranks) > 1                              # not always the same (e.g. median) position
+
+
+def test_upcoming_matches_next_play(conn):
+    """The preloaded track is the one that plays next when nothing changes in between, controls included;
+    the control decision is drawn once, ahead, at the configured rate."""
+    from music_hunter.ratings import show_next, upcoming
+
+    rng = random.Random(5)
+    controls = 0
+    for _ in range(40):
+        predicted = upcoming(conn, rng)
+        assert upcoming(conn, rng) == predicted            # asking again doesn't redraw
+        play = show_next(conn, rng)
+        row = conn.execute("SELECT track_id, is_control FROM plays WHERE id = ?", (play,)).fetchone()
+        assert row["track_id"] == predicted
+        controls += row["is_control"]
+        skip(conn, play)
+    assert 0 < controls < 40

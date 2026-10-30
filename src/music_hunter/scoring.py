@@ -96,9 +96,20 @@ def _liked(conn: sqlite3.Connection, column: str) -> list:
     return [r[0] for r in conn.execute(f"SELECT {column} FROM tracks WHERE id IN ({marks})", ids) if r[0]]
 
 
+def tempo_settings(conn: sqlite3.Connection) -> dict:
+    """{target_bpm (set, or None), match_tempo, locked}. Locked (SPEC.md §16.4): from config [tempo], fixed for
+    the run; otherwise as set in the player."""
+    cfg = CONFIG["tempo"]
+    if cfg["locked"]:
+        return {"target_bpm": cfg["target_bpm"] or None, "match_tempo": bool(cfg["match_tempo"]), "locked": True}
+    return {"target_bpm": db.get_setting(conn, "target_bpm"), "match_tempo": db.get_setting(conn, "match_tempo", False),
+            "locked": False}
+
+
 def target_bpm(conn: sqlite3.Connection) -> tuple[float | None, str]:
-    """The BPM to aim for: the one I set in the player, else the median of seeds and liked tracks."""
-    chosen = db.get_setting(conn, "target_bpm")
+    """The BPM to aim for: the one set (in config when locked, else in the player), else the median of seeds
+    and liked tracks."""
+    chosen = tempo_settings(conn)["target_bpm"]
     if chosen:
         return float(chosen), "set"
     bpms = _liked(conn, "bpm")
@@ -203,11 +214,17 @@ def score_pool(conn: sqlite3.Connection) -> list[dict]:
         k = min(CFG["dislike_top_k"], len(N))
         raw["dislike_match"] = np.sort(P @ N.T, axis=1)[:, -k:].mean(1)
 
+    # Seeds by the same artist count once per source (SPEC.md §16.4): Last.fm and Deezer suggest by artist, so
+    # their lists for two seeds by one artist are the same list, not agreement.
+    seed_ids = {s for p in prov.values() for s, _ in p}
+    artist_of = {r[0]: frozenset(split_artists(r[1])) for r in conn.execute(
+        f"SELECT id, artist FROM tracks WHERE id IN ({','.join('?' * len(seed_ids))})", sorted(seed_ids))}
     for i, r in enumerate(rows):
         pairs = prov.get(r["candidate_id"], [])
+        distinct = {(artist_of.get(s, s), src) for s, src in pairs}
         own = {src for _, src in pairs}
         via_artist = set().union(*(artist_sources.get(a, set()) for a in json.loads(r["song_artists"] or "[]")))
-        raw["agreement"][i] = math.log(1 + len(pairs) + CFG["artist_agreement_credit"] * len(via_artist - own))
+        raw["agreement"][i] = math.log(1 + len(distinct) + CFG["artist_agreement_credit"] * len(via_artist - own))
 
     # Per-seed pools: each (track, seed that suggested it) pair, with that seed's view of the track.
     seed_vecs = {sid: v for sid, v in zip(*seed_embeddings(conn, {s for p in prov.values() for s, _ in p}))}

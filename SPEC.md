@@ -477,6 +477,13 @@ Goal: more multi-source agreement, the strongest signal in both runs.
 - **Results: ratings by number of sources** (1, 2, 3+; all / ranked / control), to check after the run whether tracks only one source knew were treated fairly.
 - **Initial weights**: audio match 0.30, agreement 0.30, personal model 0.25 (from 20 learning ratings), seed average 0.15, seed match 0.15, year 0.15, source average 0.10, BPM 0.10, dislike −0.20, diversity −0.10.
 
+**As built — milestone 4 (2026-10-30)**
+- **Preloading** (`[ui] preload_next`): v2's slow starts (up to 3.7 s) came after the track was chosen (choosing took ~4 ms) — fetching and buffering the file. While a track plays, the player asks for the track most likely to play next and fetches its audio into memory; if that's the one chosen, it starts from memory. The control decision for the next play (and a control's random track) is drawn ahead and kept until that play starts — it never depends on ratings, so this changes nothing about controls; a learning pick can still change with the rating in between (then the normal load is used). Each start logs whether it came from memory.
+- **Tempo locked for the run** (`[tempo]`: locked, target_bpm, match_tempo): the player shows the settings but can't change them (the server refuses, 409); change them in config between runs. With locked = false, the v2 player controls work as before.
+- **Stalls** logged only from 250 ms (`[ui] stall_log_ms`; v2: 3 of 519 logged stalls were longer).
+- **Same-artist seeds count once per source** for agreement (agreed 2026-10-30): Last.fm and Deezer suggest by artist, so seeds by one artist get identical lists — three X CLUB. seeds would otherwise make one Last.fm + one Deezer suggestion look like six. Agreement between seeds by different artists still counts. Each artist's Last.fm and Deezer lists are fetched once per pull. Pool shares stay per seed (X CLUB. and 6 SENSE get three shares each) — to be judged from the run.
+- **Seeds chosen** (2026-10-30, not added yet): Spotify playlist `7pc3JHwWspD5BnZMRoX4PG`, 12 tracks, all readable — WOLTERS, X CLUB. ×3, Jas Van Houten, Basement Jaxx & Gorgon City, 6 SENSE ×3, TWOFACED ×2, Clouds.
+
 ### 16.5 Milestones (build in order, stop after each for my check)
 1. **Taste-model test** (16.1) — offline comparison of audio models and analyses on my ~190 ratings. Check: results table and a recommendation on CLAP. **Done 2026-10-30: MuQ-MuLan replaces CLAP** (MAEST check pending).
 2. **Sources and pool** — TIDAL (ISRC lookup, similar tracks), YouTube Music related, deeper lists (~100 per source per seed), multi-source-first filling, refill when multi-source tracks run out, pool 250, artist-level credit off. Check: candidate list with four-plus sources and overlap counts.

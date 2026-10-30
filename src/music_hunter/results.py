@@ -10,7 +10,7 @@ from .config import CONFIG
 from .pull import seeds
 from .ratings import ADD, LABELS, SOURCES, _averages
 from . import db
-from .scoring import CFG as SCORING, COMPONENTS, current_weights, personal_model_active
+from .scoring import CFG as SCORING, COMPONENTS, current_weights, personal_model_active, tempo_settings
 
 CFG = CONFIG["results"]
 Z = 1.96  # 95% intervals
@@ -160,7 +160,7 @@ def results(conn: sqlite3.Connection) -> dict:
         "controls_by_rank": controls_by_rank(controls),
         "by_sources": by_sources(rated),
         "weight_history": weight_history,
-        "tempo": {"target_bpm": db.get_setting(conn, "target_bpm"), "match_tempo": db.get_setting(conn, "match_tempo", False),
+        "tempo": {**tempo_settings(conn),
                   "stretched_plays": len(stretched),
                   "setting_changes": conn.execute("SELECT count(*) FROM events WHERE kind = 'setting_changed'").fetchone()[0]},
         "usual_keep_rate": CFG["usual_keep_rate"], "target_plays": 100,
