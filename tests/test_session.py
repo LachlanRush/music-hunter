@@ -111,11 +111,21 @@ def test_session(conn, monkeypatch):
         " WHERE t.origin = 'original_reference'")])
     rng = np.random.default_rng(7)
 
+    def closeness(e):
+        return np.sort(refs @ e)[-3:].mean()
+
+    # Ratings follow closeness to the seeds relative to the pool (any audio model's similarity scale): roughly the
+    # closest fifth Add, the next two fifths Close, the rest Off, with noise.
+    pool_sims = [closeness(db.from_blob(r[0])) for r in c.execute(
+        "SELECT e.embedding FROM track_embeddings e JOIN tracks t ON t.id = e.track_id WHERE t.origin = 'pool'")]
+    cut_close, cut_add = np.percentile(pool_sims, [40, 80])
+    spread = np.std(pool_sims) or 1.0
+
     def listener(track_id):
         e = db.from_blob(c.execute("SELECT embedding FROM track_embeddings WHERE track_id = ?",
                                    (track_id,)).fetchone()[0])
-        sim = np.sort(refs @ e)[-3:].mean()
-        return int(np.clip(round(2.0 + (sim - 0.975) * 45 + rng.normal(0, 0.5)), 1, 3))   # Off … Add
+        sim = closeness(e) + rng.normal(0, 0.5 * spread)
+        return 3 if sim >= cut_add else 2 if sim >= cut_close else 1           # Off … Add
 
     with TestClient(web.app) as client:
         settings = client.post("/api/settings", json={"target_bpm": 128.0, "match_tempo": True}).json()
