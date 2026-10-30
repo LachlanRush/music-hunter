@@ -122,6 +122,12 @@ td.name { white-space: normal; min-width: 180px; font-family: var(--body); }
     <div class="table-wrap" id="nsrc"></div>
   </section>
 
+  <section aria-labelledby="h-byseed">
+    <h2 id="h-byseed">Ratings by seed pool</h2>
+    <p class="sub">Each track is scored within the pool of a seed that suggested it (its best one). Which seeds' pools produced your favourites.</p>
+    <div class="table-wrap" id="byseed"></div>
+  </section>
+
   <section aria-labelledby="h-sources">
     <h2 id="h-sources">Source averages</h2>
     <p class="sub">Decayed average rating of the tracks each source suggested (controls included), after each rating.</p>
@@ -315,6 +321,10 @@ function render(d) {
     d.by_sources.map((g) => `<tr><td class="name">${g.name}</td><td class="num">${cell(g.all)}</td><td class="num">${cell(g.ranked)}</td><td class="num">${cell(g.control)}</td></tr>`).join("")
   }</tbody></table>`;
 
+  $("byseed").innerHTML = `<table><thead><tr><th>Seed pool</th><th class="num">All</th><th class="num">Ranked</th><th class="num">Control</th></tr></thead><tbody>${
+    d.by_seed.map((g) => `<tr><td class="name">${esc(g.seed)}</td><td class="num">${cell(g.all)}</td><td class="num">${cell(g.ranked)}</td><td class="num">${cell(g.control)}</td></tr>`).join("")
+  }</tbody></table>`;
+
   const cr = d.controls_by_rank;
   $("rank-bars").innerHTML = cr.n ? `<div class="bars">${cr.bins.map((b) => {
       const w = b.mean == null ? 0 : 100 * (b.mean - 1) / (SCALE - 1);
@@ -349,13 +359,15 @@ function render(d) {
         <td class="num">${r.eval_n ? pct(r.eval_old_concordance) : "pending"}</td>
         <td class="num ${better}">${r.eval_n ? pct(r.eval_new_concordance) : "pending"}</td>
         <td class="name">${esc(changes)}</td></tr>`;
-    }).join("")}</tbody></table>` : `<div class="empty">The first update runs at 20 ranked ratings (${t.learning} so far).</div>`;
+    }).join("")}</tbody></table>` : `<div class="empty">The first update runs at 20 ratings (${t.rated} so far).</div>`;
 
   $("totals").innerHTML = [
     ["Plays", t.plays], ["Rated", t.rated], ["Ranked", t.learning], ["Control", t.control], ["Skipped", t.skipped],
+    ["Secret control rate", d.control_rate == null ? "–" : `1 in ${(1 / d.control_rate).toFixed(1)}`],
     ["Generations", t.generations],
-    ["Personal model", t.personal_model_active ? "active" : `from ${t.personal_model_at} ranked ratings`],
+    ["Personal model", t.personal_model_active ? "active" : `from ${t.personal_model_at} ratings`],
     ["Target BPM", d.tempo.target_bpm ?? "from seeds"], ["Match tempo", d.tempo.match_tempo ? "on" : "off"],
+    ["Tempo", d.tempo.locked ? "locked for the run" : "adjustable"],
     ["Plays stretched", d.tempo.stretched_plays],
   ].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
   $("weights").innerHTML = `<table><thead><tr><th>Current weights</th>${Object.keys(d.weights).map((c) => `<th class="num">${NAMES[c]}</th>`).join("")}</tr></thead>

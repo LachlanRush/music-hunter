@@ -202,7 +202,7 @@ def test_session(conn, monkeypatch):
         assert {"seed_averages", "source_averages", "quotas", "weights", "pool_size"} <= set(stats), \
             (g["id"], sorted(stats), [__import__("json").loads(r[0])["error"] for r in c.execute("SELECT data FROM events WHERE kind = 'job_error' LIMIT 1")])
     assert {"raw_suggestions", "filter_reasons"} <= set(json.loads(gens[0]["stats"]))
-    assert any(p["generation"] == gens[-1]["id"] for p in plays)
+    assert len({p["generation"] for p in plays}) >= 2              # listening carried on into a refilled generation
 
     # Operational log.
     kinds = {r[0]: r[1] for r in c.execute("SELECT kind, count(*) FROM events GROUP BY kind")}
@@ -236,6 +236,9 @@ def test_session(conn, monkeypatch):
     assert [g["name"] for g in groups] == ["1 source", "2 sources", "3+ sources"]
     assert sum(g["all"]["n"] for g in groups) == results["totals"]["rated"]
     assert all(g["all"]["n"] == g["ranked"]["n"] + g["control"]["n"] for g in groups)
+    by_seed = results["by_seed"]                          # ratings by the seed pool each track was scored in
+    assert by_seed and sum(g["all"]["n"] for g in by_seed) == results["totals"]["rated"]
+    assert 0.10 <= results["control_rate"] <= 0.25
     assert results["rolling"]["ranked"] and results["rolling"]["control"]
     assert all(s["points"] for s in results["source_averages"])
     assert len(results["reweightings"]) == len(rws)

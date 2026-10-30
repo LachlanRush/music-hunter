@@ -68,7 +68,7 @@ class Worker:
         A refill needs at least one play since the latest pull started, so a pull that
         finds little new can't trigger another straight away.
         """
-        from .pool import multi_source_unplayed, unrated_pool_size
+        from .pool import multi_source_unplayed, unpulled_seeds, unrated_pool_size
         from .scoring import score_pool
 
         pool_cfg = CONFIG["pool"]
@@ -88,8 +88,8 @@ class Worker:
         if unplayed < pool_cfg["refill_below"]:
             return "pull"
         if played_since >= pool_cfg["refill_min_plays"] and \
-                multi_source_unplayed(conn) < pool_cfg["refill_multi_source_below"]:
-            return "pull"                     # v3: agreement has run out (SPEC.md §16.4)
+                multi_source_unplayed(conn) < pool_cfg["refill_multi_source_below"] and unpulled_seeds(conn):
+            return "pull"                     # v3: agreement has run out, and a new seed can bring more
         if pool_cfg["refill_min_best_score"] > 0:
             scored = score_pool(conn)
             if scored and scored[0]["score"] < pool_cfg["refill_min_best_score"]:

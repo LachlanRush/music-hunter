@@ -46,17 +46,24 @@ def _averages(conn: sqlite3.Connection, column: str, upto_play: int | None = Non
               generation: int | None = None) -> dict:
     """Decayed average with prior, per seed or per source, over every rating (controls included, v3).
 
+    Recency: a rating [averages] decay_half_life_ratings back counts half (v3); with 0, × decay per generation.
+
     Each seed (or source) that suggested a track gets full credit for its rating, once.
     upto_play / generation replay the averages as they were at an earlier play (results view).
     """
     gen = current_generation(conn) if generation is None else generation
+    upto = upto_play or 1 << 62
+    half_life = AVG["decay_half_life_ratings"]
+    order = [r[0] for r in conn.execute("SELECT id FROM plays WHERE rating IS NOT NULL AND id <= ?"
+                                        " ORDER BY rated_at, id", (upto,))]
+    age = {pid: len(order) - 1 - i for i, pid in enumerate(order)}      # 0 = the most recent rating
     total, weight = {}, {}
     for r in conn.execute(
             f"SELECT DISTINCT p.id, s.{column} AS key, p.rating, p.generation FROM plays p"
             " JOIN tracks t ON t.id = p.track_id"
             " JOIN suggestions s ON s.candidate_id = t.candidate_id"
-            " WHERE p.rating IS NOT NULL AND p.id <= ?", (upto_play or 1 << 62,)):
-        w = AVG["decay"] ** (gen - r["generation"])
+            " WHERE p.rating IS NOT NULL AND p.id <= ?", (upto,)):
+        w = 0.5 ** (age[r["id"]] / half_life) if half_life else AVG["decay"] ** (gen - r["generation"])
         total[r["key"]] = total.get(r["key"], 0.0) + w * r["rating"]
         weight[r["key"]] = weight.get(r["key"], 0.0) + w
     k, prior = AVG["prior_strength"], AVG["prior"]

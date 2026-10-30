@@ -265,6 +265,14 @@ def seed_pool_counts(conn: sqlite3.Connection) -> dict[int, int]:
     return out
 
 
+def unpulled_seeds(conn: sqlite3.Connection) -> list[int]:
+    """Seeds no pull has queried yet (new Adds): the only way a refill can find new multi-source tracks."""
+    from .pull import seeds
+
+    queried = {r[0] for r in conn.execute("SELECT DISTINCT seed_track_id FROM suggestions")}
+    return [s.track_id for s in seeds(conn) if s.track_id not in queried]
+
+
 def fill(conn: sqlite3.Connection, generation: int) -> dict:
     """Fill every seed's share of the pool from this generation's candidates. Safe to re-run (resumes)."""
     from .pull import seeds

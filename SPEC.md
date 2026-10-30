@@ -490,13 +490,19 @@ Goal: more multi-source agreement, the strongest signal in both runs.
 - **Sealed results**: until then the results page and `report` show only the number of ratings. The "shown" event no longer records control status or rank (it's in the plays table), so the text log can't reveal controls either.
 - **Control ratings count for learning**: likes and dislikes, seed and source credit, the personal model, re-weighting's schedule and history; a control Added still never becomes a seed.
 
+**As built — milestone 6 (2026-10-30)**
+- **Results page** (after the run): ranked vs control, Add rate, controls by rank, ratings by number of sources, **ratings by seed pool** (which seeds' pools produced the favourites), the secret control rate revealed, tempo lock, weight history. `report`: per pull, multi-source counts, seed shares (target/unplayed), seeds not covered by a source, tracks unusable at selection.
+- **Simulated session** (pytest, ~110 plays through the web API): blind throughout, results sealed until the run ends, then unsealed; re-weighting on schedule within the guardrails.
+- **Fixed from the simulation**: (1) the multi-source refill now needs a seed no pull has queried yet (a new Add) — all multi-source tracks already go in first, so pulling again with the same seeds found nothing and repeated every ~10 plays; (2) seed and source averages now fade by rating count (a rating 30 ratings back counts half, `decay_half_life_ratings`) instead of by generation, since refills can come every few dozen plays.
+- **Fresh run started**: v2 archived to `runs/v2/` (moved, not deleted). Seeds added from the playlist: 10 of 12 — Jump N' Shout (Gorgon City Extended Mix, 5:39) isn't on YouTube Music in that version (only the 3:58 Gorgon City Remix edit); 6 SENSE – No Joke ! isn't there under 6 SENSE. Seed BPMs 139–147 (TWOFACED – Love Again read 93.6, corrected to 140.5 by the 3:2 tie-break).
+
 ### 16.5 Milestones (build in order, stop after each for my check)
 1. **Taste-model test** (16.1) — offline comparison of audio models and analyses on my ~190 ratings. Check: results table and a recommendation on CLAP. **Done 2026-10-30: MuQ-MuLan replaces CLAP** (MAEST check pending).
 2. **Sources and pool** — TIDAL (ISRC lookup, similar tracks), YouTube Music related, deeper lists (~100 per source per seed), multi-source-first filling, refill when multi-source tracks run out, pool 250, artist-level credit off. Check: candidate list with four-plus sources and overlap counts.
 3. **Ratings and scoring** — three buttons; weight cap (≤ 0.35) and higher agreement floor; **MuQ-MuLan replaces CLAP** (audio match, text-description scores, section consistency; personal model retrained on MuQ-MuLan features or dropped); release year and BPM kept.
 4. **Player and monitoring** — preload the next track, tempo settings locked during a run, stall logging threshold.
 5. **Controls and sealed results** (16.6) — secret per-run control rate, run ends at 25 rated controls, results sealed until then, control ratings count for learning.
-6. **Results, report, simulated session** — then a fresh run with 8–10 new seeds.
+6. **Results, report, simulated session** — then a fresh run with 8–10 new seeds. **Done 2026-10-30; fresh run set up with 10 seeds.**
 
 Decided 2026-10-29: no artist-preference factor (evidence weak: v1 +0.14, v2 −0.04). Controls: see 16.6.
 

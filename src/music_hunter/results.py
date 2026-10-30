@@ -93,6 +93,19 @@ def by_sources(rated: list) -> list[dict]:
     return out
 
 
+def by_seed(conn: sqlite3.Connection, rated: list) -> list[dict]:
+    """Ratings by the seed pool each track was scored in (v3: which seeds produce your favourites)."""
+    label = {r[0]: f"{r[1]} – {r[2]}" for r in conn.execute("SELECT id, artist, title FROM tracks")}
+    groups: dict[int | None, list] = {}
+    for p in rated:
+        groups.setdefault(p["scored_for_seed"], []).append(p)
+    out = [{"seed": label.get(sid, "no seed pool") if sid else "no seed pool",
+            "all": summary([p["rating"] for p in ps]),
+            "ranked": summary([p["rating"] for p in ps if not p["is_control"]]),
+            "control": summary([p["rating"] for p in ps if p["is_control"]])} for sid, ps in groups.items()]
+    return sorted(out, key=lambda g: (-(g["all"]["mean"] or 0), g["seed"]))
+
+
 def reading(diff: dict) -> str:
     """Plain reading of the ranked − control gap from its 95% range (not a pass/fail criterion)."""
     if diff["diff"] is None:
@@ -165,6 +178,7 @@ def results(conn: sqlite3.Connection) -> dict:
         "difference": diff, "reading": reading(diff), "add_difference": difference(add_ranked, add_control),
         "controls_by_rank": controls_by_rank(controls),
         "by_sources": by_sources(rated),
+        "by_seed": by_seed(conn, rated),
         "weight_history": weight_history,
         "tempo": {**tempo_settings(conn),
                   "stretched_plays": len(stretched),

@@ -13,16 +13,16 @@ import music_hunter.config as config
 from music_hunter import db
 
 REAL_DB = config.path("db")
-ARCHIVE_DB = config.ROOT / "runs" / "v1" / "data" / "music_hunter.db"
+ARCHIVES = [config.ROOT / "runs" / v / "data" / "music_hunter.db" for v in ("v2", "v1")]
 
 
 def source_db():
-    """The live database if it has a finished pool, else the archived v1 run's (its pool is all that's used).
+    """The live database if it has a finished pool, else the latest archived run's (its pool is all that's used).
 
     A pool still downloading (a generation without a recorded pool size) isn't used: its tracks
     would be dropped as unfinished, leaving nothing to test against.
     """
-    for candidate in (REAL_DB, ARCHIVE_DB):
+    for candidate in (REAL_DB, *ARCHIVES):
         if not candidate.exists():
             continue
         with sqlite3.connect(candidate) as c:

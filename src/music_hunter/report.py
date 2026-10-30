@@ -96,7 +96,7 @@ def report(conn: sqlite3.Connection) -> None:
             print(f"    {n:3d}× {msg}")
     print("  scoring the pool (per track shown): " + spread([d["score_ms"] for _, d in events(conn, "shown")], " ms"))
 
-    print("\nRE-WEIGHTING (every update; v2: steps ≤ 0.05 towards the best fit to the whole history)")
+    print("\nRE-WEIGHTING (every update: steps ≤ 0.05 towards the best fit to the whole history; no weight above 0.35)")
     rw = events(conn, "reweighted")
     for _, d in rw:
         towards = d.get("moved_towards", "–")
@@ -128,6 +128,20 @@ def report(conn: sqlite3.Connection) -> None:
         print(f"    candidates: {st.get('candidates', '?')} in {st.get('candidate_phase_seconds', '?')} s"
               + (f" · {api_txt}" if api_txt else ""))
         print(f"    fill: {len(r)} ready, {len(f)} failed in {st.get('fill_seconds', '?')} s · pool {st.get('pool_size', '?')}")
+        if st.get("multi_source_candidates") is not None:
+            fam = st.get("candidates_by_family_count", {})
+            print(f"    multi-source: {st['multi_source_candidates']} candidates (2 sources {fam.get('2', 0)}, 3+"
+                  f" {sum(v for k, v in fam.items() if int(k) >= 3)}), {st.get('multi_source_added', 0)} added first")
+        if st.get("unusable_at_selection"):
+            print("    not usable when selected: " + ", ".join(f"{n} {k}" for k, n in st["unusable_at_selection"].items()))
+        if st.get("seed_pools"):
+            print("    seed shares (target/unplayed): " + " · ".join(
+                f"{seed.split(' – ')[-1]} {p['target']}/{p['unplayed']}" for seed, p in st["seed_pools"].items()))
+        lookups = st.get("seed_lookups") or {}
+        missing = [f"{seed.split(' – ')[-1]}: {src} {why}" for seed, look in lookups.items() for src, why in look.items()
+                   if why != "found"]
+        if missing:
+            print("    seeds not covered: " + "; ".join(missing))
         cov = conn.execute("SELECT count(*), count(bpm), count(art_path), count(release_date) FROM tracks"
                            " WHERE origin = 'pool' AND generation = ?", (g["id"],)).fetchone()
         if cov[0]:

@@ -30,11 +30,15 @@ def provenance(c, track_id):
 
 
 def expected_averages(c, history):
-    """§5 formula from the test's own record of learning ratings: [(track_id, rating, generation)]."""
+    """§5 formula from the test's own record of ratings, in rating order: [(track_id, rating, generation)].
+
+    v3: a rating decay_half_life_ratings back counts half (or × decay per generation when that is 0)."""
     gen_now = c.execute("SELECT max(id) FROM generations").fetchone()[0]
+    half_life = config.CONFIG["averages"]["decay_half_life_ratings"]
     sums = {}
-    for track_id, rating, gen in history:
-        w = config.CONFIG["averages"]["decay"] ** (gen_now - gen)
+    for i, (track_id, rating, gen) in enumerate(history):
+        w = (0.5 ** ((len(history) - 1 - i) / half_life) if half_life
+             else config.CONFIG["averages"]["decay"] ** (gen_now - gen))
         seeds_, sources_ = provenance(c, track_id)
         for key in seeds_ | sources_:
             t, n = sums.get(key, (0.0, 0.0))
@@ -170,7 +174,7 @@ def test_scripted_ratings(conn):
     if avgs[best] > avgs[worst]:
         assert sum(n for (s, _), n in q.items() if s == best) > sum(n for (s, _), n in q.items() if s == worst)
 
-    # 8. Next generation: earlier ratings decay.
+    # 8. Next generation: averages follow the decay rule (v3: by rating count, so a refill doesn't age ratings).
     with c:
         c.execute("INSERT INTO generations DEFAULT VALUES")
     check_averages(c, history)
@@ -244,3 +248,27 @@ def test_run_ends_and_results_unseal(conn, monkeypatch):
         assert client.post("/api/next").status_code == 409
         res = client.get("/api/results").json()
         assert not res["sealed"] and res["control"]["n"] == 2 and 0.10 <= res["control_rate"] <= 0.25
+
+
+def test_multi_source_refill_needs_a_new_seed(conn, monkeypatch):
+    """Multi-source tracks all go in first, so a refill for agreement only helps when a seed hasn't been pulled for."""
+    from music_hunter import web
+    from music_hunter.config import CONFIG
+    from music_hunter.pool import unpulled_seeds
+
+    monkeypatch.setitem(CONFIG["pool"], "refill_below", 0)                 # isolate the multi-source trigger
+    monkeypatch.setitem(CONFIG["pool"], "refill_multi_source_below", 10**6)
+    monkeypatch.setitem(CONFIG["pool"], "refill_min_plays", 1)
+    with conn:
+        conn.execute("UPDATE candidates SET status = 'not_selected' WHERE status = 'candidate'")
+    gen = conn.execute("SELECT max(id) FROM generations").fetchone()[0]
+    p = show(conn)
+    with conn:
+        conn.execute("UPDATE plays SET generation = ? WHERE id = ?", (gen, p))
+    rate(conn, p, OFF)
+    assert not unpulled_seeds(conn) and web.Worker.job_needed(conn) is None   # same seeds: nothing new to find
+    p = show(conn)
+    with conn:
+        conn.execute("UPDATE plays SET generation = ? WHERE id = ?", (gen, p))
+    rate(conn, p, ADD)                                                       # a new seed, never pulled for
+    assert unpulled_seeds(conn) and web.Worker.job_needed(conn) == "pull"
