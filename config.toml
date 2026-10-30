@@ -99,7 +99,8 @@ unrated_counts_as = 2                         # Close
 # system draws for itself at the start of the run (uniform between these), stores and never shows.
 rate_min = 0.10                  # 1 in 10
 rate_max = 0.25                  # 1 in 4
-target = 25                      # the run ends when this many controls have been rated; results sealed until then
+target = 9                       # the run ends when this many controls have been rated; results sealed until then
+                                 # (25 by design; the first v3 run was ended early at 74 plays / 9 controls, 2026-10-30)
 
 [reweighting]
 # SPEC.md §15.8 — small steps, guardrails, continuous re-evaluation against the whole history
