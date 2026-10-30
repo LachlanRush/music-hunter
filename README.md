@@ -52,7 +52,7 @@ uv run music-hunter serve           # then open http://127.0.0.1:8765
 ```
 
 Buttons (v3): Off · Close · Add (labels in `[ratings]`) · keys: space play/pause · N skip · B back.
-Add plays to the end; Off and Close skip straight away. Only Add saves the track (to `collection/`) and makes it a seed.
+Close and Add play to the end; Off skips straight away. Only Add saves the track (to `collection/`) and makes it a seed.
 
 Audio analysis (v3): MAEST (`[embedding]`), on the GPU. Scoring works within each seed's pool: agreement, source
 average and similarity to the seed are compared among the tracks that seed suggested, and seed averages steer both

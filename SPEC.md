@@ -502,7 +502,7 @@ Goal: more multi-source agreement, the strongest signal in both runs.
 
 **Phone access over Tailscale (2026-10-30, at my request; was out of scope in §1):** the server also listens on the PC's Tailscale address (`[ui] extra_hosts`), so my phone's browser can open http://100.68.159.86:8765 over Tailscale. Only my tailnet devices can reach it; nothing opens on the home network. (`tailscale serve` would also work but needs Serve enabled on the tailnet and root.) A phone app / home-screen install with lock-screen controls and screen-off playback is a possible later step.
 
-**Unrated counts as Close (2026-10-30, at my request):** a track skipped (N) or played to the end without a rating is recorded as Close (`[ratings] unrated_counts_as`), marked `auto_rated` so it can be separated in the analysis; it can still be changed like any most-recent rating. An unrated track that ends now moves on to the next one. (Replaces §3's "skipping without rating has no learning effect".)
+**Unrated counts as Close (2026-10-30, at my request):** a track skipped (N) or played to the end without a rating is recorded as Close (`[ratings] unrated_counts_as`), marked `auto_rated` so it can be separated in the analysis; it can still be changed like any most-recent rating. An unrated track that ends now moves on to the next one. (Replaces §3's "skipping without rating has no learning effect".) Close now plays to the end like Add (`play_to_end = [2, 3]`); only Off skips straight away.
 
 ### 16.5 Milestones (build in order, stop after each for my check)
 1. **Taste-model test** (16.1) — offline comparison of audio models and analyses on my ~190 ratings. Check: results table and a recommendation on CLAP. **Done 2026-10-30: MuQ-MuLan replaces CLAP** (MAEST check pending).

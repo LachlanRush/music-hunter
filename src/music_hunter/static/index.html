@@ -442,7 +442,7 @@ async function ratePrevious(r) {
       : await api("/api/change", {rating: r});
     renderReveal(rev);
     prev = {...prev, ...rev, can_change: true};
-    if (!PLAY_TO_END.has(r)) { goForward(); return; }   // Off / Close skip at once
+    if (!PLAY_TO_END.has(r)) { goForward(); return; }   // Off skips at once (config play_to_end)
     showNames(prev);
     renderRating();
     if (audio.ended) goForward();
@@ -458,9 +458,9 @@ async function rate(r) {
                                         ...tempoReport()});
     renderReveal(rev);
     current = {...current, artist: rev.artist, title: rev.title, art: rev.art};
-    if (!PLAY_TO_END.has(r)) { loadNext(); return; }    // Off / Close skip at once
+    if (!PLAY_TO_END.has(r)) { loadNext(); return; }    // Off skips at once (config play_to_end)
     showNames(current);
-    ratedCurrent = r;                         // Add plays to the end
+    ratedCurrent = r;                         // Close and Add play to the end
     renderRating();
     if (audio.ended) loadNext();
     else prefetchUpcoming();                  // the rating may have changed what comes next

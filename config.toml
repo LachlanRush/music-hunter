@@ -205,7 +205,7 @@ port = 8765
 extra_hosts = ["100.68.159.86"]
 early_start_tracks = 20          # first pull: playback starts once this many tracks are analysed
 hide_names_until_rated = true    # artist and title stay hidden until the track is rated (from 2026-10-29)
-play_to_end = [3]                # ratings that keep playing to the end (Add); Off and Close skip at once
+play_to_end = [2, 3]             # ratings that keep playing to the end (Close, Add; Close added 2026-10-30); Off skips
 preload_next = true              # v3: while a track plays, fetch the likely next track's audio into memory
 stall_log_ms = 250               # v3: only log playback stalls at least this long (v2 logged ~500 of 0–20 ms)
 
