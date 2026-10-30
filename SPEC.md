@@ -404,9 +404,27 @@ Find out from my existing ratings whether any audio model or analysis captures m
 - **Permutation baseline**: the same analysis on shuffled ratings, to tell signal from noise; bootstrap 95% ranges.
 - Caveat: ~190 ratings can only show moderate effects (a correlation around 0.2 is near the limit of what this many ratings can confirm).
 
+**As built (2026-10-29)**
+- Runs in its own environment, `tastetest/` (own `pyproject.toml`): OMAR-RQ needs `transformers` < 5, the player uses 5.x. Outputs in `runs/taste-test/`; settings in `config.toml` `[taste_test]`.
+- Dataset: 193 rated plays (v1 103, v2 90), 59 liked, 105 artists; 135 tracks re-downloaded.
+- Models run: CLAP (stored), MuQ (13 layers), MuQ-MuLan (+ 35 plain-English descriptions), OMAR-RQ (24 layers), Discogs-EffNet (+ 400 styles, 14 Essentia descriptor heads, DEAM/emoMusic arousal–valence), MAEST via Essentia's plain model file (layers 5/7/9/11 + 400 styles), signal measurements (librosa), Demucs vocal share.
+- **MERT-v1-330M** (25 layers, 5 s context, averaged into ~10 s sections): loads with `trust_remote_code` (runs Python from its Hugging Face page) — approved by me on 2026-10-29, and pinned to the reviewed revision `5240c27…` so later changes on Hugging Face can't run unreviewed code.
+- Essentia's TensorFlow build runs on the CPU (no support for this GPU generation) — slower, same results.
+
 **Decision rule**
 - A representation enters v3 scoring only if it clearly beats both the shuffled baseline and CLAP on held-out artists. If none does, v3 drops audio-similarity components and builds on what works (agreement, year, tempo).
 - Output: a results table per representation and analysis, written to `runs/taste-test/` and summarised for review.
+
+**Results (2026-10-30; MAEST pending — CPU-only, ~28 s/track)** — full tables in `runs/taste-test/results.md`, `ensemble.md`
+- Beat the shuffled baseline: **MuQ-MuLan text descriptions ρ +0.25** (95% +0.10 to +0.37, p 0.005; v2 +0.39), MuQ-MuLan audio +0.19 (p 0.005; v2 +0.32), MERT layer 11 +0.20 (p 0.035), MuQ layer 4 +0.19 (p 0.02), EffNet +0.16 (p 0.015; best top-10 at 50% vs 31% base), Essentia descriptors +0.13, Discogs styles +0.10.
+- No signal: **CLAP −0.05** (p 0.59), OMAR-RQ +0.01, signal measurements −0.10, Demucs vocal share −0.11 (how *much* vocal doesn't matter; the *kind* does).
+- What it says about my taste: higher — female vocals (+0.28), energetic (+0.18), bright (+0.14), happy (+0.13), Euro/progressive house; lower — "build-up and drop" (−0.22), heavy bassline (−0.19), punchy kick (−0.18), lo-fi/raw (−0.18), minimal stripped-back (−0.17), instrumental without vocals (−0.17).
+- **Section consistency** (how even the per-section predictions are) beat the whole-track average for MuQ (+0.25 vs +0.15), EffNet (+0.22 vs +0.01) and MuLan (+0.19 vs +0.04) — supports "one bad part ruins it".
+- **Combining audio models** didn't beat the best single one (+0.22 to +0.24 vs +0.25): they hear largely the same things. **Combining audio with the non-audio facts did** (v2): facts alone +0.33 (top-10 55%) → **facts + MuQ-MuLan +0.43 (top-10 59%)**.
+- Cost: MuQ-MuLan ~2 s per track on the GPU (~3 GB VRAM); Essentia ~3 s/track on CPU; MAEST ~28 s/track on CPU.
+- Newer-model check (2026-10-30): no successor to MuQ-MuLan found; 2026 recommendation studies still place MuQ-MuLan among the best (alongside MERT, MuQ, and older Jukebox/MusicFM on some metrics); CLaMP 3 (2025) is a music–text retrieval model, not shown better for taste; 2026 music LLMs (e.g. MOSS-Music) are captioners, not embedding models. A 2026 paper (arXiv 2601.19109) improves MuQ-MuLan similarity by weighting per-instrument (stem) similarities — a possible later refinement.
+
+**Decision (2026-10-30): replace CLAP with MuQ-MuLan** — audio fingerprint, text-description scores and section consistency — combined with the non-audio facts (agreement, release year, BPM). MERT, MuQ, EffNet and OMAR-RQ dropped (no gain in combination, extra cost). MAEST only if its pending result is exceptional (it is far slower).
 
 ### 16.2 Agreed changes for v3 (2026-10-29)
 All five agreed; item 4 depends on the taste-model test (16.1) — CLAP is reassessed first, not dropped blindly.
@@ -435,9 +453,9 @@ Goal: more multi-source agreement, the strongest signal in both runs.
 - **Report noise**: only log player stalls longer than ~250 ms (v2 logged ~100 stalls of 0–20 ms).
 
 ### 16.5 Milestones (build in order, stop after each for my check)
-1. **Taste-model test** (16.1) — offline comparison of audio models and analyses on my ~190 ratings. Check: results table and a recommendation on CLAP.
+1. **Taste-model test** (16.1) — offline comparison of audio models and analyses on my ~190 ratings. Check: results table and a recommendation on CLAP. **Done 2026-10-30: MuQ-MuLan replaces CLAP** (MAEST check pending).
 2. **Sources and pool** — TIDAL (ISRC lookup, similar tracks), YouTube Music related, deeper lists (~100 per source per seed), multi-source-first filling, refill when multi-source tracks run out, pool 250, artist-level credit off. Check: candidate list with four-plus sources and overlap counts.
-3. **Ratings and scoring** — three buttons; weight cap (≤ 0.35) and higher agreement floor; CLAP and personal model kept, replaced or dropped per milestone 1; release year and BPM kept.
+3. **Ratings and scoring** — three buttons; weight cap (≤ 0.35) and higher agreement floor; **MuQ-MuLan replaces CLAP** (audio match, text-description scores, section consistency; personal model retrained on MuQ-MuLan features or dropped); release year and BPM kept.
 4. **Player and monitoring** — preload the next track, tempo settings locked during a run, stall logging threshold.
 5. **Controls and sealed results** (16.6) — secret per-run control rate, run ends at 25 rated controls, results sealed until then, control ratings count for learning.
 6. **Results, report, simulated session** — then a fresh run with 8–10 new seeds.

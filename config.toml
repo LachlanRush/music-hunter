@@ -165,3 +165,17 @@ labels = [
 
 [audio]
 extensions = [".mp3", ".flac", ".m4a", ".opus", ".ogg", ".wav", ".aac", ".webm"]
+
+[taste_test]
+# SPEC.md §16.1 — offline taste-model test (runs in tastetest/, its own environment)
+output = "runs/taste-test"
+download_delay_seconds = 3       # pacing for re-downloading deleted audio
+liked_v1 = 4                     # v1 (1–5): "liked" = rated at least this
+liked_v2 = 3                     # v2 (1–4): On target or Add
+cv_folds = 5                     # cross-validation folds, grouped by artist
+cv_repeats = 5                   # repeated with different artist splits
+knn_k = 7                        # nearest-neighbour prediction
+permutations = 200               # shuffled-rating baseline runs
+bootstrap = 1000                 # resamples for 95% ranges
+top_n = 10                       # top-N precision ("would its top picks have been my likes?")
+pca_components = 16              # audio dimensions added to agreement/year/BPM in the "added value" test

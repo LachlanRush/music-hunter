@@ -1,0 +1,22 @@
+[project]
+name = "tastetest"
+version = "0.1.0"
+description = "Offline taste-model test for music-hunter (SPEC.md §16.1): compares audio models against my ratings"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "demucs>=4.0.1",
+    "essentia-tensorflow>=2.1b6.dev1389",
+    "librosa>=0.11.0",
+    "muq>=0.1.0",
+    "mutagen>=1.48.1",
+    "numpy>=2.4.6",
+    "omar-rq>=0.2.1",
+    "scikit-learn>=1.9.1",
+    "soundfile>=0.14.0",
+    "torch>=2.15.0",
+    "transformers>=4.50,<5",
+    "yt-dlp[default]>=2026.10.26",
+]
+
+[tool.uv]
+package = false
