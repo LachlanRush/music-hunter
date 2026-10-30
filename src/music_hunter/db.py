@@ -203,6 +203,7 @@ MIGRATIONS = [
     ("candidates", "matched", "INTEGER NOT NULL DEFAULT 1"),
     ("candidates", "deezer_id", "INTEGER"),
     ("candidates", "pool_seed", "INTEGER REFERENCES tracks(id)"),
+    ("plays", "scored_for_seed", "INTEGER"),          # v3: the seed pool whose view of the track scored best
 ]
 
 
@@ -278,7 +279,7 @@ def set_setting(conn: sqlite3.Connection, key: str, value) -> None:
 
 
 def store_embedding(conn: sqlite3.Connection, track_id: int, model: str, emb) -> None:
-    """Replace a track's embedding and per-chunk embeddings (emb: clap.TrackEmbedding)."""
+    """Replace a track's embedding and per-chunk embeddings (emb: embedding.TrackEmbedding)."""
     conn.execute("DELETE FROM chunk_embeddings WHERE track_id=?", (track_id,))
     conn.execute(
         "INSERT OR REPLACE INTO track_embeddings (track_id, model, dim, n_chunks, embedding)"

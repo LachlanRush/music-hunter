@@ -41,7 +41,7 @@ def analyse_bpm(seeds: bool) -> None:
         refresh_seed_bpms(conn)
         return
     around = seeds_median(conn)
-    sr = CONFIG["clap"]["sample_rate"]
+    sr = CONFIG["bpm"]["analysis_sample_rate"]
     rows = conn.execute("SELECT id, artist, title, file_path FROM tracks WHERE bpm IS NULL AND file_path IS NOT NULL").fetchall()
     for r in rows:
         tempo = estimate(audio.decode(resolve(r["file_path"]), sr), sr, around)
@@ -51,8 +51,30 @@ def analyse_bpm(seeds: bool) -> None:
     print(f"{len(rows)} tracks measured")
 
 
+def reembed() -> None:
+    """Re-analyse tracks whose stored embedding came from another model or layer (audio still on disk)."""
+    from .config import resolve
+    from .embedding import Embedder, model_name
+
+    conn = db.connect()
+    rows = conn.execute("SELECT t.id, t.artist, t.title, coalesce(t.file_path, p.undo_path) AS file FROM tracks t"
+                        " JOIN track_embeddings e ON e.track_id = t.id LEFT JOIN plays p ON p.track_id = t.id"
+                        " AND p.undo_path IS NOT NULL WHERE e.model != ?", (model_name(),)).fetchall()
+    have = [r for r in rows if r["file"] and resolve(r["file"]).exists()]
+    print(f"{len(rows)} tracks with another model's embedding; {len(have)} still have audio")
+    embedder = Embedder() if have else None
+    for r in have:
+        emb = embedder.embed_track(audio.decode(resolve(r["file"]), embedder.sample_rate))
+        with conn:
+            db.store_embedding(conn, r["id"], embedder.model_name, emb)
+        print(f"  {r['artist']} – {r['title']}  ({len(emb.chunks)} chunks)")
+    if len(have) < len(rows):
+        print(f"{len(rows) - len(have)} tracks have no audio left and keep their old embedding: "
+              "embeddings from different models can't be compared, so start a fresh run after changing model.")
+
+
 def similarity(extra_files: list[Path]) -> None:
-    """Milestone 1 check: cosine similarity matrix of references (+ optional test files)."""
+    """Cosine similarity matrix of the seeds (+ optional test files), with the configured audio model."""
     conn = db.connect()
     rows = conn.execute(
         "SELECT t.id, t.artist, t.title, e.model, e.embedding FROM tracks t"
@@ -61,7 +83,9 @@ def similarity(extra_files: list[Path]) -> None:
     if not rows:
         sys.exit("No seed embeddings yet. Run: music-hunter add-seeds <Spotify links>")
 
-    model = CONFIG["clap"]["checkpoint"]
+    from .embedding import model_name
+
+    model = model_name()
     if any(r["model"] != model for r in rows):
         sys.exit(f"Some seeds were embedded with a different model than {model}; re-run embed-seeds --force.")
 
@@ -71,10 +95,10 @@ def similarity(extra_files: list[Path]) -> None:
     n_refs = len(rows)
 
     if extra_files:
-        from .clap import Embedder
+        from .embedding import Embedder
 
         embedder = Embedder()
-        sr = CONFIG["clap"]["sample_rate"]
+        sr = embedder.sample_rate
         for file in extra_files:
             try:
                 artist, title = audio.artist_title(file)
@@ -201,7 +225,7 @@ def scores(top: int) -> None:
     _, weights = current_weights(conn)
     short = {"audio_match": "audio", "dislike_match": "dislike", "source_score": "source", "seed_score": "seed",
              "agreement": "agree", "personal_model": "model", "diversity_penalty": "divers",
-             "bpm_match": "bpm", "year_match": "year"}
+             "bpm_match": "bpm", "year_match": "year", "seed_match": "s-match"}
     print("Weights: " + ", ".join(f"{short[c]} {weights[c]:+.2f}" for c in COMPONENTS))
     print(f"\n rank  score  " + " ".join(f"{short[c]:>7}" for c in COMPONENTS) + "  track")
     for r in rows[:top]:
@@ -339,6 +363,8 @@ def main() -> None:
     p = sub.add_parser("analyse-bpm", help="Measure BPM for tracks that don't have it yet")
     p.add_argument("--seeds", action="store_true", help="Re-read the seeds' BPM (two passes, 3:2 tie-break)")
 
+    sub.add_parser("reembed", help="Re-analyse tracks embedded with another audio model (audio still on disk)")
+
     sub.add_parser("serve", help="Start the localhost player")
 
     sub.add_parser("report", help="Operational report: sessions, delays, pipeline timings, errors")
@@ -366,6 +392,8 @@ def main() -> None:
         averages()
     elif args.command == "analyse-bpm":
         analyse_bpm(args.seeds)
+    elif args.command == "reembed":
+        reembed()
     elif args.command == "serve":
         from .web import serve
         serve()

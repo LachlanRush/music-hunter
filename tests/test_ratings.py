@@ -1,8 +1,8 @@
-"""Scripted ratings produce the expected updates — v2 rules (SPEC.md §15.2, §15.4, §5, §7).
+"""Scripted ratings produce the expected updates — v3 rules (SPEC.md §16.4, §15.4, §5, §7).
 
-Buttons: 1 Off (negative set), 2 Close (neutral), 3 On target (positive, weight 1),
-4 Add (positive, weight 2, seed, saved to collection/). Audio of tracks not Added is held
-in data/undo/ until the next rating, then deleted. Runs on a temporary copy of a pool.
+Buttons: 1 Off (negative set), 2 Close (mild positive, weight 0.5), 3 Add (positive, weight 2, seed,
+saved to collection/). Audio of tracks not Added is held in data/undo/ until the next rating, then
+deleted. Runs on a temporary copy of a pool.
 """
 
 import random
@@ -18,7 +18,8 @@ from music_hunter.scoring import score_pool
 from music_hunter.sources import Item
 
 PRIOR, K = config.CONFIG["averages"]["prior"], config.CONFIG["averages"]["prior_strength"]
-OFF, CLOSE, ON_TARGET = 1, 2, 3
+OFF, CLOSE = 1, 2
+CLOSE_WEIGHT = config.CONFIG["ratings"]["positive_weights"][str(CLOSE)]
 
 
 def provenance(c, track_id):
@@ -116,24 +117,24 @@ def test_scripted_ratings(conn):
     assert -1.0 <= min(raw) < max(raw) <= 1.0
     check_averages(c, history)
 
-    # 3. Mis-tap correction Off → On target: out of the negative set, into the positive set
-    #    at weight 1; still not saved (only Add saves), so the audio stays held.
-    assert change_last_rating(c, ON_TARGET) == p2
-    history[-1] = (t2["id"], ON_TARGET, gen)
+    # 3. Mis-tap correction Off → Close: out of the negative set, into the positive set at Close's
+    #    mild weight; still not saved (only Add saves), so the audio stays held.
+    assert change_last_rating(c, CLOSE) == p2
+    history[-1] = (t2["id"], CLOSE, gen)
     assert negative_set(c)[0] == []
     ids, _, w = positive_set(c)
-    assert w[ids.index(t2["id"])] == 1.0
+    assert w[ids.index(t2["id"])] == CLOSE_WEIGHT
     assert track_of(c, p2)["file_path"] is None and (root / undo_of(c, p2)).exists()
     check_averages(c, history)
     held = root / undo_of(c, p2)
 
-    # 4. Close: neutral (neither set). Rating it makes the previous hold final: audio deleted.
+    # 4. Another Off. Rating it makes the previous hold final: audio deleted.
     p3 = show(c)
     t3 = track_of(c, p3)
-    rate(c, p3, CLOSE)
-    history.append((t3["id"], CLOSE, gen))
+    rate(c, p3, OFF)
+    history.append((t3["id"], OFF, gen))
     assert not held.exists() and undo_of(c, p2) is None
-    assert t3["id"] not in positive_set(c)[0] and t3["id"] not in negative_set(c)[0]
+    assert t3["id"] not in positive_set(c)[0] and t3["id"] in negative_set(c)[0]
     assert c.execute("SELECT count(*) FROM track_embeddings WHERE track_id = ?", (t2["id"],)).fetchone()[0] == 1
     check_averages(c, history)
 
@@ -145,8 +146,8 @@ def test_scripted_ratings(conn):
     assert skipped_file.exists()                     # still reachable with the back button
     p5 = show(c)
     t5 = track_of(c, p5)
-    rate(c, p5, ON_TARGET)
-    history.append((t5["id"], ON_TARGET, gen))
+    rate(c, p5, CLOSE)
+    history.append((t5["id"], CLOSE, gen))
     assert not skipped_file.exists() and track_of(c, p4)["file_path"] is None
 
     # 6. Control Added: saved to collection/, but no credit, not a reference, not a seed.

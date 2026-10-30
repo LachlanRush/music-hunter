@@ -33,7 +33,7 @@ def test_reweighting_v2(conn):
 
     def play(i, driver):
         comps = {k: float(rng.uniform()) for k in COMPONENTS}
-        rating = int(np.clip(1 + np.floor(comps[driver] * 4), 1, 4))   # the driver decides Off … Add
+        rating = int(np.clip(1 + np.floor(comps[driver] * 3), 1, 3))   # the driver decides Off … Add
         add_play(c, track, i, comps, rating)
 
     for i in range(1, 21):                       # early ratings: explained by seed_score (lucky)

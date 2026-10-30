@@ -210,7 +210,8 @@ def state() -> dict:
         "plays": plays[0], "rated": plays[1],
         "worker": {"state": worker.state, "message": worker.message},
         "last": track_info(conn, last) if last else None,
-        "labels": ratings.LABELS, "add": ratings.ADD, "play_to_end": UI["play_to_end"],
+        "labels": ratings.LABELS, "hints": CONFIG["ratings"]["hints"], "add": ratings.ADD,
+        "play_to_end": UI["play_to_end"],
         "seeds": conn.execute("SELECT count(*) FROM tracks WHERE origin = 'original_reference'").fetchone()[0],
     }
 

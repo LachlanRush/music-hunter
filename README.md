@@ -14,6 +14,7 @@ uv sync
 uv run music-hunter add-seeds <Spotify track or playlist links>   # or --file links.txt
 uv run music-hunter embed-seeds                                   # audio files you put in seeds/ yourself
 uv run music-hunter similarity [extra.mp3 ...]                    # how the seeds relate
+uv run music-hunter reembed                                       # after changing [embedding] model: re-analyse
 ```
 
 Spotify links are read from public pages (no account), matched on YouTube Music (same song, ±5 s),
@@ -50,8 +51,12 @@ uv run pytest                       # scripted ratings check (runs on a temporar
 uv run music-hunter serve           # then open http://127.0.0.1:8765
 ```
 
-Buttons (v2): 1 Off · 2 Close · 3 On target · 4 Add (keys 1–4) · space play/pause · N skip · B back.
-On target and Add play to the end; Off and Close skip straight away. Only Add saves the track (to `collection/`).
+Buttons (v3): Off · Close · Add (labels in `[ratings]`) · keys: space play/pause · N skip · B back.
+Add plays to the end; Off and Close skip straight away. Only Add saves the track (to `collection/`) and makes it a seed.
+
+Audio analysis (v3): MAEST (`[embedding]`), on the GPU. Scoring works within each seed's pool: agreement, source
+average and similarity to the seed are compared among the tracks that seed suggested, and seed averages steer both
+pool shares and scores.
 Nothing about scores, sources or controls is ever shown in the player; artist, title and artwork appear after rating.
 Tempo: set a target BPM (empty = median of seeds and liked tracks); "Match tempo" plays tracks within ±12% at that
 tempo with pitch kept. The target also steers ranking (`bpm_match`). `music-hunter analyse-bpm` fills in missing BPMs.
@@ -68,7 +73,7 @@ All of this runs inside `music-hunter serve`:
 - 1 play in each block of 5 is a control (the median-scored track), revealed only after rating.
 - Re-weighting (v2): from 20 learning ratings, every 5 — small steps (≤0.05 per weight) within guardrails, choosing
   between the search's optimum and every earlier weight set by how well each fits the whole rating history.
-- The personal model joins the score from 50 learning ratings.
+- The personal model joins the score from 20 learning ratings (with at least 3 Offs and 3 Close/Add).
 - When fewer than 25 unplayed tracks remain, a new generation is pulled in the background.
 - Results: http://127.0.0.1:8765/results — ranked vs control (average and Add rate, with 95% ranges and a plain
   reading, no pass mark), whether higher-ranked random controls were rated higher, weight changes over time, sources,

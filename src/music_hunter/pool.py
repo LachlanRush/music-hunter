@@ -6,7 +6,7 @@ candidates suggested by two or more source families go in first (most families f
 multi_source_always_added they join even beyond the share), then the rest of the share is split
 between that seed's lists by source average. Candidates are taken from each (seed, source) list in
 the source's own order, matched on YouTube Music (pull.Matcher), downloaded one at a time with a
-pause between downloads, loudness-measured and analysed with CLAP. A failed match or download is
+pause between downloads, loudness-measured and analysed with MAEST. A failed match or download is
 replaced by the next candidate from the same list; a list that runs dry passes its leftover slots to
 the same seed's other lists, and only a seed with no candidates left passes them to other seeds.
 Lists are visited round-robin, so the first tracks ready span all seeds and sources.
@@ -117,7 +117,7 @@ def loudness(file: Path) -> tuple[float, float, float]:
 
 class Filler:
     def __init__(self, conn: sqlite3.Connection, generation: int):
-        from .clap import Embedder
+        from .embedding import Embedder
 
         from .pull import Matcher, optional
         from .sources import Deezer, LastFM, YouTubeMusic
@@ -160,7 +160,7 @@ class Filler:
         t1 = time.monotonic()
         try:
             lufs, peak, gain = loudness(file)
-            sr = CONFIG["clap"]["sample_rate"]
+            sr = self.embedder.sample_rate
             samples = audio.decode(file, sr)
             emb = self.embedder.embed_track(samples)
         except Exception as e:
@@ -169,7 +169,8 @@ class Filler:
             from .bpm import estimate, seeds_median
             if not hasattr(self, "bpm_prior"):
                 self.bpm_prior = seeds_median(self.conn)      # 3:2 tie-break: prefer tempos near the seeds'
-            tempo = estimate(samples, sr, self.bpm_prior)
+            bpm_sr = CONFIG["bpm"]["analysis_sample_rate"]
+            tempo = estimate(audio.decode(file, bpm_sr), bpm_sr, self.bpm_prior)
         except Exception as e:
             tempo = None
             db.log_event(self.conn, "bpm_failed", generation=self.generation, video_id=c["video_id"], reason=str(e)[:200])

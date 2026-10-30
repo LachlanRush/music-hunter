@@ -10,7 +10,7 @@ from .config import CONFIG
 from .pull import seeds
 from .ratings import ADD, LABELS, SOURCES, _averages
 from . import db
-from .scoring import CFG as SCORING, COMPONENTS, current_weights
+from .scoring import CFG as SCORING, COMPONENTS, current_weights, personal_model_active
 
 CFG = CONFIG["results"]
 Z = 1.96  # 95% intervals
@@ -76,6 +76,23 @@ def controls_by_rank(controls: list) -> dict:
             "points": [{"position": round(pos, 3), "rating": r} for pos, r in pts]}
 
 
+def by_sources(rated: list) -> list[dict]:
+    """Ratings by how many sources suggested the track (as logged when shown): 1, 2, 3+.
+
+    Shows whether tracks only one source knew (often obscure ones) did worse or better; controls are the
+    fairest comparison, since the ranking didn't choose them.
+    """
+    groups = [("1 source", 1, 1), ("2 sources", 2, 2), ("3+ sources", 3, 99)]
+    out = []
+    for name, lo, hi in groups:
+        def pick(control=None):
+            return [p["rating"] for p in rated
+                    if lo <= len({src for _, src in json.loads(p["provenance"] or "[]")}) <= hi
+                    and (control is None or bool(p["is_control"]) == control)]
+        out.append({"name": name, "all": summary(pick()), "ranked": summary(pick(False)), "control": summary(pick(True))})
+    return out
+
+
 def reading(diff: dict) -> str:
     """Plain reading of the ranked − control gap from its 95% range (not a pass/fail criterion)."""
     if diff["diff"] is None:
@@ -135,12 +152,13 @@ def results(conn: sqlite3.Connection) -> dict:
             "plays": len(plays), "rated": len(rated), "learning": len(ranked), "control": len(control),
             "skipped": sum(1 for p in plays if p["skipped_at"]),
             "generations": conn.execute("SELECT count(*) FROM generations").fetchone()[0],
-            "personal_model_active": len(ranked) >= SCORING["personal_model_min_ratings"],
+            "personal_model_active": personal_model_active(conn),
             "personal_model_at": SCORING["personal_model_min_ratings"],
         },
         "ranked": summary(r_only), "control": summary(c_only),
         "difference": diff, "reading": reading(diff), "add_difference": difference(add_ranked, add_control),
         "controls_by_rank": controls_by_rank(controls),
+        "by_sources": by_sources(rated),
         "weight_history": weight_history,
         "tempo": {"target_bpm": db.get_setting(conn, "target_bpm"), "match_tempo": db.get_setting(conn, "match_tempo", False),
                   "stretched_plays": len(stretched),

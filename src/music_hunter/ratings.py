@@ -1,11 +1,11 @@
-"""Ratings and their effects — SPEC.md §15.2 (v2 buttons), §5 and §15.4 (controls).
+"""Ratings and their effects — SPEC.md §16.4 (v3 buttons), §5 and §15.4 (controls).
 
 Everything derived from ratings (averages, reference sets, seeds) is computed from the
 `plays` table on demand, so changing the most recent rating only has to update that
 play and move its audio file.
 
-v2 buttons: 1 Off (negative set), 2 Close (neutral), 3 On target (positive, weight 1),
-4 Add (positive, weight 2; seed; saved). Effects on the audio file:
+v3 buttons: 1 Off (negative set), 2 Close (mild positive, weight 0.5; not saved), 3 Add (positive,
+weight 2; seed; saved) — weights in config [ratings]. Effects on the audio file:
   Add (learning or control) → collection/
   anything else → held in data/undo/ until the next rating (so the back button can still
   change it), then deleted. Learning only needs the stored embedding, not the file.
@@ -77,7 +77,11 @@ def _embedding_set(conn: sqlite3.Connection, query: str, weights: dict[int, floa
         "SELECT t.id, r.rating, e.embedding FROM (" + query + ") r"
         " JOIN tracks t ON t.id = r.id JOIN track_embeddings e ON e.track_id = t.id ORDER BY t.id").fetchall()
     ids = [r["id"] for r in rows]
-    vecs = np.stack([db.from_blob(r["embedding"]) for r in rows]) if rows else np.zeros((0, 512), np.float32)
+    if rows:
+        vecs = np.stack([db.from_blob(r["embedding"]) for r in rows])
+    else:
+        any_emb = conn.execute("SELECT embedding FROM track_embeddings LIMIT 1").fetchone()
+        vecs = np.zeros((0, len(db.from_blob(any_emb[0])) if any_emb else 0), np.float32)
     return ids, vecs, np.array([weights[r["rating"]] for r in rows], dtype=np.float32)
 
 
@@ -86,7 +90,7 @@ def _in(ratings: dict) -> str:
 
 
 def positive_set(conn: sqlite3.Connection):
-    """(track ids, embeddings, weights): seeds (as Add) and learning plays rated On target or Add."""
+    """(track ids, embeddings, weights): seeds (as Add) and learning plays with a positive weight (Close, Add)."""
     return _embedding_set(conn,
         f"SELECT id, {ADD} AS rating FROM tracks WHERE origin = 'original_reference'"
         f" UNION SELECT track_id, rating FROM plays WHERE is_control = 0 AND rating IN {_in(POSITIVE_WEIGHTS)}",
@@ -132,11 +136,11 @@ def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = 
     with conn:
         play_id = conn.execute(
             "INSERT INTO plays (track_id, generation, play_number, is_control, weight_set_id, components,"
-            " score, rank, pool_size, provenance, target_bpm, shown_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))",
+            " score, rank, pool_size, provenance, target_bpm, scored_for_seed, shown_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))",
             (row["track_id"], current_generation(conn), play_number, int(control), row["weight_set_id"],
              json.dumps(components), row["score"], row["rank"], len(scored),
-             json.dumps(row["provenance"]), row.get("target_bpm"))).lastrowid
+             json.dumps(row["provenance"]), row.get("target_bpm"), row.get("scored_for_seed"))).lastrowid
     db.log_event(conn, "shown", play_id, control=control, rank=row["rank"], pool_size=len(scored),
                  score_ms=round(score_ms, 1))
     return play_id

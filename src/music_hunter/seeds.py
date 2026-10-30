@@ -1,7 +1,7 @@
 """Original seeds — SPEC.md §2 and §15.1.
 
 Seeds come from Spotify links (matched on YouTube Music, downloaded into seeds/) or
-from local files placed in seeds/. Either way they are embedded with CLAP and stored
+from local files placed in seeds/. Either way they are embedded with MAEST and stored
 as original references (treated as the top rating).
 """
 
@@ -19,12 +19,14 @@ TOLERANCE = CONFIG["sources"]["duration_tolerance_seconds"]
 
 
 def _store(conn, embedder, file: Path, artist: str, title: str, **extra) -> int:
-    sr = CONFIG["clap"]["sample_rate"]
+    sr = embedder.sample_rate
     samples = audio.decode(file, sr)
     emb = embedder.embed_track(samples)
     from .bpm import estimate
+    bpm_sr = CONFIG["bpm"]["analysis_sample_rate"]
     cols = {"artist": artist, "title": title, "file_path": relative(file), "duration_s": len(samples) / sr,
-            "origin": "original_reference", "rating": ADD, "bpm": estimate(samples, sr), **extra}
+            "origin": "original_reference", "rating": ADD, "bpm": estimate(audio.decode(file, bpm_sr), bpm_sr),
+            **extra}
     with conn:
         tid = conn.execute(f"INSERT INTO tracks ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
                            list(cols.values())).lastrowid
@@ -42,7 +44,7 @@ def refresh_seed_bpms(conn: sqlite3.Connection) -> None:
     from .bpm import estimate
     from .config import resolve
 
-    sr = CONFIG["clap"]["sample_rate"]
+    sr = CONFIG["bpm"]["analysis_sample_rate"]
     rows = conn.execute("SELECT id, artist, title, file_path FROM tracks WHERE origin = 'original_reference'"
                         " AND file_path IS NOT NULL").fetchall()
     decoded = {r["id"]: audio.decode(resolve(r["file_path"]), sr) for r in rows}
@@ -59,7 +61,7 @@ def refresh_seed_bpms(conn: sqlite3.Connection) -> None:
 
 def add_from_spotify(conn: sqlite3.Connection, links: list[str]) -> None:
     from . import spotify
-    from .clap import Embedder
+    from .embedding import Embedder
     from .pool import download
     from .sources import YouTubeMusic
 
@@ -102,7 +104,7 @@ def add_from_spotify(conn: sqlite3.Connection, links: list[str]) -> None:
 
 def add_local_files(conn: sqlite3.Connection, force: bool = False) -> None:
     """Embed audio files placed in seeds/ by hand (tagged, or named 'Artist - Title')."""
-    from .clap import Embedder
+    from .embedding import Embedder
 
     folder = path("seeds")
     folder.mkdir(exist_ok=True)

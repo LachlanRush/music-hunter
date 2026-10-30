@@ -36,7 +36,7 @@ from .scoring import COMPONENTS, current_weights
 CFG = CONFIG["reweighting"]
 SIGNS = np.array([np.sign(SCORING["weights"][c]) for c in COMPONENTS])
 FLOORS = np.array([CFG["min_weight"].get(c, 0.0) for c in COMPONENTS])           # |w| at least
-CAPS = np.array([CFG["max_weight"].get(c, np.inf) for c in COMPONENTS])          # |w| at most
+CAPS = np.array([min(CFG["max_weight"].get(c, np.inf), CFG["max_weight_all"]) for c in COMPONENTS])   # |w| at most
 
 
 def to_vec(weights: dict) -> np.ndarray:

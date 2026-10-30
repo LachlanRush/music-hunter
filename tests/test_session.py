@@ -29,10 +29,10 @@ class FakeFiller:
             "SELECT e.embedding FROM track_embeddings e JOIN tracks t ON t.id = e.track_id WHERE t.origin = 'pool'")]
 
     def process(self, cid, seed=None):
-        from music_hunter.clap import TrackEmbedding
+        from music_hunter.embedding import TrackEmbedding
 
         c = self.conn.execute("SELECT * FROM candidates WHERE id = ?", (cid,)).fetchone()
-        v = self.base[self.rng.integers(len(self.base))] + self.rng.normal(0, 0.003, 512).astype(np.float32)
+        v = self.base[self.rng.integers(len(self.base))] + self.rng.normal(0, 0.003, len(self.base[0])).astype(np.float32)
         v /= np.linalg.norm(v)
         rel = f"cache/{c['video_id']}.webm"
         (config.ROOT / rel).write_bytes(b"placeholder audio")
@@ -113,7 +113,7 @@ def test_session(conn, monkeypatch):
         e = db.from_blob(c.execute("SELECT embedding FROM track_embeddings WHERE track_id = ?",
                                    (track_id,)).fetchone()[0])
         sim = np.sort(refs @ e)[-3:].mean()
-        return int(np.clip(round(2.5 + (sim - 0.975) * 60 + rng.normal(0, 0.6)), 1, 4))   # Off … Add
+        return int(np.clip(round(2.0 + (sim - 0.975) * 45 + rng.normal(0, 0.5)), 1, 3))   # Off … Add
 
     with TestClient(web.app) as client:
         settings = client.post("/api/settings", json={"target_bpm": 128.0, "match_tempo": True}).json()
@@ -167,16 +167,22 @@ def test_session(conn, monkeypatch):
             assert r["eval_n"] == RW["eval_window"]
             assert (r["eval_new_concordance"] is not None) == (r["eval_pairs"] > 0)  # all-equal ratings: no pairs
 
-    # Personal model: zero until 50 learning ratings, then active.
-    seen = 0
+    # Personal model: zero until the minimum learning ratings (with enough Offs and likes), then active;
+    # its value is the predicted rating on the rating scale.
+    from music_hunter.scoring import CFG as SC
+    from music_hunter.ratings import NEGATIVE_WEIGHTS, POSITIVE_WEIGHTS
+    seen = likes = offs = 0
     for p in plays:
-        model = json.loads(p["components"])["personal_model"]["raw"]
-        if seen < 50:
-            assert model == 0.0
+        comp = json.loads(p["components"])["personal_model"]
+        ready = seen >= SC["personal_model_min_ratings"] and min(likes, offs) >= SC["personal_model_min_each"]
+        if not ready:
+            assert comp["raw"] == 0.0
         elif not p["is_control"]:
-            assert model != 0.0
+            assert comp["raw"] != 0.0 and 0.0 <= comp["norm"] <= 1.0
         if not p["is_control"] and p["rating"] is not None:
             seen += 1
+            likes += p["rating"] in POSITIVE_WEIGHTS
+            offs += p["rating"] in NEGATIVE_WEIGHTS
 
     # A refill ran in the background once fewer than refill_below tracks were left, as a new generation.
     assert "pull" in jobs, (jobs, unrated_pool_size(c), web.Worker.job_needed(c),
@@ -218,6 +224,10 @@ def test_session(conn, monkeypatch):
     assert results["tempo"]["stretched_plays"] > 20 and results["tempo"]["setting_changes"] == 2
     assert results["add_difference"]["diff"] is not None
     assert results["ranked"]["n"] and results["control"]["n"]
+    groups = results["by_sources"]                       # ratings by number of sources: every rated play counted once
+    assert [g["name"] for g in groups] == ["1 source", "2 sources", "3+ sources"]
+    assert sum(g["all"]["n"] for g in groups) == results["totals"]["rated"]
+    assert all(g["all"]["n"] == g["ranked"]["n"] + g["control"]["n"] for g in groups)
     assert results["rolling"]["ranked"] and results["rolling"]["control"]
     assert all(s["points"] for s in results["source_averages"])
     assert len(results["reweightings"]) == len(rws)

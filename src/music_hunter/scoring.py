@@ -1,8 +1,15 @@
-"""Score the pool — SPEC.md §7. Fast enough to re-run after every rating.
+"""Score the pool — SPEC.md §7, §16.4. Fast enough to re-run after every rating.
 
-Each component is computed raw, then normalised to 0–1 across the current pool
-(min–max; a component that is the same for every track normalises to 0). The score is
-the weighted sum of normalised components, with penalties carrying negative weights.
+Each component is computed raw, then normalised to 0–1 (min–max) and the score is the weighted
+sum, with penalties carrying negative weights.
+
+v3, scoring within each seed's pool: the components in [scoring] per_seed_components (agreement,
+source average, similarity to the seed) depend on how well the sources know a seed, so they are
+normalised among the tracks each seed suggested — a seed few sources know can still have tracks at
+the top of them; a pool where every track ties gets full credit. A track suggested from several seeds
+is scored in each of their pools and keeps the best. seed_score (that seed's average) is compared
+across seeds, so seed averages steer scores as well as pool shares. Every other component is
+normalised across the whole pool (a component the same for every track normalises to 0).
 
 dislike_match (v2, SPEC.md §15.7) is the mean similarity to the few closest tracks rated
 Off, normalised like the other components — so one close match can't dominate, and the
@@ -21,8 +28,9 @@ from .names import split_artists
 from .ratings import learning_ratings, negative_set, positive_set, seed_averages, source_averages
 
 CFG = CONFIG["scoring"]
-COMPONENTS = ("audio_match", "dislike_match", "source_score", "seed_score",
-              "agreement", "personal_model", "diversity_penalty", "bpm_match", "year_match")
+COMPONENTS = ("audio_match", "dislike_match", "source_score", "seed_score", "agreement", "seed_match",
+              "personal_model", "diversity_penalty", "bpm_match", "year_match")
+PER_SEED = tuple(CFG["per_seed_components"])
 
 
 def current_weights(conn: sqlite3.Connection) -> tuple[int, dict[str, float]]:
@@ -39,7 +47,7 @@ def current_weights(conn: sqlite3.Connection) -> tuple[int, dict[str, float]]:
 
 
 def personal_model(conn: sqlite3.Connection):
-    """Ridge regression from CLAP embedding to rating, trained on learning ratings.
+    """Ridge regression from the audio embedding to rating, trained on learning ratings.
 
     The ridge strength is picked from [personal_model] alphas by exact leave-one-out
     error. Returns a function mapping embeddings (n, dim) to predicted ratings.
@@ -62,6 +70,18 @@ def personal_model(conn: sqlite3.Connection):
             best = (loo, Vt.T @ (sv / (sv**2 + alpha) * uy))
     coef = best[1]
     return lambda P: (P.astype(np.float64) - x_mean) @ coef + y_mean
+
+
+def personal_model_active(conn: sqlite3.Connection) -> bool:
+    """Enough learning ratings, with both dislikes and likes among them, to fit the personal model."""
+    def count(ratings) -> int:
+        marks = ",".join("?" * len(ratings))
+        return conn.execute(f"SELECT count(*) FROM plays WHERE is_control = 0 AND rating IN ({marks})",
+                            [int(r) for r in ratings]).fetchone()[0]
+
+    return (learning_ratings(conn) >= CFG["personal_model_min_ratings"]
+            and min(count(CONFIG["ratings"]["positive_weights"]), count(CONFIG["ratings"]["negative_weights"]))
+            >= CFG["personal_model_min_each"])
 
 
 def _year(date: str | None) -> float | None:
@@ -115,9 +135,20 @@ def closeness(values: list[float | None], target: float | None, sigma: float, wi
     return out
 
 
-def minmax(x: np.ndarray) -> np.ndarray:
+def minmax(x: np.ndarray, ties: float = 0.0) -> np.ndarray:
+    """Scale to 0–1; if every value is the same, all get `ties`."""
     span = x.max() - x.min() if x.size else 0.0
-    return (x - x.min()) / span if span > 1e-12 else np.zeros_like(x)
+    return (x - x.min()) / span if span > 1e-12 else np.full_like(x, ties, dtype=float)
+
+
+def seed_embeddings(conn: sqlite3.Connection, seed_ids) -> tuple[list[int], list[np.ndarray]]:
+    """Embeddings of the given seeds (originals or Added tracks) that have one."""
+    ids = sorted(seed_ids)
+    if not ids:
+        return [], []
+    rows = conn.execute(f"SELECT track_id, embedding FROM track_embeddings WHERE track_id IN ({','.join('?' * len(ids))})"
+                        " ORDER BY track_id", ids).fetchall()
+    return [r[0] for r in rows], [db.from_blob(r[1]) for r in rows]
 
 
 def pool_tracks(conn: sqlite3.Connection):
@@ -174,13 +205,42 @@ def score_pool(conn: sqlite3.Connection) -> list[dict]:
 
     for i, r in enumerate(rows):
         pairs = prov.get(r["candidate_id"], [])
-        raw["source_score"][i] = max((src_avg[src] for _, src in pairs), default=0.0)
-        raw["seed_score"][i] = max((seed_avg[s] for s, _ in pairs), default=0.0)
         own = {src for _, src in pairs}
         via_artist = set().union(*(artist_sources.get(a, set()) for a in json.loads(r["song_artists"] or "[]")))
         raw["agreement"][i] = math.log(1 + len(pairs) + CFG["artist_agreement_credit"] * len(via_artist - own))
 
-    if learning_ratings(conn) >= CFG["personal_model_min_ratings"]:
+    # Per-seed pools: each (track, seed that suggested it) pair, with that seed's view of the track.
+    seed_vecs = {sid: v for sid, v in zip(*seed_embeddings(conn, {s for p in prov.values() for s, _ in p}))}
+    entries = [(i, sid) for i, r in enumerate(rows) for sid in sorted({s for s, _ in prov.get(r["candidate_id"], [])})
+               if sid in seed_vecs]
+    per = {c: np.zeros(len(entries)) for c in ("agreement", "source_score", "seed_match", "seed_score")}
+    for e, (i, sid) in enumerate(entries):
+        r = rows[i]
+        per["agreement"][e] = raw["agreement"][i]
+        per["source_score"][e] = max((src_avg[src] for s, src in prov[r["candidate_id"]] if s == sid), default=0.0)
+        per["seed_match"][e] = float(P[i] @ seed_vecs[sid])
+        per["seed_score"][e] = seed_avg[sid]
+    per_norm = {c: np.zeros(len(entries)) for c in per}
+    seed_of = np.array([sid for _, sid in entries])
+    for sid in set(seed_of.tolist()):
+        m = seed_of == sid
+        for c in PER_SEED:
+            per_norm[c][m] = minmax(per[c][m], ties=1.0)
+    for c in per:
+        if c not in PER_SEED:                         # compared across seeds (seed_score) or the whole pool
+            per_norm[c] = minmax(per[c])
+    part = sum(weights.get(c, 0.0) * per_norm[c] for c in per)
+    best: dict[int, int] = {}                          # track index -> its best entry
+    for e, (i, _) in enumerate(entries):
+        if i not in best or part[e] > part[best[i]]:
+            best[i] = e
+    scored_for = np.full(n, -1)
+    for i, e in best.items():
+        scored_for[i] = seed_of[e]
+        for c in per:
+            raw[c][i] = per[c][e]
+
+    if personal_model_active(conn):
         raw["personal_model"] = personal_model(conn)(P)
 
     # A target I set: credit across ±max_stretch (playable at the target with Match tempo), highest
@@ -200,6 +260,14 @@ def score_pool(conn: sqlite3.Connection) -> list[dict]:
         raw["diversity_penalty"] = (P @ D.T).max(1)
 
     norm = {c: minmax(raw[c]) for c in COMPONENTS}
+    # The personal model's predicted rating on the rating scale, not stretched across the pool: an uncertain
+    # model (heavily regularised, predictions near the average) then has little effect.
+    top = len(CONFIG["ratings"]["labels"])
+    norm["personal_model"] = np.clip((raw["personal_model"] - 1) / (top - 1), 0, 1) if raw["personal_model"].any() \
+        else np.zeros(n)
+    for i, e in best.items():                          # per-seed components: the values from the track's best pool
+        for c in per:
+            norm[c][i] = per_norm[c][e]
     score = sum(weights.get(c, 0.0) * norm[c] for c in COMPONENTS)
 
     seed_label = {r["id"]: f"{r['artist']} – {r['title']}" for r in conn.execute("SELECT id, artist, title FROM tracks")}
@@ -208,6 +276,7 @@ def score_pool(conn: sqlite3.Connection) -> list[dict]:
         "raw": {c: float(raw[c][i]) for c in COMPONENTS},
         "norm": {c: float(norm[c][i]) for c in COMPONENTS},
         "score": float(score[i]), "weight_set_id": wid, "target_bpm": bpm_target,
+        "scored_for_seed": int(scored_for[i]) if scored_for[i] >= 0 else None,
         "provenance": sorted([seed_label[s], src] for s, src in prov.get(r["candidate_id"], [])),
     } for i, r in enumerate(rows)]
     out.sort(key=lambda r: r["score"], reverse=True)
