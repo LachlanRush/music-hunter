@@ -92,6 +92,58 @@ def run_mert():
     save_features("mert", keys, np.stack(track), chunks, meta={"model": name, "layers": 25, "chunk_seconds": 10})
 
 
+def _mert2(name: str, rev: str, feature: str, window_s: float, batch: int):
+    """MERT-v2 (24 kHz, 24 layers × 1024). Loads with trust_remote_code (approved 2026-10-30), pinned to the
+    revision whose code was reviewed (torch/torchaudio/transformers only; no network, file or system calls).
+
+    Audio goes in as windows of `window_s` (30 s for MERT-v2-30s; up to 360 s, the whole song for most tracks,
+    for MERT-v2-FullSong). Per-frame outputs (25 Hz) are averaged into ~10 s sections per layer.
+    """
+    import torch
+    from transformers import AutoModel, Wav2Vec2FeatureExtractor
+
+    model = AutoModel.from_pretrained(name, revision=rev, trust_remote_code=True).to(DEVICE).eval()
+    proc = Wav2Vec2FeatureExtractor.from_pretrained(name, revision=rev)
+    sr, rate = proc.sampling_rate, 25
+    keys, track, chunks = [], [], []
+    for i, r in enumerate(tracks(), 1):
+        t0 = time.monotonic()
+        y = decode(r["audio"], sr)
+        n = max(1, int(np.ceil(len(y) / (window_s * sr))))          # equal windows no longer than window_s
+        pieces = np.array_split(y, n) if window_s > 30 else split(y, sr, window_s)
+        w = int(window_s * sr)
+        real = [len(p) for p in pieces] if window_s > 30 else [min(w, len(y) - k * w) for k in range(len(pieces))]
+        sections = []
+        for b in range(0, len(pieces), batch):
+            group = pieces[b:b + batch]
+            inp = proc(group, sampling_rate=sr, return_tensors="pt", padding=True).to(DEVICE)
+            with torch.no_grad():
+                out = model(**inp, output_hidden_states=True)
+            hs = torch.stack(out.hidden_states, 1).float()          # (batch, 24, frames, 1024)
+            for j in range(len(group)):
+                frames = min(hs.shape[2], int(real[b + j] / sr * rate) + 1)
+                h = hs[j, :, :frames]                               # real audio only, not padding
+                step = 10 * rate
+                for k in range(0, frames, step):
+                    if k == 0 or frames - k >= step // 2:           # drop a final section under 5 s
+                        sections.append(h[:, k:k + step].mean(1).cpu().numpy())
+        per = np.stack(sections)                                    # (sections, 24, 1024)
+        keys.append(r["key"]); track.append(per.mean(0)); chunks.append(per.astype(np.float16))
+        print(f"  {feature} {i}: {len(pieces)} windows, {len(per)} sections, {time.monotonic() - t0:.1f} s", flush=True)
+        del out, hs
+        torch.cuda.empty_cache()
+    save_features(feature, keys, np.stack(track), chunks,
+                  meta={"model": name, "revision": rev, "layers": 24, "chunk_seconds": 10})
+
+
+def run_mert2_30s():
+    _mert2("m-a-p/MERT-v2-30s", "0c0c8c6f6e04dcc39d96f94e0be9978a74848906", "mert2_30s", 30.0, 8)
+
+
+def run_mert2_full():
+    _mert2("m-a-p/MERT-v2-FullSong", "7001f7657276238629e61c7746ce70735e0604c0", "mert2_full", 360.0, 1)
+
+
 def run_mulan():
     import torch
     from muq import MuQMuLan
@@ -349,7 +401,7 @@ def run_stems():
     save_features("stems", keys, np.array(rows), chunks, names=names, meta={"model": "htdemucs", "chunk_seconds": 10})
 
 
-RUNNERS = {"mert": run_mert, "muq": run_muq, "mulan": run_mulan, "omarrq": run_omarrq, "essentia": run_essentia, "maest": run_maest, "maest_gpu": run_maest_gpu,
+RUNNERS = {"mert": run_mert, "muq": run_muq, "mulan": run_mulan, "omarrq": run_omarrq, "essentia": run_essentia, "maest": run_maest, "maest_gpu": run_maest_gpu, "mert2_30s": run_mert2_30s, "mert2_full": run_mert2_full,
            "signal": run_signal, "stems": run_stems}
 
 if __name__ == "__main__":
