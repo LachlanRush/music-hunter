@@ -34,12 +34,22 @@ def test_one_source_seed_can_top_its_pool(conn):
     assert min(r["norm"]["agreement"] for r in others) < 1.0          # elsewhere agreement has to be earned
 
 
-def test_track_from_several_seeds_keeps_its_best_pool(conn):
+def test_each_track_is_scored_in_its_owners_pool_only(conn):
+    """One pool per track — its owner's (the share it fills) — so several suggesting seeds aren't rewarded twice;
+    and the seeds themselves aren't in audio_match's likes (seed_match covers them)."""
+    from music_hunter.ratings import positive_set
+
     rows = score_pool(conn)
     sug = suggesters(conn)
+    owner = dict(conn.execute("SELECT id, pool_seed FROM candidates").fetchall())
     multi = [r for r in rows if len(sug.get(r["candidate_id"], ())) > 1]
     assert multi
-    assert all(r["scored_for_seed"] in sug[r["candidate_id"]] for r in rows if r["scored_for_seed"])
+    for r in rows:
+        if r["scored_for_seed"]:
+            own = owner.get(r["candidate_id"])
+            assert r["scored_for_seed"] == (own if own in sug[r["candidate_id"]] else min(sug[r["candidate_id"]]))
+    seeds_ = {s.track_id for s in seeds(conn)}
+    assert not seeds_ & set(positive_set(conn, include_seeds=False)[0])
 
 
 def test_seed_average_steers_scores(conn, monkeypatch):

@@ -3,13 +3,14 @@
 Each component is computed raw, then normalised to 0–1 (min–max) and the score is the weighted
 sum, with penalties carrying negative weights.
 
-v3, scoring within each seed's pool: the components in [scoring] per_seed_components (agreement,
-source average, similarity to the seed) depend on how well the sources know a seed, so they are
-normalised among the tracks each seed suggested — a seed few sources know can still have tracks at
-the top of them; a pool where every track ties gets full credit. A track suggested from several seeds
-is scored in each of their pools and keeps the best. seed_score (that seed's average) is compared
-across seeds, so seed averages steer scores as well as pool shares. Every other component is
-normalised across the whole pool (a component the same for every track normalises to 0).
+v3, scoring within each seed's pool: every pool track has an owner seed (the share it fills). The
+components in [scoring] per_seed_components (agreement, source average, similarity to the seed)
+depend on how well the sources know a seed, so they are normalised among the owner's tracks — a seed
+few sources know can still have tracks at the top of them; a pool where every track ties gets full
+credit. seed_score (the owner's average) is compared across seeds, so seed averages steer scores as
+well as pool shares. Every other component is normalised across the whole pool (a component the same
+for every track normalises to 0). audio_match compares with tracks liked in this run (Close/Add), not
+the seeds: sounding like the seed is seed_match's job, so it isn't counted twice.
 
 dislike_match (v2, SPEC.md §15.7) is the mean similarity to the few closest tracks rated
 Off, normalised like the other components — so one close match can't dominate, and the
@@ -165,7 +166,7 @@ def seed_embeddings(conn: sqlite3.Connection, seed_ids) -> tuple[list[int], list
 def pool_tracks(conn: sqlite3.Connection):
     """Unrated, unplayed pool tracks with embeddings."""
     return conn.execute(
-        "SELECT t.id, t.artist, t.title, t.candidate_id, t.bpm, t.release_date, c.song_artists, e.embedding"
+        "SELECT t.id, t.artist, t.title, t.candidate_id, t.bpm, t.release_date, c.song_artists, c.pool_seed, e.embedding"
         " FROM tracks t"
         " JOIN track_embeddings e ON e.track_id = t.id LEFT JOIN candidates c ON c.id = t.candidate_id"
         " WHERE t.origin = 'pool' AND t.rating IS NULL AND t.id NOT IN (SELECT track_id FROM plays)"
@@ -201,7 +202,7 @@ def score_pool(conn: sqlite3.Connection) -> list[dict]:
 
     raw = {c: np.zeros(n) for c in COMPONENTS}
 
-    _, R, wR = positive_set(conn)
+    _, R, wR = positive_set(conn, include_seeds=False)   # seeds are covered by seed_match: not counted twice
     if len(R):
         sims = P @ R.T
         k = min(CFG["audio_match_top_k"] if len(R) >= CFG["audio_match_min_refs"] else 1, len(R))
@@ -226,10 +227,16 @@ def score_pool(conn: sqlite3.Connection) -> list[dict]:
         via_artist = set().union(*(artist_sources.get(a, set()) for a in json.loads(r["song_artists"] or "[]")))
         raw["agreement"][i] = math.log(1 + len(distinct) + CFG["artist_agreement_credit"] * len(via_artist - own))
 
-    # Per-seed pools: each (track, seed that suggested it) pair, with that seed's view of the track.
+    # Per-seed pools: each track belongs to its owner — the seed whose share of the pool it fills (pool_seed;
+    # tracks from before owners existed: the first seed that suggested them). One pool per track: scoring a track
+    # in every suggesting seed's pool and keeping the best would reward several seeds twice (agreement already
+    # counts them).
     seed_vecs = {sid: v for sid, v in zip(*seed_embeddings(conn, {s for p in prov.values() for s, _ in p}))}
-    entries = [(i, sid) for i, r in enumerate(rows) for sid in sorted({s for s, _ in prov.get(r["candidate_id"], [])})
-               if sid in seed_vecs]
+    entries = []
+    for i, r in enumerate(rows):
+        suggesters = sorted({s for s, _ in prov.get(r["candidate_id"], [])} & seed_vecs.keys())
+        if suggesters:
+            entries.append((i, r["pool_seed"] if r["pool_seed"] in suggesters else suggesters[0]))
     per = {c: np.zeros(len(entries)) for c in ("agreement", "source_score", "seed_match", "seed_score")}
     for e, (i, sid) in enumerate(entries):
         r = rows[i]
@@ -246,11 +253,7 @@ def score_pool(conn: sqlite3.Connection) -> list[dict]:
     for c in per:
         if c not in PER_SEED:                         # compared across seeds (seed_score) or the whole pool
             per_norm[c] = minmax(per[c])
-    part = sum(weights.get(c, 0.0) * per_norm[c] for c in per)
-    best: dict[int, int] = {}                          # track index -> its best entry
-    for e, (i, _) in enumerate(entries):
-        if i not in best or part[e] > part[best[i]]:
-            best[i] = e
+    best = {i: e for e, (i, _) in enumerate(entries)}  # track index -> its (owner's) entry
     scored_for = np.full(n, -1)
     for i, e in best.items():
         scored_for[i] = seed_of[e]

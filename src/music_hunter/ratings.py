@@ -99,11 +99,13 @@ def _in(ratings: dict) -> str:
     return "(" + ", ".join(str(int(r)) for r in ratings) + ")"
 
 
-def positive_set(conn: sqlite3.Connection):
-    """(track ids, embeddings, weights): seeds (as Add) and plays with a positive weight (Close, Add)."""
+def positive_set(conn: sqlite3.Connection, include_seeds: bool = True):
+    """(track ids, embeddings, weights): the original seeds (as Add, unless include_seeds is off) and plays with a
+    positive weight (Close, Add)."""
+    seeds_part = f"SELECT id, {ADD} AS rating FROM tracks WHERE origin = 'original_reference' UNION " \
+        if include_seeds else ""
     return _embedding_set(conn,
-        f"SELECT id, {ADD} AS rating FROM tracks WHERE origin = 'original_reference'"
-        f" UNION SELECT track_id, rating FROM plays WHERE rating IN {_in(POSITIVE_WEIGHTS)}",
+        f"{seeds_part}SELECT track_id AS id, rating FROM plays WHERE rating IN {_in(POSITIVE_WEIGHTS)}",
         POSITIVE_WEIGHTS)
 
 
