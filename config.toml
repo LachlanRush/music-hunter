@@ -239,6 +239,7 @@ output = "runs/taste-test"
 download_delay_seconds = 3       # pacing for re-downloading deleted audio
 liked_v1 = 4                     # v1 (1–5): "liked" = rated at least this
 liked_v2 = 3                     # v2 (1–4): On target or Add
+liked_v3 = 3                     # v3 (1–3): Add
 cv_folds = 5                     # cross-validation folds, grouped by artist
 cv_repeats = 5                   # repeated with different artist splits
 knn_k = 7                        # nearest-neighbour prediction

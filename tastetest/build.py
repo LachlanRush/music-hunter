@@ -29,7 +29,7 @@ def percentile_ranks(values: list[float]) -> list[float]:
 def build() -> list[dict]:
     from music_hunter.names import split_artists
 
-    records, clap_track, clap_chunks = [], [], []
+    records, clap_keys, clap_track, clap_chunks = [], [], [], []
     for run, db_path, root, liked_at in RUNS:
         c = sqlite3.connect(db_path)
         c.row_factory = sqlite3.Row
@@ -37,7 +37,8 @@ def build() -> list[dict]:
         opt = lambda col: f"t.{col}" if col in cols else f"NULL AS {col}"   # v1 predates these columns
         rows = c.execute(
             "SELECT p.id AS play_id, p.rating, p.is_control, p.components, p.play_number, t.id AS track_id,"
-            f" t.artist, t.title, t.video_id, t.file_path, {opt('release_date')}, {opt('bpm')}, t.candidate_id, e.embedding"
+            f" t.artist, t.title, t.video_id, t.file_path, {opt('release_date')}, {opt('bpm')}, t.candidate_id, e.embedding,"
+            " e.model"
             " FROM plays p JOIN tracks t ON t.id = p.track_id JOIN track_embeddings e ON e.track_id = t.id"
             " WHERE p.rating IS NOT NULL ORDER BY p.play_number").fetchall()
         ranks = percentile_ranks([r["rating"] for r in rows])
@@ -57,13 +58,15 @@ def build() -> list[dict]:
                 "bpm": r["bpm"], "agreement_logged": comps.get("agreement", {}).get("raw"),
                 "audio": str(file) if file and file.exists() else None,
             })
-            emb = np.frombuffer(r["embedding"], dtype=np.float32)
-            chunks = np.stack([np.frombuffer(x[0], dtype=np.float32) for x in c.execute(
-                "SELECT embedding FROM chunk_embeddings WHERE track_id = ? ORDER BY chunk_index", (r["track_id"],))])
-            clap_track.append(emb)
-            clap_chunks.append(chunks)
+            if r["model"].startswith("laion/"):     # CLAP stored by the v1/v2 player; v3 stores MAEST (extract.py clap)
+                emb = np.frombuffer(r["embedding"], dtype=np.float32)
+                chunks = np.stack([np.frombuffer(x[0], dtype=np.float32) for x in c.execute(
+                    "SELECT embedding FROM chunk_embeddings WHERE track_id = ? ORDER BY chunk_index", (r["track_id"],))])
+                clap_keys.append(f"{run}:{r['play_id']}")
+                clap_track.append(emb)
+                clap_chunks.append(chunks)
     OUT.mkdir(parents=True, exist_ok=True)
-    save_features("clap", [r["key"] for r in records], np.stack(clap_track), clap_chunks,
+    save_features("clap", clap_keys, np.stack(clap_track), clap_chunks,
                   meta={"model": "laion/larger_clap_music", "chunk_seconds": 10})
     (OUT / "dataset.json").write_text(json.dumps(records, indent=1))
     return records

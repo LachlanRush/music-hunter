@@ -36,6 +36,8 @@ PROMPTS = [
 
 def tracks():
     data = [r for r in load_dataset() if r["audio"]]
+    if os.environ.get("TASTE_RUN"):                               # one run only (merged into existing features)
+        data = [r for r in data if r["run"] == os.environ["TASTE_RUN"]]
     if os.environ.get("TASTE_LIMIT"):                             # smoke tests: only the first N tracks
         data = data[:int(os.environ["TASTE_LIMIT"])]
     print(f"{len(data)} tracks with audio")
@@ -44,6 +46,34 @@ def tracks():
 
 def pooled(frames: np.ndarray) -> np.ndarray:
     return frames.mean(axis=-2)
+
+
+def run_clap():
+    """CLAP laion/larger_clap_music as the v1/v2 player stored it: 10 s chunks at 48 kHz (a final chunk under 5 s
+    dropped), each L2-normalised, averaged and normalised. For tracks the database has no CLAP embedding for."""
+    import torch
+    from transformers import ClapModel, ClapProcessor
+
+    name, sr = "laion/larger_clap_music", 48000
+    model = ClapModel.from_pretrained(name).to(DEVICE).eval()
+    extractor = ClapProcessor.from_pretrained(name).feature_extractor
+    keys, track, chunks = [], [], []
+    for i, r in enumerate(tracks(), 1):
+        y = decode(r["audio"], sr)
+        size, pieces = 10 * sr, []
+        for start in range(0, len(y), size):
+            if len(y) - start < 5 * sr and pieces:
+                break
+            pieces.append(y[start:start + size])
+        with torch.no_grad():
+            inp = {k: v.to(DEVICE) for k, v in extractor(pieces, sampling_rate=sr, return_tensors="pt").items()}
+            f = model.get_audio_features(**inp)
+            f = getattr(f, "pooler_output", f)
+            c = torch.nn.functional.normalize(f, dim=-1).cpu().numpy()
+        m = c.mean(0)
+        keys.append(r["key"]); track.append(m / np.linalg.norm(m)); chunks.append(c.astype(np.float16))
+        print(f"  clap {i}: {len(c)} chunks", flush=True)
+    save_features("clap", keys, np.stack(track), chunks, meta={"model": name, "chunk_seconds": 10})
 
 
 def run_muq():
@@ -401,7 +431,7 @@ def run_stems():
     save_features("stems", keys, np.array(rows), chunks, names=names, meta={"model": "htdemucs", "chunk_seconds": 10})
 
 
-RUNNERS = {"mert": run_mert, "muq": run_muq, "mulan": run_mulan, "omarrq": run_omarrq, "essentia": run_essentia, "maest": run_maest, "maest_gpu": run_maest_gpu, "mert2_30s": run_mert2_30s, "mert2_full": run_mert2_full,
+RUNNERS = {"clap": run_clap, "mert": run_mert, "muq": run_muq, "mulan": run_mulan, "omarrq": run_omarrq, "essentia": run_essentia, "maest": run_maest, "maest_gpu": run_maest_gpu, "mert2_30s": run_mert2_30s, "mert2_full": run_mert2_full,
            "signal": run_signal, "stems": run_stems}
 
 if __name__ == "__main__":
