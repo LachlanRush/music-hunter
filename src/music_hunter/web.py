@@ -278,9 +278,27 @@ def rate(body: RateBody) -> dict:
 
 @app.post("/api/skip")
 def skip(body: SkipBody) -> dict:
-    ratings.skip(db.connect(), body.play_id, body.played_seconds)
+    """Skipped, or ended without a rating: counts as [ratings] unrated_counts_as (Close), marked automatic.
+    With 0, the old rule: the track counts as shown and teaches nothing."""
+    conn = db.connect()
+    auto = CONFIG["ratings"]["unrated_counts_as"]
+    if not auto:
+        ratings.skip(conn, body.play_id, body.played_seconds)
+        worker.start_if_needed()
+        return {"ok": True, "rated": False}
+    play = conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone()
+    if play is None:
+        raise HTTPException(404, "No such play")
+    if play["rating"] is None:
+        try:
+            ratings.rate(conn, body.play_id, auto, body.played_seconds, auto=True)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        db.log_event(conn, "auto_rated", body.play_id, rating=auto)
+        reweight.after_rating(conn)
     worker.start_if_needed()
-    return {"ok": True}
+    return {**track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone()),
+            "rated": True}
 
 
 @app.post("/api/change")

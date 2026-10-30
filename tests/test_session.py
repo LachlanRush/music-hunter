@@ -159,6 +159,9 @@ def test_session(conn, monkeypatch):
 
     plays = c.execute("SELECT * FROM plays ORDER BY play_number").fetchall()
     assert len(plays) == PLAYS
+    skipped = [i for i in range(PLAYS) if i % 23 == 11]          # skipped without a rating: counted as Close, marked
+    auto = [p for p in plays if p["auto_rated"]]
+    assert len(auto) == len(skipped) and all(p["rating"] == config.CONFIG["ratings"]["unrated_counts_as"] for p in auto)
 
     # Every play logged with all components, provenance, rank, generation, timing.
     for p in plays:

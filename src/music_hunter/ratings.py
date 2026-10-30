@@ -207,7 +207,8 @@ def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = 
 
 
 def rate(conn: sqlite3.Connection, play_id: int, rating: int, played_seconds: float | None = None,
-         played_bpm: float | None = None, playback_rate: float | None = None) -> None:
+         played_bpm: float | None = None, playback_rate: float | None = None, auto: bool = False) -> None:
+    """Record a rating. auto: given by the player for a skipped or unrated track ([ratings] unrated_counts_as)."""
     _check(rating)
     play = conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone()
     if play is None or play["rating"] is not None:
@@ -220,8 +221,8 @@ def rate(conn: sqlite3.Connection, play_id: int, rating: int, played_seconds: fl
         _place(conn, play, rating)
         conn.execute("UPDATE plays SET rating = ?, rated_at = strftime('%Y-%m-%d %H:%M:%f', 'now'),"
                      " played_seconds = coalesce(?, played_seconds), played_bpm = ?, playback_rate = ?,"
-                     " skipped_at = NULL WHERE id = ?",
-                     (rating, played_seconds, played_bpm, playback_rate, play_id))
+                     " skipped_at = NULL, auto_rated = ? WHERE id = ?",
+                     (rating, played_seconds, played_bpm, playback_rate, int(auto), play_id))
         conn.execute("UPDATE tracks SET rating = ? WHERE id = ?", (rating, play["track_id"]))
 
 
@@ -263,7 +264,7 @@ def change_last_rating(conn: sqlite3.Connection, rating: int) -> int:
     db.log_event(conn, "rating_changed", play["id"], old=play["rating"], new=rating)
     with conn:
         _place(conn, play, rating)
-        conn.execute("UPDATE plays SET rating = ? WHERE id = ?", (rating, play["id"]))
+        conn.execute("UPDATE plays SET rating = ?, auto_rated = 0 WHERE id = ?", (rating, play["id"]))
         conn.execute("UPDATE tracks SET rating = ? WHERE id = ?", (rating, play["track_id"]))
     return play["id"]
 

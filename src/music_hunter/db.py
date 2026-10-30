@@ -204,6 +204,7 @@ MIGRATIONS = [
     ("candidates", "deezer_id", "INTEGER"),
     ("candidates", "pool_seed", "INTEGER REFERENCES tracks(id)"),
     ("plays", "scored_for_seed", "INTEGER"),          # v3: the seed pool whose view of the track scored best
+    ("plays", "auto_rated", "INTEGER NOT NULL DEFAULT 0"),   # 1: skipped / ended unrated, counted as [ratings] unrated_counts_as
 ]
 
 

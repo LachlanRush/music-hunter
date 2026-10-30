@@ -124,7 +124,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
     </div>
     <div class="rate" id="rate" role="group" aria-label="Rate this track"></div>
     <div class="below">
-      <div class="hint" id="hint">Keys: space play/pause · N skip · B back</div>
+      <div class="hint" id="hint">Keys: space play/pause · N skip (counts as Close) · B back</div>
       <div class="volume"><label class="label" for="volume">Volume</label>
         <input type="range" id="volume" min="0" max="100" value="100"></div>
     </div>
@@ -429,7 +429,7 @@ function renderRating() {
       : `${LABELS[prev.rating]} · press another button to change it · ${back}`;
   } else {
     $("hint").textContent = ratedCurrent === null
-      ? "Keys: space play/pause · N skip · B back"
+      ? "Keys: space play/pause · N skip (counts as Close) · B back"
       : `${LABELS[ratedCurrent]} · plays to the end, then the next track starts · N skips ahead · B back`;
   }
 }
@@ -471,9 +471,11 @@ async function rate(r) {
 async function skip() {
   if (viewing === "previous") return goForward();
   if (!current) return;
-  if (ratedCurrent === null) {
-    try { await api("/api/skip", {play_id: current.play_id, played_seconds: Math.round(played)}); }
-    catch (e) { showError(`Couldn't skip: ${e.message}`); return; }
+  if (ratedCurrent === null) {             // no rating given: the server counts it as Close (config)
+    try {
+      const res = await api("/api/skip", {play_id: current.play_id, played_seconds: Math.round(played)});
+      if (res.rated) renderReveal(res);       // shows what it was, and lets you change it
+    } catch (e) { showError(`Couldn't skip: ${e.message}`); return; }
   }
   loadNext();
   poll();
@@ -528,6 +530,7 @@ audio.addEventListener("ended", () => {
   report("ended", {rated: ratedCurrent, played_s: Math.round(played)});
   currentEnded = true;
   if (ratedCurrent !== null) loadNext();
+  else skip();                                // played to the end without a rating: counts as Close, next track
 });
 
 function setPlayIcon(playing) {

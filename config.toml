@@ -90,6 +90,9 @@ hints = ["wrong direction", "sounds right, not a keeper", "right, and save it"]
 add = 3
 positive_weights = { "3" = 2.0, "2" = 0.5 }   # Add strongest; Close a mild positive
 negative_weights = { "1" = 1.0 }              # Off only
+# A track skipped (N) or played to the end without a rating counts as this rating, marked as automatic in the log
+# (added 2026-10-30 at my request). 0 = the old rule: skipped tracks teach nothing and an unrated track waits.
+unrated_counts_as = 2                         # Close
 
 [controls]
 # SPEC.md §16.6 — a control is a random unplayed pool track; each play is one independently, at a rate the
