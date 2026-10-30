@@ -504,6 +504,19 @@ Goal: more multi-source agreement, the strongest signal in both runs.
 
 **Unrated counts as Close (2026-10-30, at my request):** a track skipped (N) or played to the end without a rating is recorded as Close (`[ratings] unrated_counts_as`), marked `auto_rated` so it can be separated in the analysis; it can still be changed like any most-recent rating. An unrated track that ends now moves on to the next one. (Replaces §3's "skipping without rating has no learning effect".) Close now plays to the end like Add (`play_to_end = [2, 3]`); only Off skips straight away.
 
+### 16.7 v3 result and deep dive across all runs (2026-10-30)
+**v3 run** (ended early at 74 plays; secret control rate 1 in 6.3, only 9 controls): ranked 1.86 vs control 1.78 (+0.08, 95% −0.57 to +0.74); plays 1–50 ranked 2.02 / Add 29%, plays 51–74 1.57 / Add 0%. No refill ran all run (one pull of 250), so the 12 Adds never became active seeds. Other models wouldn't have done better: trained on v1+v2 and tested on v3, every model scored +0.1 to +0.2 (MAEST +0.14; MuQ-MuLan, v1/v2's best, fell to ~0).
+
+**Deep dive** (`tastetest/deepdive.py`, all 267 rated plays, results in `runs/taste-test/deepdive*.json`):
+- **Across runs, ranked vs control: v1 +0.24, v2 +0.19, v3 +0.08** — consistently small. By half: first halves +0.09 percentile (ranked ahead), second halves +0.01 — the ranking's advantage is used up as it plays the pool's best first (ranked liked rate by blocks of 15: v2 67→33%, v3 27→0%), while random controls stay flat (listener standards don't drift).
+- **Closeness to the seeds' sound (MAEST) is the one strong signal, and it works as a gate, not a dial**: all plays below ~0.75 (3 nearest seeds) liked 10%, above 31%; in v2 (whose CLAP ranking didn't narrow it) 14% below vs ~58% above, flat above. Controls agree (rank percentile 0.38 below 0.78, 0.53 above). v3 played tracks were almost all above the gate already (spread 0.026 vs 0.061 in the pool), so it had nothing left to do there.
+- **Inside the gate**, pooled across runs, only small signals remain: closeness to seeds +0.19, to earlier likes +0.18, number of sources +0.17 (v1/v2 strong, v3 nil, controls nil), seed artist +0.12.
+- **No signal**: position in the source's list, which source, which seed (no seed differs significantly), tracks from Added-track seeds (pooled −0.02; v2 59% vs 44%), artist history/familiarity, duration, BPM, release year (weak +0.14), novelty across runs.
+- **Wrong way**: closeness to earlier dislikes predicts *higher* ratings in every run (pooled +0.21) — dislikes sit in the same sound region as likes, so the dislike penalty works against me; the diversity penalty also ran the wrong way. The personal model never helped (v1 −0.18, v2 −0.26, v3 −0.07).
+- **Rating consistency**: 19 songs were rated in two or three runs; their rating percentiles agree only ρ +0.21 (liked/not 78%), about the level of the best predictors — single ratings are noisy and context-dependent, which caps what any ranking can show in ~100 plays.
+- **Power**: 48 controls over three runs (per-run 95% ranges ±0.6); realistic effects (~0.1–0.3) can't be confirmed run by run.
+- **Previews**: one 30 s chunk (a Deezer preview's length) tracks full-track seed closeness at ρ 0.66–0.74 within the (already narrow) pool — usable as a gate over all ~1,700 candidates of a pull instead of the 250 downloaded.
+
 ### 16.5 Milestones (build in order, stop after each for my check)
 1. **Taste-model test** (16.1) — offline comparison of audio models and analyses on my ~190 ratings. Check: results table and a recommendation on CLAP. **Done 2026-10-30: MuQ-MuLan replaces CLAP** (MAEST check pending).
 2. **Sources and pool** — TIDAL (ISRC lookup, similar tracks), YouTube Music related, deeper lists (~100 per source per seed), multi-source-first filling, refill when multi-source tracks run out, pool 250, artist-level credit off. Check: candidate list with four-plus sources and overlap counts.
