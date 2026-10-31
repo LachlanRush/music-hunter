@@ -621,3 +621,40 @@ Three buttons (Off · Close · Add), Close as a mild like, unrated/skipped count
 4. **Injected vetoed tracks and reason tags** — secret injection rate, just-in-time audio, tag chips in the player. Check: listen-and-rate loop with tags, nothing revealed.
 5. **Results and report** — v4 measures (17.10), simulated end-to-end session. Then the run.
    **Milestones 2–5 built 2026-10-31.** Milestone 1 (archive v3, seeds) and the Add-seed rules (17.8) wait for my decision.
+
+---
+
+## 18. Version 5 plan (draft, 2026-10-31 — not built)
+
+From my notes on 2026-10-31. v5 turns the test rig into an everyday app: a playlist library with stars, "Find music" per playlist, and an always-on home on the Raspberry Pi, with the PC woken for heavy work. Where v5 differs from earlier sections, this section wins; v4's listening interface (veto, random picks, vetoed tracks slipped in, tags, Off · Close · Add) carries over inside "Find music". Now in scope (were out in §1): multiple playlists, the Pi, Wake-on-LAN.
+
+### 18.1 Playlists
+- **Home page**: my playlists (name, tracks, seeds, Find music status). **Import** by pasting a Spotify playlist link (public page, as §15.1): tracks matched on YouTube Music, downloaded and analysed, with progress. **Create** an empty playlist.
+- **Inside a playlist**: an ordinary player — play, pause, skip, **shuffle** — not blind (names and artwork shown). Tracks **ordered by stars** (5 at the top, unstarred last). **Remove** a track; **add a track to another playlist** (no search needed). A track can be in several playlists (one shared library).
+- **Stars (1–5)**: a starred track is a seed; no stars = not a seed. Changing stars takes effect at the next pull.
+- **"Added — waiting for stars"**: a section at the top of the playlist with tracks Added in Find music, until I star or remove them.
+
+### 18.2 Find music (one playlist at a time; each has its own seeds, pool and session)
+- **First click**: a confirmation ("Find music for <playlist>? This downloads and analyses its seeds and finds candidates — the PC will be woken; about N minutes"), then a **progress bar** (waking the PC → seeds → candidates → pool x of 250) ending in **Ready**.
+- **Clicking again** (and every time after): the current listening interface for that playlist — random picks that passed the veto, vetoed tracks slipped in at a secret rate, Off · Close · Add, optional reason tags. Pool top-ups and refills run in the background as in v4.
+- **Add** puts the track in the playlist's "Added — waiting for stars" section (and saves the audio to the library). Off and Close don't touch the playlist; they teach the veto as in v4.
+
+### 18.3 Seeds and weighting
+- Seeds = the playlist's starred tracks. A seed's **weight = its stars × its seed score**; pool shares follow the weights (with a floor, so a 1-star seed still contributes). **Seed score** = the decayed average rating of the tracks it suggested (prior at the middle, as §5, decay by rating count), so seeds whose suggestions do well grow and those that disappoint shrink.
+- **Adds**: pulled for **once, straight away** (their suggestions join the pool, weighted as a 3-star seed for that pull), then treated as unrated — not a seed for later pulls — until I star them. (Default weight configurable.)
+
+### 18.4 Pi and PC split
+- **Pi (always on; Home Assistant add-on)**: the web app, database, playlists and ratings, the audio library (playlists and the Find music pools), playback, Spotify link reading, the job queue, and small downloads (bringing back a vetoed track's audio). Reached over Tailscale on any device (and in Home Assistant's sidebar).
+- **PC (woken when there's work)**: everything heavy — YouTube matching and downloads in bulk, loudness, BPM, MAEST analysis (GPU), candidate pulls. When jobs are queued (import, Find music, refills, top-ups, an Add's pull), the Pi asks Home Assistant to wake the PC (its Wake-on-LAN integration). A worker on the PC starts on boot, takes the queued jobs, sends audio, fingerprints and metadata back to the Pi, and **disconnects when the queue is empty** — the PC then turns itself off.
+- While the PC is off, everything already downloaded keeps working: playlists play, Find music serves the existing pool; new work waits for the next wake.
+- Pi: Raspberry Pi 5, 4 GB RAM, 468 GB SSD (~400 GB free; shared with Home Assistant OS). Audio for a 250-track pool plus playlists is a few GB.
+
+### 18.5 Week-long trial
+- One week of everyday use for more data. Per playlist session: v4's measures (picks vs vetoed tracks slipped in, every veto rule after the fact, Off/Add over time, tags), plus how seed weights moved and which seeds produced the Adds. Results sealed until the trial ends (`end-run`).
+
+### 18.6 Milestones (build in order, stop after each for my check)
+1. **Library and playlists** (on the PC first, usable over Tailscale) — archive v3 to `runs/v3/`; data model (playlists, playlist tracks with stars and status, one shared library); home page; Spotify import with progress; stars and ordering; remove; add to another playlist; playlist playback with shuffle.
+2. **Find music per playlist** — sessions per playlist (own seeds, pool, candidates, plays); first-click confirmation and progress bar, then the listening interface; seeds from stars with stars × seed score weighting; Adds into "Added — waiting for stars" with their one-off pull.
+3. **Pi app and PC worker** — job queue and worker API; the PC worker (starts on boot, disconnects when done); audio and fingerprint transfer; waking the PC through Home Assistant.
+4. **Home Assistant add-on** — packaging for the Pi, install steps for me, checked on my Pi.
+5. **Trial week.**
