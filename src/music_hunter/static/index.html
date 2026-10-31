@@ -169,7 +169,7 @@ async function prefetchUpcoming() {
   if (!PRELOAD || viewing !== "current") return;
   try {
     const up = await api("/api/upcoming");
-    tempoPlayer.prepare(up.track_id, up.rate);             // Same BPM: its stretched copy, rendered ahead
+    tempoPlayer.prepare(up.track_id, up.copy_rate);        // Same BPM: its copy, ready ahead (even while off)
     if (blobs.has(up.track_id) || preloading === up.track_id) return;
     preloading = up.track_id;
     const res = await fetch(up.audio);

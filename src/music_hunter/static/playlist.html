@@ -45,7 +45,7 @@ li.playing .cover-btn { outline: 2px solid var(--accent); outline-offset: 1px; }
 .t { min-width: 0; }
 .t b { display: block; font: 600 14px/1.3 var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .t span { display: block; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.stars { display: flex; }
+.stars { display: flex; gap: 6px; margin-left: 16px; }
 .stars button { border: 0; background: none; padding: 4px 2px; font-size: 26px; line-height: 1; color: var(--line); }
 .stars button.on { color: var(--accent); }
 .more, .pl-menu { position: relative; }
@@ -69,8 +69,9 @@ li.playing .cover-btn { outline: 2px solid var(--accent); outline-offset: 1px; }
   font: 400 11px var(--mono); color: var(--muted); }
 input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 .empty { color: var(--muted); }
-li { cursor: pointer; }
-li.unavailable { cursor: default; }
+li { margin-inline: -8px; padding-inline: 8px; border-radius: 6px; }
+@media (hover: hover) { li[data-row]:not(.unavailable):hover { background: var(--surface); } }
+li .cover-btn { cursor: default; }
 .btn.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .round.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .volume { display: none; width: 90px; }
@@ -84,6 +85,7 @@ li.unavailable { cursor: default; }
 .error { color: var(--bad); font-size: 14px; }
 @media (max-width: 520px) {
   li { grid-template-columns: 40px minmax(0, 1fr) auto auto; gap: 8px; }
+  .stars { gap: 3px; margin-left: 8px; }
   .stars button { font-size: 22px; padding: 4px 1px; }
   .cover { width: 84px; height: 84px; }
 }

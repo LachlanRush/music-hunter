@@ -271,9 +271,10 @@ def _find_rate(conn, bpm) -> dict:
     from . import tempo
 
     if db.SESSION.get() is None:
-        return {"rate": 1.0, "tempo_note": ""}
-    rate, note = tempo.rate_for(bpm, tempo.session_settings(conn))
-    return {"rate": rate, "tempo_note": note}
+        return {"rate": 1.0, "tempo_note": "", "copy_rate": 1.0}
+    s = tempo.session_settings(conn)
+    rate, note = tempo.rate_for(bpm, s)
+    return {"rate": rate, "tempo_note": note, "copy_rate": tempo.rate_for(bpm, s, ignore_off=True)[0]}
 
 
 def track_info(conn, play) -> dict:
@@ -412,7 +413,8 @@ def set_playlist_tempo(playlist_id: int, body: TempoBody) -> dict:
     _playlist_or_404(conn, playlist_id)
     if body.bpm is not None and not 60 <= body.bpm <= 200:
         raise HTTPException(400, "BPM between 60 and 200")
-    tempo.save(conn, tempo.playlist_key(playlist_id), body.on, body.bpm)
+    bpm = body.bpm if "bpm" in body.model_fields_set else tempo.playlist_settings(conn, playlist_id)["bpm"]
+    tempo.save(conn, tempo.playlist_key(playlist_id), body.on, bpm)      # bpm left out: keep the target
     return _tempo_view(tempo.sync_playlist(conn, playlist_id))
 
 
@@ -907,7 +909,8 @@ def set_find_tempo(body: TempoBody) -> dict:
     if body.bpm is not None and not 60 <= body.bpm <= 200:
         raise HTTPException(400, "BPM between 60 and 200")
     conn = db.connect()
-    tempo.save(conn, "same_bpm", body.on, body.bpm)
+    bpm = body.bpm if "bpm" in body.model_fields_set else tempo.session_settings(conn)["bpm"]
+    tempo.save(conn, "same_bpm", body.on, bpm)
     tempo.sync_session(conn, db.SESSION.get())               # copies at another target are deleted
     return _tempo_view(tempo.session_settings(conn))
 

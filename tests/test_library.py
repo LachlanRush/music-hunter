@@ -139,6 +139,12 @@ def test_same_bpm_render(lib):
     rate2 = client.get(f"/api/playlists/{pid}").json()["tracks"][0]["rate"]
     assert wait(rate2)["state"] == "ready"
     assert [p.name for p in folder.glob("*.webm")] == [f"pl{pid}-{t}-{rate2:.3f}.webm"]
-    client.put(f"/api/playlists/{pid}/tempo", json={"on": False})                  # off: none kept
-    assert not list(folder.glob("*.webm"))
+    off = client.put(f"/api/playlists/{pid}/tempo", json={"on": False}).json()      # off: the copy stays ready
+    assert off["bpm"] == 138 and client.get(f"/api/playlists/{pid}").json()["tracks"][0]["rate"] == 1
+    assert [p.name for p in folder.glob("*.webm")] == [f"pl{pid}-{t}-{rate2:.3f}.webm"]
     assert client.get(f"/tempo/{t}", params={"rate": 1.05}).status_code == 400      # which playlist?
+    from music_hunter import tempo
+    for _ in range(100):                                                            # nothing left rendering
+        if not tempo.RENDERER.queue and tempo.RENDERER.current is None:
+            break
+        time.sleep(0.05)

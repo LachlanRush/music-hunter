@@ -5,8 +5,10 @@ Band filter and kept in cache/tempo/. Each playlist and each Find music session 
 target BPM; default: the playlist's median BPM), stored on the server:
 - a playlist with Same BPM on gets a copy of every track at its target, rendered in the background (new tracks too);
 - Find music gets copies on demand: the track playing first, the next one ahead;
-- only one target per playlist / session is kept: changing it deletes the old copies, and Find music keeps copies
-  only for tracks not yet played or among the last few plays. [tempo] cache_mb caps the folder as a backstop.
+- copies are made at the target even while Same BPM is off, so turning it on is instant;
+- only one target per playlist / session is kept: changing it deletes the old copies (turning it off doesn't), and
+  Find music keeps copies only for tracks not yet played or among the last few plays. [tempo] cache_mb caps the
+  folder as a backstop.
 Until a track's copy is ready the original plays, and the player swaps the copy in at the same point in the music.
 """
 
@@ -44,9 +46,10 @@ def settings(conn, key: str, default_target: float) -> dict:
     return {**s, "target": s["bpm"] or default_target}
 
 
-def rate_for(bpm: float | None, s: dict) -> tuple[float, str]:
-    """(playback rate, note) for a track: the reading of its BPM closest to the target; 1 if off or too far."""
-    if not s["on"]:
+def rate_for(bpm: float | None, s: dict, ignore_off: bool = False) -> tuple[float, str]:
+    """(playback rate, note) for a track: the reading of its BPM closest to the target; 1 if off or too far.
+    `ignore_off`: the rate its copy is made at (copies are kept ready even while Same BPM is off)."""
+    if not s["on"] and not ignore_off:
         return 1.0, ""
     target, max_stretch = s["target"], CONFIG["bpm"]["max_stretch"]
     if not bpm or not target:
@@ -212,13 +215,12 @@ def sync_playlist(lib, pid: int) -> dict:
     s = playlist_settings(lib, pid)
     scope = scope_for(None, pid)
     wanted: set[tuple[int, float]] = set()
-    if s["on"]:
-        for t in lib.execute("SELECT t.id, t.bpm, t.file_path FROM playlist_tracks pt JOIN tracks t"
-                             " ON t.id = pt.track_id WHERE pt.playlist_id = ? AND t.file_path IS NOT NULL", (pid,)):
-            rate, _ = rate_for(t["bpm"], s)
-            if rate != 1 and resolve(t["file_path"]).exists():
-                wanted.add((t["id"], rate))
-                status(scope, t["id"], t["file_path"], rate, urgent=False)
+    for t in lib.execute("SELECT t.id, t.bpm, t.file_path FROM playlist_tracks pt JOIN tracks t"
+                         " ON t.id = pt.track_id WHERE pt.playlist_id = ? AND t.file_path IS NOT NULL", (pid,)):
+        rate, _ = rate_for(t["bpm"], s, ignore_off=True)
+        if rate != 1 and resolve(t["file_path"]).exists():
+            wanted.add((t["id"], rate))
+            status(scope, t["id"], t["file_path"], rate, urgent=False)
     _prune(scope, wanted)
     return s
 
@@ -231,13 +233,12 @@ def sync_session(sess, session: int) -> None:
     played = {r[0] for r in sess.execute("SELECT DISTINCT track_id FROM plays")} | \
         {r[0] for r in sess.execute("SELECT id FROM tracks WHERE veto_state = 'dropped'")}
     wanted = set()
-    if s["on"]:
-        for f, tid, rate in _copies(scope):
-            if tid in played and tid not in recent:
-                continue
-            bpm = sess.execute("SELECT bpm FROM tracks WHERE id = ?", (tid,)).fetchone()
-            if bpm and rate_for(bpm[0], s)[0] == rate:
-                wanted.add((tid, rate))
+    for f, tid, rate in _copies(scope):
+        if tid in played and tid not in recent:
+            continue
+        bpm = sess.execute("SELECT bpm FROM tracks WHERE id = ?", (tid,)).fetchone()
+        if bpm and rate_for(bpm[0], s, ignore_off=True)[0] == rate:
+            wanted.add((tid, rate))
     _prune(scope, wanted)
 
 
