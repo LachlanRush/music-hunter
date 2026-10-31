@@ -537,3 +537,58 @@ Decided 2026-10-29: no artist-preference factor (evidence weak: v1 +0.14, v2 −
 - **The run ends by itself** when 25 controls have been rated: the player shows "run complete".
 - **Sealed results**: until the run completes, the results page and `report` show only that a run is in progress — no ranked/control counts or comparisons, which would reveal the rate. Everything is revealed at completion (and stays logged throughout).
 - **Control ratings count for learning**: likes and dislikes (positive/negative sets), seed and source credit, and the personal model (if kept). Controls still never become seeds, so random picks don't steer the sources. This doesn't bias the comparison, because which plays are controls stays random.
+
+---
+
+## 17. Version 4 plan (draft, 2026-10-31 — not built)
+
+Based on the deep dive (§16.7). Where v4 differs from earlier sections, this section wins.
+
+### 17.0 Idea in one line
+Gather many candidates from the seeds, **veto the bottom** (wrong sound, little support), **pick at random from the rest**, refill from my Adds, and measure it honestly over one long run. Telling the right sound area from the wrong one is learnable; telling good from great within it isn't (with these signals and ratings), so v4 stops trying to rank the top.
+
+### 17.1 Candidates (as v3)
+- Same five sources (Last.fm, YouTube radio and "You might also like", Deezer, TIDAL), ~100 suggestions per source per seed, same-artist seeds counted once per source, YouTube matching when picked.
+- **All candidates are analysed, not only 250**: each candidate's **30 s Deezer preview** (found by ISRC or name + length when it didn't come from Deezer) is embedded with MAEST — one chunk, about the cost of a search. Candidates with no preview are analysed from the full track instead. (A single chunk tracks full-track seed closeness at ρ 0.66–0.74; enough for a pass/fail veto.)
+- Full audio is downloaded and analysed **just in time**, for the next few picks only (the full-track fingerprint then replaces the preview's).
+
+### 17.2 Veto
+- **Veto score** = equal-weight mean of three within-candidate percentiles (nothing fitted):
+  1. closeness to the 3 nearest seeds (original seeds and Adds),
+  2. closeness to tracks liked earlier in the run (Close 0.5, Add 2; left out until there are likes),
+  3. number of distinct sources that suggested it.
+- The **bottom 20%** is vetoed (config). Recomputed after every rating, since likes change it.
+- Closeness to Offs is **not** used (it predicts higher ratings — Offs sit in the same sound area as likes).
+
+### 17.3 Picking
+- Each pick: a seed by share (equal shares; per-seed ownership as in v3), then a **random** unvetoed, unplayed candidate owned by that seed. No ranking, so nothing is used up early (no burst-then-fade).
+- Removed: all v3 score components and weights (audio match, dislike, diversity, personal model, BPM, year, seed and source averages, seed match), re-weighting, seed-average pool shares, the multi-source refill rule.
+
+### 17.4 Refill from Adds
+- Every Add becomes a seed. A pull runs when 5 seeds haven't been pulled for yet, or 15 plays after the last pull if at least one has. New candidates merge in and are previewed and vetoed like the rest.
+
+### 17.5 Controls and run length
+- A control is a **random candidate from all candidates, vetoed ones included** ("what the sources give"), so picks vs controls measures exactly what the veto adds. Each control also logs whether it would have been vetoed, so vetoed vs kept can be compared directly within the controls.
+- Secret control rate drawn per run between **1 in 3 and 1 in 2** (v3: 1 in 4 to 1 in 10), each play independently; never shown.
+- **One long run, no system changes during it.** It ends by itself at **100 rated controls** (about 200–300 plays); results sealed until then, as in v3. (Confirming a 0.2 SD difference needs ~390 ratings per group, 0.3 SD ~175, 0.5 SD ~63 — so v4 is judged on its expected effects: Off rate of picks vs controls, and vetoed vs kept controls, both large enough to show at this size.)
+- Control ratings count for learning (likes for the veto), but controls never become seeds — as in v3.
+
+### 17.6 Reason tags (optional, under the rating)
+- After rating, a row of optional chips under the buttons; tap any that fit, or none:
+  - Off / Close: `vocals` · `lyrics` · `too repetitive` · `wrong energy` · `the drop` · `bassline` · `too long` · `know it already`
+  - Add: `great vocals` · `groove` · `energy`
+- Several allowed; changeable with the most recent rating. **Logged only** in v4 — no effect on the veto or picks. After the run: which reasons dominate, and whether Offs for non-sound reasons (lyrics, know it already) should stay out of the sound-based learning.
+
+### 17.7 Kept from v3
+Three buttons (Off · Close · Add), Close as a mild like, unrated/skipped counts as Close, Close and Add play to the end, MAEST fingerprints, blind listening (names and artwork after rating), preloading the next track, tempo locked for the run, volume, phone access over Tailscale, sealed results.
+
+### 17.8 Results
+- Off / Close / Add rates **over the whole run** (all plays) — the aim is a steady rate, no fade.
+- Picks vs controls (Off rate, Add rate, average); controls vetoed vs kept; ratings by number of sources and by seed; reason tags by rating; refills and how many Adds became seeds.
+
+### 17.9 Milestones (build in order, stop after each for my check)
+1. **Fresh run setup** — archive v3 to `runs/v3/`, seeds (to decide: the same 10 or new), v4 config.
+2. **Previews for all candidates** — Deezer preview lookup, MAEST on previews, full-track analysis only when picked. Check: preview coverage of a real pull, and preview vs full-track agreement.
+3. **Veto, random picking, refill from Adds** — old scoring and re-weighting removed. Check: veto shares on a real pull; a simulated session shows a steady pick quality and refills from Adds.
+4. **Controls and reason tags** — controls from all candidates at the new rate, run end at 100 controls; optional tag chips in the player. Check: listen-and-rate loop with tags, nothing revealed.
+5. **Results and report** — v4 measures (17.8), simulated end-to-end session. Then the long run.
