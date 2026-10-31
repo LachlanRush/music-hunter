@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/tempo.js"></script>
 <style>
 body { padding-bottom: 140px; }
 .head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: end; }
@@ -41,7 +42,7 @@ li.playing .cover-btn { outline: 2px solid var(--accent); outline-offset: 1px; }
 .t b { display: block; font: 600 14px/1.3 var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .t span { display: block; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stars { display: flex; }
-.stars button { border: 0; background: none; padding: 2px 1px; font-size: 18px; line-height: 1; color: var(--line); }
+.stars button { border: 0; background: none; padding: 4px 2px; font-size: 26px; line-height: 1; color: var(--line); }
 .stars button.on { color: var(--accent); }
 .more, .pl-menu { position: relative; }
 .pl-menu .menu { left: 0; right: auto; }
@@ -73,7 +74,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 .error { color: var(--bad); font-size: 14px; }
 @media (max-width: 520px) {
   li { grid-template-columns: 40px minmax(0, 1fr) auto auto; gap: 8px; }
-  .stars button { font-size: 16px; }
+  .stars button { font-size: 22px; padding: 4px 1px; }
   .cover { width: 84px; height: 84px; }
 }
 </style>
@@ -81,7 +82,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 <body>
 <main>
   <header>
-    <nav><a class="backlink" href="/" aria-label="Back to playlists">←</a><a class="brand" href="/">MUSIC HUNTER</a></nav>
+    <nav><a class="brand" href="/">MUSIC HUNTER</a><a class="backlink" href="/" aria-label="Back to playlists">←</a></nav>
     <div class="status" id="status"></div>
   </header>
 
@@ -331,8 +332,10 @@ async function playAt(i) {
   }
   if (ctx.state === "suspended") await ctx.resume();
   gainNode.gain.value = Math.pow(10, (t.gain_db || 0) / 20);       // loudness normalisation
-  audio.src = t.audio;
-  applyTempo();
+  audio.src = await tempoPlayer.start(t.id, t.audio, tempoPlan(t).rate);
+  if (queue[pos] !== t) return;                                   // another track was chosen meanwhile
+  const nextT = queue[pos + 1];
+  if (nextT) tempoPlayer.prepare(nextT.id, tempoPlan(nextT).rate); // render the next one's copy ahead
   $("player").hidden = false;
   $("p-title").textContent = t.title; $("p-artist").textContent = t.artist;
   $("p-art").src = t.art || ""; $("p-art").style.visibility = t.art ? "visible" : "hidden";
@@ -369,45 +372,32 @@ $("shuffle").addEventListener("click", () => {
 });
 $("play-all").addEventListener("click", () => { shuffle = false; $("shuffle").classList.remove("on"); startQueue(null); });
 $("shuffle-all").addEventListener("click", () => { shuffle = true; $("shuffle").classList.add("on"); startQueue(null); });
-// --- Same BPM: every track time-stretched to one tempo, pitch kept (as Match tempo in Find music) -------------
-// A track's measured BPM can be a half, double or 2:3 reading of its real tempo, so the reading closest to the
-// target is used; a track that would need more than ±max_stretch plays at its own tempo.
-const TEMPO_KEY = `tempo-${PID}`;
-let tempo = {on: false, bpm: null};
-try { tempo = {...tempo, ...JSON.parse(localStorage.getItem(TEMPO_KEY) || "{}")}; } catch (e) {}
-function saveTempo() { try { localStorage.setItem(TEMPO_KEY, JSON.stringify(tempo)); } catch (e) {} }
-function medianBpm() {
-  const b = (data ? data.tracks : []).map((t) => t.bpm).filter(Boolean).sort((x, y) => x - y);
-  return b.length ? Math.round(b[Math.floor(b.length / 2)] * 2) / 2 : 128;
-}
-function rateFor(t) {
-  if (!tempo.on || !t.bpm) return {rate: 1, note: tempo.on ? "tempo unknown: original speed" : ""};
-  const target = tempo.bpm || medianBpm(), max = (data && data.max_stretch) || 0.12;
-  const reading = [1, 2, 0.5, 1.5, 2 / 3].map((f) => t.bpm * f).sort((a, b) => Math.abs(target / a - 1) - Math.abs(target / b - 1))[0];
-  const r = target / reading;
-  if (Math.abs(r - 1) > max) return {rate: 1, note: `original tempo (${Math.round(reading)} BPM is beyond ±${Math.round(max * 100)}%)`};
-  const pct = Math.round((r - 1) * 1000) / 10;
-  return {rate: r, note: `${target} BPM (${pct >= 0 ? "+" : ""}${pct}%)`};
-}
-function applyTempo() {
+// --- Same BPM (static/tempo.js): stretched copies rendered on the server, shared with this playlist's Find music ---
+let tempo = SameBpm.settings(PID);
+const tempoPlayer = SameBpm.player(audio, "", () => showTempoNote());
+const playlistBpm = () => SameBpm.median((data ? data.tracks : []).map((t) => t.bpm));
+function tempoPlan(t) { return SameBpm.plan(t.bpm, tempo, playlistBpm(), (data && data.max_stretch) || 0.12); }
+function showTempoNote() {
   const t = queue[pos];
-  audio.preservesPitch = audio.mozPreservesPitch = audio.webkitPreservesPitch = true;
-  const {rate, note} = t ? rateFor(t) : {rate: 1, note: ""};
-  audio.playbackRate = rate;
-  $("p-tempo").textContent = note;
+  if (!t) { $("p-tempo").textContent = ""; return; }
+  const p = tempoPlan(t), waiting = p.rate !== 1 && tempoPlayer.rate() !== p.rate;
+  $("p-tempo").textContent = waiting ? `${p.note} · getting it ready…` : p.note;
+}
+function retune() {
+  const t = queue[pos];
+  if (t) tempoPlayer.retune(t.id, t.audio, tempoPlan(t).rate);
+  showTempoNote();
 }
 function renderTempo() {
   $("same-bpm").checked = tempo.on;
-  $("bpm-target").value = tempo.bpm || medianBpm();
+  $("bpm-target").value = tempo.bpm || playlistBpm();
   $("bpm-target").disabled = !tempo.on;
-  $("tempo-note").textContent = tempo.on && !tempo.bpm ? "the playlist's median" : "";
 }
-$("same-bpm").addEventListener("change", () => { tempo.on = $("same-bpm").checked; saveTempo(); renderTempo(); applyTempo(); });
+$("same-bpm").addEventListener("change", () => { tempo.on = $("same-bpm").checked; SameBpm.store(PID, tempo); renderTempo(); retune(); });
 $("bpm-target").addEventListener("change", () => {
   const v = Number($("bpm-target").value);
-  tempo.bpm = v >= 60 && v <= 200 ? v : null; saveTempo(); renderTempo(); applyTempo();
+  tempo.bpm = v >= 60 && v <= 200 ? v : null; SameBpm.store(PID, tempo); renderTempo(); retune();
 });
-audio.addEventListener("loadedmetadata", applyTempo);             // some browsers reset the rate on a new source
 
 load().then(renderTempo);
 loadFind();

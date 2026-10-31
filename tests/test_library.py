@@ -94,3 +94,29 @@ def test_playlist_api(lib, monkeypatch):
         assert client.get(f"/api/playlists/{pid}").json()["tracks"] == []
         assert client.get(f"/api/playlists/{other}").json()["tracks"][0]["id"] == t
         assert client.post("/api/playlists", json={"spotify_url": "not a link"}).status_code == 400
+
+
+def test_same_bpm_render(lib):
+    """Same BPM: a stretched copy is rendered on the server in the background, then served."""
+    import subprocess
+    import time
+
+    from fastapi.testclient import TestClient
+    from music_hunter import web
+
+    conn, track, root = lib
+    t = track("Tone")
+    f = root / "library" / "Someone - Tone.webm"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+                    "-c:a", "libopus", str(f)], check=True)
+    client = TestClient(web.app)
+    assert client.get(f"/tempo/{t}", params={"rate": 3}).status_code == 400
+    st = client.get(f"/tempo/{t}", params={"rate": 1.05}).json()
+    for _ in range(100):
+        if st["state"] != "rendering":
+            break
+        time.sleep(0.1)
+        st = client.get(f"/tempo/{t}", params={"rate": 1.05}).json()
+    assert st["state"] == "ready", st
+    r = client.get(st["url"])
+    assert r.status_code == 200 and len(r.content) > 1000

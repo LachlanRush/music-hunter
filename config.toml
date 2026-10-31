@@ -98,9 +98,10 @@ unrated_counts_as = 2                         # Close
 [ratings.tags]
 # SPEC.md §17.7 (v4) — optional reason tags, offered after rating (under the last-rated track); several allowed,
 # changeable with the most recent rating. Logged only: no effect on the veto or picks. Keyed by rating.
-"1" = ["vocals", "lyrics", "too repetitive", "wrong energy", "the drop", "bassline", "too long", "know it already"]
-"2" = ["vocals", "lyrics", "too repetitive", "wrong energy", "the drop", "bassline", "too long", "know it already"]
-"3" = ["great vocals", "groove", "energy"]
+# v5 (2026-10-31): five bad, five good, not overlapping; Close gets both (what was right and what wasn't).
+"1" = ["vocals", "lyrics", "boring", "wrong energy", "harsh sound"]
+"2" = ["great vocals", "groove", "melody", "energy", "the drop", "vocals", "lyrics", "boring", "wrong energy", "harsh sound"]
+"3" = ["great vocals", "groove", "melody", "energy", "the drop"]
 
 [find]
 # SPEC.md §18.2–18.3 (v5) — Find music per playlist
@@ -247,6 +248,8 @@ stall_log_ms = 250               # v3: only log playback stalls at least this lo
 locked = true
 target_bpm = 0.0                 # 0 = no target set: bpm_match uses the median BPM of seeds and liked tracks
 match_tempo = false              # play tracks time-stretched to the target (pitch kept), within [bpm] max_stretch
+bitrate_kbps = 160               # v5 Same BPM: stretched copies (Rubber Band, rendered on the server) as Opus
+cache_mb = 2000                  # … kept in cache/tempo/, oldest removed beyond this
 
 [versions]
 # Bracket or " - " suffix labels that mark a length/edit version of the SAME song.

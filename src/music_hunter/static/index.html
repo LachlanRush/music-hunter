@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/tempo.js"></script>
 <style>
 /* Now playing */
 .now { display: grid; gap: 18px; }
@@ -86,7 +87,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 <body>
 <main>
   <header>
-    <nav><a class="backlink" id="nav-back" href="/" aria-label="Back">←</a><a class="brand" href="/">MUSIC HUNTER</a><span class="crumb" id="crumb"></span></nav>
+    <nav><a class="brand" href="/">MUSIC HUNTER</a><a class="backlink" id="nav-back" href="/" aria-label="Back">←</a><span class="crumb" id="crumb"></span></nav>
     <div class="status" id="status">Connecting…</div>
   </header>
 
@@ -124,8 +125,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
     <div class="rate" id="rate" role="group" aria-label="Rate this track"></div>
     <div class="hint" id="hint"></div>
     <div class="tempo">
-      <label><input type="checkbox" id="match-tempo"> Match tempo</label>
-      <label>Target <input type="number" id="target-bpm" min="40" max="220" step="0.5" aria-label="Target BPM"> BPM</label>
+      <label><input type="checkbox" id="same-bpm"> Same BPM</label>
+      <label>at <input type="number" id="bpm-target" min="60" max="200" step="0.5" inputmode="decimal" aria-label="Target BPM"> BPM</label>
       <span class="tempo-note" id="tempo-note"></span>
     </div>
     <div class="error" id="error" hidden></div>
@@ -145,6 +146,9 @@ if (PLAYLIST) {
   fetch(`/api/playlists/${PLAYLIST}`).then((r) => r.json()).then((p) => {
     $("crumb").textContent = `Finding music for ${p.name}`;
     document.title = `Find music · ${p.name} · Music Hunter`;
+    playlistBpm = SameBpm.median(p.tracks.map((t) => t.bpm));
+    maxStretch = p.max_stretch || maxStretch;
+    renderTempo();
   }).catch(() => {});
 }
 let LABELS = {};                        // rating -> button label, from config via /api/state
@@ -158,6 +162,7 @@ async function prefetchUpcoming() {
   if (!PRELOAD || viewing !== "current") return;
   try {
     const up = await api("/api/upcoming");
+    tempoPlayer.prepare(up.track_id, tempoPlan(up).rate);   // Same BPM: its stretched copy, rendered ahead
     if (blobs.has(up.track_id) || preloading === up.track_id) return;
     preloading = up.track_id;
     const res = await fetch(up.audio);
@@ -224,7 +229,7 @@ function showError(msg) { $("error").textContent = msg; $("error").hidden = !msg
 async function poll() {
   try {
     const s = await api("/api/state");
-    const busy = s.worker.state === "running" ? ` · <span class="busy">${s.worker.message}</span>` : "";
+    const busy = "";
     const err = s.worker.state === "error" ? ` · <span class="neg">Pool worker failed: ${s.worker.message}</span>` : "";
     $("status").innerHTML = `${s.unplayed} of ${s.pool_target} in the pool · ${s.rated} rated${busy}${err}`;
     if (!started) renderGate(s);
@@ -299,10 +304,12 @@ async function loadTrack(track, startAt, alreadyPlayed, autoplay = true) {
   showNames(track);
   gainNode.gain.value = Math.pow(10, track.gain_db / 20);   // loudness normalisation
   const cached = blobs.get(track.track_id);
-  startedFromMemory = !!cached;
-  audio.src = cached || track.audio;
-  if (startAt) audio.addEventListener("loadedmetadata", () => { audio.currentTime = startAt; }, {once: true});
-  applyTempo(track);
+  const src = await tempoPlayer.start(track.track_id, cached || track.audio, tempoPlan(track).rate);
+  if (onAir() !== track) return;                       // moved on meanwhile
+  startedFromMemory = src === cached;
+  audio.src = src;
+  const at = startAt / tempoPlayer.rate();             // startAt is in the original's time
+  if (at) audio.addEventListener("loadedmetadata", () => { audio.currentTime = at; }, {once: true});
   loadStart = performance.now(); awaitingFirstPlay = autoplay; stallStart = null;
   $("seek").value = 0;
   $("dur").textContent = fmt(track.duration_s);
@@ -316,58 +323,36 @@ async function loadTrack(track, startAt, alreadyPlayed, autoplay = true) {
   }
 }
 
-// --- tempo: target BPM steers ranking (server) and, with "Match tempo", playback speed ---------
-let settings = {target_bpm: null, match_tempo: false, effective_target_bpm: null, max_stretch: 0.12};
-
-async function loadSettings() {
-  try { settings = await api("/api/settings"); } catch (e) { return; }
-  $("match-tempo").checked = settings.match_tempo;
-  $("target-bpm").value = settings.target_bpm ?? "";
-  $("match-tempo").disabled = $("target-bpm").disabled = !!settings.locked;   // held steady for the run
-  $("target-bpm").title = settings.locked ? "Locked for this run: change it in config.toml [tempo]" : "";
-  $("target-bpm").placeholder = settings.effective_target_bpm ? settings.effective_target_bpm.toFixed(1) : "";
-  if (onAir()) applyTempo(onAir());
+// --- Same BPM (static/tempo.js): shared with the playlist page; stretched copies rendered on the server ---------
+let tempo = SameBpm.settings(PLAYLIST), playlistBpm = null, maxStretch = 0.12;
+const tempoPlayer = SameBpm.player(audio, BASE, () => showTempoNote());
+function tempoPlan(track) { return SameBpm.plan(track.bpm, tempo, playlistBpm, maxStretch); }
+function showTempoNote() {
+  const t = onAir();
+  if (!t) { $("tempo-note").textContent = ""; return; }
+  const p = tempoPlan(t), waiting = p.rate !== 1 && tempoPlayer.rate() !== p.rate;
+  $("tempo-note").textContent = waiting ? `${p.note} · getting it ready…` : p.note;
 }
-
-async function saveSettings() {
-  const v = $("target-bpm").value.trim();
-  try {
-    settings = await api("/api/settings", {target_bpm: v === "" ? null : Number(v), match_tempo: $("match-tempo").checked});
-  } catch (e) { showError(`Couldn't save the tempo setting: ${e.message}`); return; }
-  $("target-bpm").placeholder = settings.effective_target_bpm ? settings.effective_target_bpm.toFixed(1) : "";
-  if (onAir()) applyTempo(onAir());
+function renderTempo() {
+  $("same-bpm").checked = tempo.on;
+  $("bpm-target").value = tempo.bpm || playlistBpm || "";
+  $("bpm-target").disabled = !tempo.on;
 }
-
-function applyTempo(track) {
-  let rate = 1, note = "";
-  const target = settings.effective_target_bpm;
-  if (settings.match_tempo && target && track.bpm) {
-    const r = target / track.bpm, pct = Math.round((r - 1) * 100);
-    if (Math.abs(r - 1) <= settings.max_stretch) {
-      rate = r; note = `Playing at ${target.toFixed(1)} BPM (${pct >= 0 ? "+" : ""}${pct}%)`;
-    } else {
-      note = `Original tempo: matching needs ${pct >= 0 ? "+" : ""}${pct}%, beyond ±${Math.round(settings.max_stretch * 100)}%`;
-    }
-  } else if (settings.match_tempo && !track.bpm) {
-    note = "Original tempo: no BPM measured for this track";
-  }
-  if (settings.locked) note = note ? `${note} · locked for this run` : "Tempo locked for this run";
-  audio.preservesPitch = audio.mozPreservesPitch = audio.webkitPreservesPitch = true;
-  audio.defaultPlaybackRate = rate;
-  audio.playbackRate = rate;
-  $("tempo-note").textContent = note;
+function retune() {
+  const t = onAir();
+  if (t) tempoPlayer.retune(t.track_id, blobs.get(t.track_id) || t.audio, tempoPlan(t).rate);
+  showTempoNote();
 }
-$("match-tempo").addEventListener("change", saveSettings);
-$("target-bpm").addEventListener("change", saveSettings);
-$("target-bpm").addEventListener("focus", () => {        // start from the default target, not the box's minimum
-  if ($("target-bpm").value === "" && settings.effective_target_bpm) $("target-bpm").value = settings.effective_target_bpm.toFixed(1);
+$("same-bpm").addEventListener("change", () => { tempo.on = $("same-bpm").checked; SameBpm.store(PLAYLIST, tempo); renderTempo(); retune(); });
+$("bpm-target").addEventListener("change", () => {
+  const v = Number($("bpm-target").value);
+  tempo.bpm = v >= 60 && v <= 200 ? v : null; SameBpm.store(PLAYLIST, tempo); renderTempo(); retune();
 });
-$("target-bpm").addEventListener("keydown", (e) => { if (e.key === "Enter") $("target-bpm").blur(); });
+$("bpm-target").addEventListener("keydown", (e) => { if (e.key === "Enter") $("bpm-target").blur(); });
 
 function tempoReport() {
-  const t = onAir();
-  return {played_bpm: t && t.bpm ? Math.round(t.bpm * audio.playbackRate * 10) / 10 : null,
-          playback_rate: Math.round(audio.playbackRate * 1000) / 1000};
+  const t = onAir(), rate = tempoPlayer.rate();
+  return {played_bpm: t && t.bpm ? (rate !== 1 ? tempoPlan(t).target : t.bpm) : null, playback_rate: rate};
 }
 
 // Artist and title arrive only once a track is rated (server setting hide_names_until_rated).
@@ -393,7 +378,7 @@ async function goBack() {
     const exclude = current && ratedCurrent !== null ? `?exclude=${current.play_id}` : "";
     track = await api(`/api/previous${exclude}`);
   } catch (e) { showError("There's no previous track yet."); return; }
-  resume = current && !currentEnded ? {pos: audio.currentTime, played} : null;
+  resume = current && !currentEnded ? {pos: audio.currentTime * tempoPlayer.rate(), played} : null;
   viewing = "previous"; prev = track;
   report("back", {to: track.play_id});
   await loadTrack(track, 0, 0);
@@ -594,7 +579,7 @@ function renderReveal(rev) {
 }
 
 poll();
-loadSettings();
+renderTempo();
 setInterval(poll, 4000);
 </script>
 </body>

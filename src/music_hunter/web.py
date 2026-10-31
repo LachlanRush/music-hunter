@@ -625,7 +625,8 @@ def upcoming() -> dict:
     if not conn.execute("SELECT file_path FROM tracks WHERE id = ?", (track_id,)).fetchone()[0]:
         _fetch_in_background(track_id)                 # an injected vetoed track: audio fetched just in time
         raise HTTPException(404, "Audio still being fetched")
-    return {"track_id": track_id, "audio": f"{_base()}/audio/{track_id}"}
+    bpm = conn.execute("SELECT bpm FROM tracks WHERE id = ?", (track_id,)).fetchone()[0]
+    return {"track_id": track_id, "audio": f"{_base()}/audio/{track_id}", "bpm": bpm}
 
 
 _fetching: set[tuple] = set()
@@ -784,6 +785,39 @@ def audio(track_id: int) -> FileResponse:
     if not rel or not resolve(rel).exists():
         raise HTTPException(404, "Audio not available")
     return FileResponse(resolve(rel))
+
+
+def _audio_path(track_id: int) -> str | None:
+    conn = db.connect()
+    t = conn.execute("SELECT file_path FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    held = conn.execute("SELECT undo_path FROM plays WHERE track_id = ? AND undo_path IS NOT NULL",
+                        (track_id,)).fetchone()
+    rel = (t and t["file_path"]) or (held and held["undo_path"])
+    return rel if rel and resolve(rel).exists() else None
+
+
+@router.get("/tempo/{track_id}")
+def tempo_status(track_id: int, rate: float) -> dict:
+    """Same BPM: is the stretched copy ready? Starts rendering it if not (SPEC.md §18.13)."""
+    from . import tempo
+
+    if not 0.5 <= rate <= 2:
+        raise HTTPException(400, "Rate out of range")
+    rel = _audio_path(track_id)
+    if rel is None:
+        raise HTTPException(404, "Audio not available")
+    st = tempo.status(db.SESSION.get(), track_id, rel, rate)
+    return {"state": st, "url": f"{_base()}/tempo/{track_id}/audio?rate={rate}" if st == "ready" else None}
+
+
+@router.get("/tempo/{track_id}/audio")
+def tempo_audio(track_id: int, rate: float) -> FileResponse:
+    from . import tempo
+
+    f = tempo.target(db.SESSION.get(), track_id, rate)
+    if not f.exists():
+        raise HTTPException(404, "Not rendered yet")
+    return FileResponse(f, media_type="audio/webm")
 
 
 @router.get("/art/{track_id}")
