@@ -719,7 +719,7 @@ From my notes on 2026-10-31. v5 turns the test rig into an everyday app: a playl
 - Fewer words: no background-work messages anywhere ("Bringing back…", "Downloading and analysing…" — the status line now only shows a problem); no hints when going back to the previous track; the first-time Find music progress and imports show just the count and bar (failed imports stay at the bottom); playlist cards show only the track count. Fixed: hidden sections with their own layout still took up space (the big gap above the track in Find music).
 
 ### 18.14 Icon and phone media controls (2026-10-31)
-- Tab icon (a crosshair in the accent colour; `static/icon.svg`, PNGs for phones) and a web app manifest, so "Add to Home screen" gets the icon and opens without the browser bar.
+- Tab icon (an amber crosshair on a transparent background — the dark square removed 2026-10-31; `static/icon.svg`, PNGs for phones) and a web app manifest, so "Add to Home screen" gets the icon and opens without the browser bar.
 - **Lock-screen / notification controls** (Media Session): title, artist, playlist and cover, play/pause, next, previous and seeking; in Find music the names and cover appear only once rated (until then "Hidden until rated · Finding music for <playlist>"), next = skip (counts as Close), previous = back.
 - On phones the loudness levelling now uses the audio element's own volume instead of Web Audio, so Chrome treats it as ordinary audio playback and shows its controls; everything plays 6 dB quieter (`[loudness] phone_headroom_db`) so quiet tracks can still be raised. Computers keep Web Audio (and the volume slider).
 
