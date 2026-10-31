@@ -5,6 +5,7 @@ __pycache__/
 # Audio and data (personal, large)
 seeds/
 collection/
+library/
 cache/
 data/
 references/

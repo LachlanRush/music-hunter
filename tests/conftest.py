@@ -13,7 +13,7 @@ import music_hunter.config as config
 from music_hunter import db
 
 REAL_DB = config.path("db")
-ARCHIVES = [config.ROOT / "runs" / v / "data" / "music_hunter.db" for v in ("v2", "v1")]
+ARCHIVES = [config.ROOT / "runs" / v / "data" / "music_hunter.db" for v in ("v3", "v2", "v1")]
 
 
 def source_db():

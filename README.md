@@ -20,6 +20,15 @@ uv run music-hunter reembed                                       # after changi
 Spotify links are read from public pages (no account), matched on YouTube Music (same song, ±5 s),
 downloaded into `seeds/` and analysed. v1's data is archived in `runs/v1/`.
 
+## v5: playlists
+
+```sh
+uv run music-hunter serve           # then open http://127.0.0.1:8765 (or the PC's Tailscale address)
+```
+
+Home page: your playlists; import one from a Spotify link or create an empty one. In a playlist: star tracks (starred
+tracks are the seeds), remove them, add them to another playlist, play or shuffle. Find music per playlist comes next.
+
 ## v4: veto and random picks
 
 ```sh

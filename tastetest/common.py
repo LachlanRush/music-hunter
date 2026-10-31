@@ -20,7 +20,7 @@ AUDIO = OUT / "audio"
 # (run, database, project root the stored file paths are relative to, "liked" threshold)
 RUNS = [("v1", ROOT / "runs" / "v1" / "data" / "music_hunter.db", ROOT / "runs" / "v1", CFG["liked_v1"]),
         ("v2", ROOT / "runs" / "v2" / "data" / "music_hunter.db", ROOT / "runs" / "v2", CFG["liked_v2"]),
-        ("v3", ROOT / "data" / "music_hunter.db", ROOT, CFG["liked_v3"])]
+        ("v3", ROOT / "runs" / "v3" / "data" / "music_hunter.db", ROOT / "runs" / "v3", CFG["liked_v3"])]
 
 
 def decode(path: Path, sr: int) -> np.ndarray:

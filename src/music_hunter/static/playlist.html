@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Playlist · Music Hunter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+body { padding-bottom: 140px; }
+.head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: end; }
+.cover { width: 120px; height: 120px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line);
+  display: grid; place-items: center; overflow: hidden; font: 800 42px var(--display); color: var(--muted); }
+.cover img { width: 100%; height: 100%; object-fit: cover; }
+h1 { font: 800 clamp(26px, 5vw, 40px)/1.05 var(--display); font-stretch: 112%; margin: 4px 0; overflow-wrap: anywhere; }
+.meta { font: 400 12px/1.4 var(--mono); color: var(--muted); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn { padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font: 600 14px var(--body); }
+.btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.danger { color: var(--bad); }
+.bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+.failures { font-size: 13px; color: var(--muted); }
+.failures summary { cursor: pointer; }
+h2 { font: 700 13px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+ol { list-style: none; margin: 0; padding: 0; display: grid; }
+li { display: grid; grid-template-columns: 36px 40px minmax(0, 1fr) auto auto; gap: 10px; align-items: center;
+  padding: 8px 0; border-bottom: 1px solid var(--line); }
+li.playing .t b { color: var(--accent); }
+li.unavailable { opacity: .5; }
+.playbtn { width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface);
+  display: grid; place-items: center; }
+.playbtn svg { width: 12px; height: 12px; fill: currentColor; }
+.art { width: 40px; height: 40px; border-radius: 4px; background: var(--surface); object-fit: cover; }
+.t { min-width: 0; }
+.t b { display: block; font: 600 14px/1.3 var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t span { display: block; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stars { display: flex; }
+.stars button { border: 0; background: none; padding: 2px 1px; font-size: 18px; line-height: 1; color: var(--line); }
+.stars button.on { color: var(--accent); }
+.more { position: relative; }
+.more > button { border: 0; background: none; font-size: 20px; padding: 2px 6px; color: var(--muted); }
+.menu { position: absolute; right: 0; top: 100%; z-index: 5; min-width: 200px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px; display: grid; gap: 2px; box-shadow: 0 6px 18px rgba(0,0,0,.15); }
+.menu button { border: 0; background: none; text-align: left; padding: 8px 10px; border-radius: 4px; font-size: 14px; }
+.menu button:hover { background: var(--bg); }
+.menu .label { padding: 6px 10px 2px; }
+.player { position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--line);
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); }
+.player-in { max-width: 760px; margin: 0 auto; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+.player .art { width: 44px; height: 44px; }
+.controls { display: flex; gap: 6px; align-items: center; }
+.round { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: var(--bg); display: grid; place-items: center; }
+.round svg { width: 15px; height: 15px; fill: currentColor; }
+.round.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.round.on { border-color: var(--accent); color: var(--accent); }
+.seek { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center;
+  font: 400 11px var(--mono); color: var(--muted); }
+input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
+.empty { color: var(--muted); }
+.error { color: var(--bad); font-size: 14px; }
+@media (max-width: 520px) {
+  li { grid-template-columns: 32px minmax(0, 1fr) auto auto; }
+  li .art { display: none; }
+  .stars button { font-size: 16px; }
+  .cover { width: 84px; height: 84px; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <nav><span class="brand">MUSIC HUNTER</span><a href="/">Playlists</a></nav>
+    <div class="status" id="status"></div>
+  </header>
+
+  <section class="head">
+    <div class="cover" id="cover">?</div>
+    <div>
+      <div class="label">Playlist</div>
+      <h1 id="name">Loading…</h1>
+      <div class="meta" id="counts"></div>
+    </div>
+  </section>
+
+  <section class="actions">
+    <button class="btn primary" id="play-all">Play</button>
+    <button class="btn" id="shuffle-all">Shuffle</button>
+    <button class="btn" id="find" disabled title="Coming in the next step">Find music</button>
+    <button class="btn" id="rename">Rename</button>
+    <button class="btn danger" id="delete">Delete</button>
+  </section>
+
+  <section id="job" hidden></section>
+  <div class="error" id="error" hidden></div>
+
+  <section id="added-section" hidden>
+    <h2>Added — waiting for stars</h2>
+    <ol id="added"></ol>
+  </section>
+  <section>
+    <h2 id="tracks-label">Tracks</h2>
+    <ol id="tracks"></ol>
+  </section>
+</main>
+
+<div class="player" id="player" hidden>
+  <div class="player-in">
+    <img class="art" id="p-art" alt="">
+    <div class="t"><b id="p-title"></b><span id="p-artist"></span></div>
+    <div class="controls">
+      <button class="round" id="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg></button>
+      <button class="round primary" id="play" aria-label="Play"><svg viewBox="0 0 24 24" id="play-icon"><path d="M7 4l13 8-13 8z"/></svg></button>
+      <button class="round" id="next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg></button>
+      <button class="round" id="shuffle" aria-label="Shuffle" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 7h3.5l7 10H18v-2l3 3-3 3v-2h-4.5l-7-10H4zm10.5 0H18V5l3 3-3 3V9h-3.5l-1.6 2.3-1.2-1.7zM4 17h3.5l1.6-2.3 1.2 1.7L8.5 19H4z"/></svg></button>
+    </div>
+    <div class="seek"><span id="pos">0:00</span><input type="range" id="seek" min="0" max="1000" value="0" aria-label="Position"><span id="dur">0:00</span></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const PID = Number(location.pathname.split("/").pop());
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const fmt = (s) => !isFinite(s) ? "0:00" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+async function api(path, body, method) {
+  const res = await fetch(path, body === undefined && !method ? {} : {
+    method: method || "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+  return res.json();
+}
+function showError(msg) { $("error").textContent = msg; $("error").hidden = !msg; }
+
+let data = null, timer = null;
+
+function stars(t) {
+  return `<span class="stars" role="group" aria-label="Stars">${[1, 2, 3, 4, 5].map((n) =>
+    `<button class="${t.stars && n <= t.stars ? "on" : ""}" data-star="${n}" data-track="${t.id}"
+      aria-label="${n} star${n > 1 ? "s" : ""}${t.stars === n ? " (tap again to clear)" : ""}">★</button>`).join("")}</span>`;
+}
+function row(t) {
+  const playing = queue[pos] && queue[pos].id === t.id;
+  return `<li class="${playing ? "playing" : ""} ${t.audio ? "" : "unavailable"}">
+    <button class="playbtn" data-play="${t.id}" aria-label="Play ${esc(t.title)}" ${t.audio ? "" : "disabled"}>
+      <svg viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></svg></button>
+    ${t.art ? `<img class="art" src="${t.art}" alt="" loading="lazy">` : `<div class="art"></div>`}
+    <div class="t"><b>${esc(t.title)}</b><span>${esc(t.artist)} · ${fmt(t.duration_s)}</span></div>
+    ${stars(t)}
+    <div class="more"><button data-more="${t.id}" aria-label="More for ${esc(t.title)}" aria-expanded="false">⋯</button></div>
+  </li>`;
+}
+
+function render() {
+  const d = data;
+  document.title = `${d.name} · Music Hunter`;
+  $("name").textContent = d.name;
+  $("cover").innerHTML = d.image ? `<img src="${d.image}" alt="">` : esc((d.name || "?")[0].toUpperCase());
+  const seeds = d.tracks.filter((t) => t.stars).length, waiting = d.tracks.filter((t) => t.status === "added").length;
+  $("counts").textContent = `${d.tracks.length} tracks · ${seeds} seeds (starred)` + (waiting ? ` · ${waiting} waiting for stars` : "");
+  const added = d.tracks.filter((t) => t.status === "added"), main = d.tracks.filter((t) => t.status !== "added");
+  $("added-section").hidden = !added.length;
+  $("added").innerHTML = added.map(row).join("");
+  $("tracks").innerHTML = main.length ? main.map(row).join("") : `<li class="empty" style="display:block">No tracks yet.</li>`;
+  const job = d.job, active = job && (job.state === "queued" || job.state === "running");
+  const fails = (job && job.progress && job.progress.failures) || [];
+  $("job").hidden = !(active || fails.length || (job && job.state === "failed"));
+  if (!$("job").hidden) {
+    const p = job.progress || {}, pct = p.total ? Math.round(100 * p.done / p.total) : 0;
+    $("job").innerHTML = (active ? `<div class="label">${job.state === "queued" ? "Waiting to import" : `Importing ${p.done} of ${p.total || "?"}`}</div>
+        <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
+        <div class="meta">${esc(p.message || "")}</div>` : "")
+      + (job.state === "failed" ? `<div class="error">Import stopped: ${esc(job.error)}</div>` : "")
+      + (fails.length ? `<details class="failures"><summary>${fails.length} track${fails.length > 1 ? "s" : ""} couldn't be imported</summary>
+          <ul>${fails.map((f) => `<li style="display:block;border:0;padding:2px 0">${esc(f.artist)} – ${esc(f.title)}: ${esc(f.reason)}</li>`).join("")}</ul></details>` : "");
+  }
+  clearTimeout(timer);
+  if (active) timer = setTimeout(load, 3000);
+}
+
+async function load() {
+  try { data = await api(`/api/playlists/${PID}`); render(); }
+  catch (e) { showError(`Couldn't load the playlist: ${e.message}`); }
+}
+
+// --- track actions ---------------------------------------------------------------------
+document.addEventListener("click", async (e) => {
+  const star = e.target.closest("[data-star]");
+  if (star) {
+    const tid = Number(star.dataset.track), n = Number(star.dataset.star);
+    const t = data.tracks.find((x) => x.id === tid);
+    try { await api(`/api/playlists/${PID}/tracks/${tid}`, {stars: t.stars === n ? null : n}, "PUT"); await load(); }
+    catch (err) { showError(`Couldn't save the stars: ${err.message}`); }
+    return;
+  }
+  const play = e.target.closest("[data-play]");
+  if (play) { startQueue(Number(play.dataset.play)); return; }
+  const more = e.target.closest("[data-more]");
+  document.querySelectorAll(".menu").forEach((m) => m.remove());
+  if (more) {
+    const tid = Number(more.dataset.more);
+    const menu = document.createElement("div");
+    menu.className = "menu";
+    menu.innerHTML = (data.others.length ? `<div class="label">Add to</div>` + data.others.map((o) =>
+        `<button data-addto="${o.id}" data-track="${tid}">${esc(o.name)}</button>`).join("") : "")
+      + `<button data-remove="${tid}" style="color:var(--bad)">Remove from this playlist</button>`;
+    more.parentElement.appendChild(menu);
+    return;
+  }
+  const addto = e.target.closest("[data-addto]");
+  if (addto) {
+    try {
+      const r = await api(`/api/playlists/${addto.dataset.addto}/tracks`, {track_id: Number(addto.dataset.track)});
+      $("status").textContent = r.added ? "Added." : "Already in that playlist.";
+    } catch (err) { showError(`Couldn't add it: ${err.message}`); }
+    return;
+  }
+  const remove = e.target.closest("[data-remove]");
+  if (remove) {
+    try { await api(`/api/playlists/${PID}/tracks/${remove.dataset.remove}`, undefined, "DELETE"); await load(); }
+    catch (err) { showError(`Couldn't remove it: ${err.message}`); }
+  }
+});
+$("rename").addEventListener("click", async () => {
+  const name = prompt("Playlist name", data.name);
+  if (!name) return;
+  await api(`/api/playlists/${PID}`, {name}, "PATCH"); load();
+});
+$("delete").addEventListener("click", async () => {
+  if (!confirm(`Delete "${data.name}"? Tracks only in this playlist lose their audio.`)) return;
+  await api(`/api/playlists/${PID}`, undefined, "DELETE"); location.href = "/";
+});
+
+// --- player: a normal player (not blind), with shuffle -----------------------------------
+const audio = new Audio();
+let ctx = null, gainNode = null, queue = [], pos = -1, shuffle = false, seeking = false;
+
+function playable() { return data.tracks.filter((t) => t.audio); }
+function shuffled(list) {
+  const a = list.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+function startQueue(firstId) {
+  let list = playable();
+  if (shuffle) list = shuffled(list);
+  if (firstId != null) {
+    const i = list.findIndex((t) => t.id === firstId);
+    if (i > 0) list = shuffle ? [list[i], ...list.filter((_, k) => k !== i)] : list.slice(i).concat(list.slice(0, i));
+  }
+  queue = list; pos = 0;
+  if (queue.length) playAt(0);
+}
+async function playAt(i) {
+  pos = i;
+  const t = queue[i];
+  if (!t) { audio.pause(); return; }
+  if (!ctx) {
+    ctx = new AudioContext(); gainNode = ctx.createGain();
+    ctx.createMediaElementSource(audio).connect(gainNode).connect(ctx.destination);
+  }
+  if (ctx.state === "suspended") await ctx.resume();
+  gainNode.gain.value = Math.pow(10, (t.gain_db || 0) / 20);       // loudness normalisation
+  audio.src = t.audio;
+  $("player").hidden = false;
+  $("p-title").textContent = t.title; $("p-artist").textContent = t.artist;
+  $("p-art").src = t.art || ""; $("p-art").style.visibility = t.art ? "visible" : "hidden";
+  try { await audio.play(); } catch (e) { setIcon(false); }
+  render();
+}
+function setIcon(on) {
+  $("play-icon").innerHTML = on ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M7 4l13 8-13 8z"/>';
+  $("play").setAttribute("aria-label", on ? "Pause" : "Play");
+}
+audio.addEventListener("play", () => setIcon(true));
+audio.addEventListener("pause", () => setIcon(false));
+audio.addEventListener("ended", () => { if (pos + 1 < queue.length) playAt(pos + 1); });
+audio.addEventListener("timeupdate", () => {
+  if (seeking) return;
+  $("pos").textContent = fmt(audio.currentTime); $("dur").textContent = fmt(audio.duration);
+  $("seek").value = audio.duration ? Math.round(1000 * audio.currentTime / audio.duration) : 0;
+});
+$("seek").addEventListener("input", () => { seeking = true; $("pos").textContent = fmt($("seek").value / 1000 * (audio.duration || 0)); });
+$("seek").addEventListener("change", () => { if (audio.duration) audio.currentTime = $("seek").value / 1000 * audio.duration; seeking = false; });
+$("play").addEventListener("click", () => {
+  if (pos < 0) return startQueue(null);
+  audio.paused ? audio.play() : audio.pause();
+});
+$("next").addEventListener("click", () => { if (pos + 1 < queue.length) playAt(pos + 1); });
+$("prev").addEventListener("click", () => { audio.currentTime > 3 || pos === 0 ? (audio.currentTime = 0) : playAt(pos - 1); });
+$("shuffle").addEventListener("click", () => {
+  shuffle = !shuffle;
+  $("shuffle").classList.toggle("on", shuffle); $("shuffle").setAttribute("aria-pressed", String(shuffle));
+  if (pos >= 0) {                                      // keep the current track, reshuffle (or restore) the rest
+    const cur = queue[pos], rest = playable().filter((t) => t.id !== cur.id);
+    queue = [cur, ...(shuffle ? shuffled(rest) : rest)]; pos = 0;
+  }
+});
+$("play-all").addEventListener("click", () => { shuffle = false; $("shuffle").classList.remove("on"); startQueue(null); });
+$("shuffle-all").addEventListener("click", () => { shuffle = true; $("shuffle").classList.add("on"); startQueue(null); });
+load();
+</script>
+</body>
+</html>

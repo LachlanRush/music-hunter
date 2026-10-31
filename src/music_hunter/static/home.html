@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Music Hunter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+h1 { font: 800 clamp(28px, 5vw, 40px)/1.05 var(--display); font-stretch: 112%; margin: 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px; }
+.card { display: grid; gap: 8px; text-decoration: none; color: inherit; }
+.cover { aspect-ratio: 1; border-radius: 6px; background: var(--surface); border: 1px solid var(--line);
+  display: grid; place-items: center; overflow: hidden; font: 800 42px var(--display); color: var(--muted); }
+.cover img { width: 100%; height: 100%; object-fit: cover; }
+.card:hover .cover { border-color: var(--fg); }
+.card b { font: 700 15px/1.25 var(--display); overflow-wrap: anywhere; }
+.meta { font: 400 12px/1.4 var(--mono); color: var(--muted); }
+.bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+form { display: flex; flex-wrap: wrap; gap: 8px; }
+form input { flex: 1 1 260px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface); color: var(--fg); font: 400 14px var(--body); }
+form button, .btn { padding: 10px 14px; border-radius: 6px; border: 1px solid var(--fg); background: var(--fg);
+  color: var(--bg); font: 600 14px var(--body); }
+form button.secondary { background: var(--surface); color: var(--fg); border-color: var(--line); }
+.add { display: grid; gap: 14px; border-top: 1px solid var(--line); padding-top: 22px; }
+.error { color: var(--bad); font-size: 14px; }
+.empty { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <nav><span class="brand">MUSIC HUNTER</span><a href="/" aria-current="page">Playlists</a></nav>
+    <div class="status" id="status"></div>
+  </header>
+
+  <section>
+    <h1>Playlists</h1>
+  </section>
+
+  <section class="grid" id="grid" aria-label="Your playlists"><div class="empty">Loading…</div></section>
+
+  <section class="add" aria-labelledby="h-add">
+    <div class="label" id="h-add">Add a playlist</div>
+    <form id="import-form">
+      <input id="spotify" type="url" placeholder="Spotify playlist link — https://open.spotify.com/playlist/…" aria-label="Spotify playlist link" required>
+      <button type="submit">Import</button>
+    </form>
+    <form id="new-form">
+      <input id="name" type="text" placeholder="Name for an empty playlist" aria-label="New playlist name" required>
+      <button type="submit" class="secondary">Create</button>
+    </form>
+    <div class="error" id="error" hidden></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+
+async function api(path, body, method) {
+  const res = await fetch(path, body === undefined && !method ? {} : {
+    method: method || "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+  return res.json();
+}
+function showError(msg) { $("error").textContent = msg; $("error").hidden = !msg; }
+
+function jobLine(job) {
+  if (!job || job.state === "done" || job.state === "failed") return "";
+  const p = job.progress || {};
+  const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
+  return `<div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
+    <div class="meta">${job.state === "queued" ? "Waiting to import…" : `Importing ${p.done || 0} of ${p.total || "?"}`}</div>`;
+}
+
+let timer = null;
+async function load() {
+  try {
+    const lists = await api("/api/playlists");
+    $("grid").innerHTML = lists.length ? lists.map((p) => `
+      <a class="card" href="/playlist/${p.id}">
+        <div class="cover">${p.has_image ? `<img src="/cover/${p.id}" alt="">` : esc((p.name || "?")[0].toUpperCase())}</div>
+        <b>${esc(p.name)}</b>
+        <div class="meta">${p.tracks} tracks · ${p.seeds} seeds${p.waiting ? ` · ${p.waiting} waiting for stars` : ""}</div>
+        ${jobLine(p.job)}
+      </a>`).join("") : `<div class="empty">No playlists yet. Import one from Spotify below.</div>`;
+    const busy = lists.some((p) => p.job && (p.job.state === "running" || p.job.state === "queued"));
+    clearTimeout(timer);
+    if (busy) timer = setTimeout(load, 3000);
+  } catch (e) { $("status").textContent = "Can't reach the music-hunter server."; }
+}
+
+$("import-form").addEventListener("submit", async (e) => {
+  e.preventDefault(); showError("");
+  const btn = e.target.querySelector("button"); btn.disabled = true; btn.textContent = "Reading…";
+  try {
+    const r = await api("/api/playlists", {spotify_url: $("spotify").value.trim()});
+    location.href = `/playlist/${r.playlist_id}`;
+  } catch (err) { showError(`Couldn't import: ${err.message}`); }
+  btn.disabled = false; btn.textContent = "Import";
+});
+$("new-form").addEventListener("submit", async (e) => {
+  e.preventDefault(); showError("");
+  try {
+    const r = await api("/api/playlists", {name: $("name").value.trim()});
+    location.href = `/playlist/${r.playlist_id}`;
+  } catch (err) { showError(`Couldn't create it: ${err.message}`); }
+});
+load();
+</script>
+</body>
+</html>

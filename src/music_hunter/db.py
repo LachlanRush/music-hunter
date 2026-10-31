@@ -163,6 +163,38 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_kind ON events(kind, at);
 
 -- Listener settings that affect ranking or playback (v2: target BPM), with history in events.
+-- v5: playlists (SPEC.md §18.1). A track can be in several playlists; stars (1–5) make it a seed of that playlist.
+CREATE TABLE IF NOT EXISTS playlists (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    spotify_id  TEXT,                   -- imported from this Spotify playlist, if any
+    description TEXT,
+    image_path  TEXT,                   -- cover image (from Spotify), relative to the project
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS playlist_tracks (
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    track_id    INTEGER NOT NULL REFERENCES tracks(id),
+    stars       INTEGER,                -- 1–5; NULL = not a seed
+    status      TEXT NOT NULL DEFAULT 'member',   -- 'member' | 'added' (Added in Find music, waiting for stars)
+    added_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+    PRIMARY KEY (playlist_id, track_id)
+);
+
+-- v5: background jobs (imports now; Find music, refills and top-ups later), run here or by the PC worker (§18.4).
+CREATE TABLE IF NOT EXISTS jobs (
+    id          INTEGER PRIMARY KEY,
+    kind        TEXT NOT NULL,          -- 'import', …
+    playlist_id INTEGER REFERENCES playlists(id) ON DELETE CASCADE,
+    payload     TEXT NOT NULL DEFAULT '{}',
+    state       TEXT NOT NULL DEFAULT 'queued',   -- queued | running | done | failed
+    progress    TEXT NOT NULL DEFAULT '{}',       -- {done, total, message, failures: […]}
+    error       TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- v4: each distinct set of run settings (veto, controls, pool), so plays can be split by what they ran under.
 CREATE TABLE IF NOT EXISTS settings_versions (
     id          INTEGER PRIMARY KEY,

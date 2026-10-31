@@ -658,3 +658,11 @@ From my notes on 2026-10-31. v5 turns the test rig into an everyday app: a playl
 3. **Pi app and PC worker** — job queue and worker API; the PC worker (starts on boot, disconnects when done); audio and fingerprint transfer; waking the PC through Home Assistant.
 4. **Home Assistant add-on** — packaging for the Pi, install steps for me, checked on my Pi.
 5. **Trial week.**
+
+### 18.7 As built — milestone 1 (2026-10-31)
+- v3 archived to `runs/v3/`; fresh database. Playlist audio lives in `library/` (covers in `library/covers/`).
+- **Data**: `playlists`, `playlist_tracks` (stars 1–5 or none; status member / added), one shared library (`tracks`, origin `library`), and a `jobs` queue (imports now; Find music and the PC worker later). A job cut off by a restart is queued again (imports are re-runnable: tracks already in the library — same Spotify ID or YouTube video — are reused, not downloaded again).
+- **Home page** (`/`): playlists as cards (cover, tracks, seeds, waiting for stars, import progress); import from a Spotify link (name, description and cover read from the page); create an empty playlist.
+- **Playlist page** (`/playlist/<id>`): Added — waiting for stars on top, then tracks by stars (5 first, unstarred last); tap a star to set it, tap it again to clear; ⋯ menu to add to another playlist or remove; rename, delete; a normal player (names and artwork shown, loudness-normalised) with play, previous / next, seek and shuffle; import progress and the tracks that couldn't be imported, with reasons. Removing a track deletes its audio only once it's in no playlist (the fingerprint stays).
+- The Results page is hidden from the navigation (still at `/results`); the listening interface is at `/listen` until it becomes per-playlist in milestone 2.
+- **Checked**: importing "pump" from Spotify through the server: 10 of 12 tracks added with artwork, BPM and loudness (Jump N' Shout and No Joke ! aren't on YouTube Music, as in v3), 47 MB; pages reachable over Tailscale.

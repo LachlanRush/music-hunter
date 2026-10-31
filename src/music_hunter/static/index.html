@@ -91,7 +91,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 <body>
 <main>
   <header>
-    <nav><span class="brand">MUSIC HUNTER</span><a href="/" aria-current="page">Player</a><a href="/results">Results</a></nav>
+    <nav><span class="brand">MUSIC HUNTER</span><a href="/">Playlists</a><a href="/listen" aria-current="page">Find music</a></nav>
     <div class="status" id="status">Connecting…</div>
   </header>
 
@@ -239,7 +239,7 @@ function renderGate(s) {
   if (s.run_complete) {
     $("gate-label").textContent = "Run complete";
     $("gate-title").textContent = "That's the run";
-    $("gate-text").innerHTML = `${s.rated} tracks rated. The results are unsealed: <a href="/results">see them here</a>.`;
+    $("gate-text").textContent = `${s.rated} tracks rated. Everything is logged for the analysis.`;
     $("gate-meter").hidden = true;
   } else if (s.ready) {
     started = true;

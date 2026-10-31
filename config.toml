@@ -3,7 +3,8 @@
 
 [paths]
 seeds = "seeds"                  # v2: original seeds (provided files, or downloaded from Spotify links)
-collection = "collection"        # v2: tracks I Add (from milestone 3)
+collection = "collection"        # v2–v4: tracks I Add (v5: Adds go to library/)
+library = "library"              # v5: audio of every playlist track (imported or Added)
 references = "references"        # v1 only; retired in v2 milestone 3
 keepers = "keepers"              # v1 only; retired in v2 milestone 3
 cache = "cache"

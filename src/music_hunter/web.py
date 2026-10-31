@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from fastapi.staticfiles import StaticFiles
 
-from . import db, ratings, reweight, veto
+from . import db, jobs, library, ratings, reweight, veto
 from .config import CONFIG, resolve
 from .results import results as results_data
 from .scoring import pool_tracks
@@ -34,6 +34,8 @@ async def lifespan(app):
     db.log_event(conn, "server_start", host=UI["host"], port=UI["port"],
                  hide_names_until_rated=UI["hide_names_until_rated"])
     worker.start_if_needed()
+    jobs.requeue_interrupted(conn)                  # v5: a job cut off by a restart runs again (jobs are re-runnable)
+    job_runner.kick()
     yield
     db.log_event(conn, "server_stop")
 
@@ -208,8 +210,142 @@ def track_info(conn, play) -> dict:
 
 
 @app.get("/", response_class=HTMLResponse)
+def home() -> str:
+    """v5: the playlist library (SPEC.md §18.1)."""
+    return (STATIC / "home.html").read_text()
+
+
+@app.get("/playlist/{playlist_id}", response_class=HTMLResponse)
+def playlist_page(playlist_id: int) -> str:
+    return (STATIC / "playlist.html").read_text()
+
+
+@app.get("/listen", response_class=HTMLResponse)
 def index() -> str:
+    """The listening interface (Find music; per playlist from milestone 2)."""
     return (STATIC / "index.html").read_text()
+
+
+# --- v5: playlists and the library (SPEC.md §18.1) -------------------------------------------
+
+job_runner = jobs.Runner()
+
+
+class NewPlaylist(BaseModel):
+    name: str | None = None
+    spotify_url: str | None = None
+
+
+class StarsBody(BaseModel):
+    stars: int | None = None
+
+
+class AddTrackBody(BaseModel):
+    track_id: int
+
+
+class RenameBody(BaseModel):
+    name: str
+
+
+def _playlist_or_404(conn, playlist_id: int):
+    p = conn.execute("SELECT * FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+    if p is None:
+        raise HTTPException(404, "No such playlist")
+    return p
+
+
+def _job_view(job: dict | None) -> dict | None:
+    return None if job is None else {"id": job["id"], "kind": job["kind"], "state": job["state"],
+                                     "progress": job["progress"], "error": job["error"]}
+
+
+@app.get("/api/playlists")
+def get_playlists() -> list[dict]:
+    conn = db.connect()
+    return [{**p, "job": _job_view(jobs.latest_for(conn, p["id"]))} for p in library.list_playlists(conn)]
+
+
+@app.post("/api/playlists")
+def new_playlist(body: NewPlaylist) -> dict:
+    """An empty playlist, or one imported from a Spotify link (tracks download in the background)."""
+    conn = db.connect()
+    if body.spotify_url:
+        try:
+            info = library.spotify_playlist_info(body.spotify_url)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(502, f"Couldn't read the Spotify page: {e}")
+        pid = library.create_playlist(conn, body.name or info["name"] or "Imported", info["id"], info["description"])
+        library.save_cover(conn, pid, info["image"])
+        job_id = jobs.enqueue(conn, "import", pid, link=body.spotify_url)
+        job_runner.kick()
+        return {"playlist_id": pid, "job_id": job_id}
+    return {"playlist_id": library.create_playlist(conn, body.name or ""), "job_id": None}
+
+
+@app.get("/api/playlists/{playlist_id}")
+def get_playlist(playlist_id: int) -> dict:
+    conn = db.connect()
+    p = _playlist_or_404(conn, playlist_id)
+    tracks = library.playlist_tracks(conn, playlist_id)
+    return {"id": p["id"], "name": p["name"], "description": p["description"],
+            "image": f"/cover/{p['id']}" if p["image_path"] else None,
+            "job": _job_view(jobs.latest_for(conn, playlist_id)),
+            "tracks": [{**t, "audio": f"/audio/{t['id']}" if t["has_audio"] else None,
+                        "art": f"/art/{t['id']}" if t["has_art"] else None} for t in tracks],
+            "others": [{"id": o["id"], "name": o["name"]} for o in library.list_playlists(conn) if o["id"] != playlist_id]}
+
+
+@app.patch("/api/playlists/{playlist_id}")
+def rename_playlist(playlist_id: int, body: RenameBody) -> dict:
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    library.rename_playlist(conn, playlist_id, body.name)
+    return {"ok": True}
+
+
+@app.delete("/api/playlists/{playlist_id}")
+def delete_playlist(playlist_id: int) -> dict:
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    library.delete_playlist(conn, playlist_id)
+    return {"ok": True}
+
+
+@app.put("/api/playlists/{playlist_id}/tracks/{track_id}")
+def star_track(playlist_id: int, track_id: int, body: StarsBody) -> dict:
+    conn = db.connect()
+    try:
+        library.set_stars(conn, playlist_id, track_id, body.stars)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.delete("/api/playlists/{playlist_id}/tracks/{track_id}")
+def remove_track(playlist_id: int, track_id: int) -> dict:
+    library.remove_from_playlist(db.connect(), playlist_id, track_id)
+    return {"ok": True}
+
+
+@app.post("/api/playlists/{playlist_id}/tracks")
+def add_track(playlist_id: int, body: AddTrackBody) -> dict:
+    conn = db.connect()
+    try:
+        added = library.add_to_playlist(conn, playlist_id, body.track_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"added": added}
+
+
+@app.get("/cover/{playlist_id}")
+def cover(playlist_id: int) -> FileResponse:
+    p = _playlist_or_404(db.connect(), playlist_id)
+    if not p["image_path"] or not resolve(p["image_path"]).exists():
+        raise HTTPException(404, "No cover")
+    return FileResponse(resolve(p["image_path"]))
 
 
 @app.get("/api/state")
@@ -427,10 +563,10 @@ def audio(track_id: int) -> FileResponse:
 
 @app.get("/art/{track_id}")
 def art(track_id: int) -> FileResponse:
-    """Cover art, only for rated tracks (blind until then)."""
+    """Cover art: library tracks always; Find music pool tracks only once rated (blind until then)."""
     conn = db.connect()
-    t = conn.execute("SELECT art_path, rating FROM tracks WHERE id = ?", (track_id,)).fetchone()
-    if not t or not t["art_path"] or (UI["hide_names_until_rated"] and t["rating"] is None):
+    t = conn.execute("SELECT art_path, rating, origin FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if not t or not t["art_path"] or (UI["hide_names_until_rated"] and t["rating"] is None and t["origin"] == "pool"):
         raise HTTPException(404, "No artwork")
     if not resolve(t["art_path"]).exists():
         raise HTTPException(404, "No artwork")
