@@ -91,7 +91,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 <main>
   <header>
     <nav><a class="brand" href="/">MUSIC HUNTER</a><a class="backlink" id="nav-back" href="/" aria-label="Back">←</a><span class="crumb" id="crumb"></span></nav>
-    <div class="status" id="status">Connecting…</div>
+    <div class="status" id="status"></div>
   </header>
 
   <section class="gate" id="gate">
@@ -233,16 +233,14 @@ function showError(msg) { $("error").textContent = msg; $("error").hidden = !msg
 async function poll() {
   try {
     const s = await api("/api/state");
-    const busy = "";
-    const err = s.worker.state === "error" ? ` · <span class="neg">Pool worker failed: ${s.worker.message}</span>` : "";
-    $("status").innerHTML = `${s.unplayed} of ${s.pool_target} in the pool · ${s.rated} rated${busy}${err}`;
+    $("status").innerHTML = s.worker.state === "error" ? `<span class="neg">Finding music stopped: ${esc(s.worker.message)}</span>` : "";
     if (!started) renderGate(s);
     if (s.play_to_end) PLAY_TO_END = new Set(s.play_to_end);
     PRELOAD = !!s.preload_next; STALL_MS = s.stall_log_ms ?? STALL_MS;
     if (s.labels && !$("rate").children.length) buildButtons(s.labels, s.hints || [], s.add);
     if (s.last && !$("reveal").dataset.loaded) renderReveal(s.last);
   } catch (e) {
-    $("status").textContent = "Can't reach the music-hunter server. Is `music-hunter serve` running?";
+    $("status").textContent = "Can't reach Music Hunter.";
   }
 }
 
@@ -270,7 +268,7 @@ function renderGate(s) {
   } else {
     $("gate-label").textContent = "";
     $("gate-title").textContent = `${s.unplayed} of ${s.early_start} tracks ready`;
-    $("gate-text").textContent = `${s.worker.message || "Working…"} Playback can start once ${s.early_start} tracks are analysed; the rest join as they finish.`;
+    $("gate-text").textContent = "";
     $("gate-meter").hidden = false;
     $("gate-fill").style.width = `${Math.min(100, 100 * s.unplayed / s.early_start)}%`;
   }
@@ -415,15 +413,7 @@ function renderRating() {
   $("now-label").textContent = onPrev ? "Previous track" : "";
   $("back").disabled = onPrev;
   $("skip").setAttribute("aria-label", onPrev ? "Return to the current track" : "Skip to next track");
-  if (onPrev) {
-    const back = resume ? "N returns to the current track where you left it" : "N moves on";
-    $("hint").textContent = !prev.can_change
-      ? `${LABELS[prev.rating] ?? "Not rated"} · only your most recent rating can be changed · ${back}`
-      : prev.rating === null ? `You skipped this one · rate it now with the buttons · ${back}`
-      : `${LABELS[prev.rating]} · press another button to change it · ${back}`;
-  } else {
-    $("hint").textContent = "";
-  }
+  $("hint").textContent = "";
 }
 
 async function ratePrevious(r) {

@@ -86,7 +86,7 @@ async function load() {
       <a class="card" href="/playlist/${p.id}">
         <div class="cover">${p.has_image ? `<img src="/cover/${p.id}" alt="">` : esc((p.name || "?")[0].toUpperCase())}</div>
         <b>${esc(p.name)}</b>
-        <div class="meta">${p.tracks} tracks · ${p.seeds} seeds${p.waiting ? ` · ${p.waiting} waiting for stars` : ""}</div>
+        <div class="meta">${p.tracks} tracks</div>
         ${jobLine(p.job)}
       </a>`).join("") : `<div class="empty">No playlists yet. Import one from Spotify below.</div>`;
     const busy = lists.some((p) => p.job && (p.job.state === "running" || p.job.state === "queued"));

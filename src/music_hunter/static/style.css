@@ -26,6 +26,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }   /* a hidden section with its own display rule still took up space */
 html, body { margin: 0; }
 body {
   background: var(--bg); color: var(--fg); font: 400 15px/1.5 var(--body);

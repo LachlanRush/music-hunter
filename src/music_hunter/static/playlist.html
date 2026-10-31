@@ -114,6 +114,7 @@ li.unavailable { cursor: default; }
   </section>
 
   <section id="find-status" hidden></section>
+  <section id="importing" hidden></section>
   <div class="error" id="error" hidden></div>
 
   <section id="added-section" hidden>
@@ -187,15 +188,17 @@ function render() {
   $("tracks").innerHTML = main.length ? main.map(row).join("") : `<li class="empty" style="display:block">No tracks yet.</li>`;
   const job = d.job, active = job && (job.state === "queued" || job.state === "running");
   const fails = (job && job.progress && job.progress.failures) || [];
-  $("job").hidden = !(active || fails.length || (job && job.state === "failed"));
-  if (!$("job").hidden) {
+  $("importing").hidden = !active;                 // progress at the top; what couldn't be imported at the bottom
+  if (active) {
     const p = job.progress || {}, pct = p.total ? Math.round(100 * p.done / p.total) : 0;
-    $("job").innerHTML = (active ? `<div class="label">${job.state === "queued" ? "Waiting to import" : `Importing ${p.done} of ${p.total || "?"}`}</div>
-        <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
-        <div class="meta">${esc(p.message || "")}</div>` : "")
-      + (job.state === "failed" ? `<div class="error">Import stopped: ${esc(job.error)}</div>` : "")
+    $("importing").innerHTML = `<div class="label">${job.state === "queued" ? "Waiting to import" : `Importing ${p.done} of ${p.total || "?"}`}</div>
+        <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>`;
+  }
+  $("job").hidden = !(fails.length || (job && job.state === "failed"));
+  if (!$("job").hidden) {
+    $("job").innerHTML = (job.state === "failed" ? `<div class="error">Import stopped: ${esc(job.error)}</div>` : "")
       + (fails.length ? `<details class="failures"><summary>${fails.length} track${fails.length > 1 ? "s" : ""} couldn't be imported</summary>
-          <ul>${fails.map((f) => `<li style="display:block;border:0;padding:2px 0">${esc(f.artist)} – ${esc(f.title)}: ${esc(f.reason)}</li>`).join("")}</ul></details>` : "");
+          <ul>${fails.map((f) => `<li style="display:block;border:0;padding:2px 0;cursor:default">${esc(f.artist)} – ${esc(f.title)}: ${esc(f.reason)}</li>`).join("")}</ul></details>` : "");
   }
   clearTimeout(timer);
   if (active) timer = setTimeout(load, 3000);
@@ -224,8 +227,7 @@ async function loadFind() {
     const pct = Math.min(100, Math.round(100 * find.playable / find.early_start));
     box.hidden = false;
     box.innerHTML = `<div class="label">Finding music · ${find.playable} of ${find.early_start} tracks ready to start</div>
-      <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
-      <div class="meta">${esc(find.message || "Starting…")}</div>`;
+      <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>`;
     findTimer = setTimeout(loadFind, 3000);
   } else if (find.state === "error") {
     btn.disabled = false; btn.textContent = "Try again";
