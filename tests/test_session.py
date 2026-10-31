@@ -33,6 +33,14 @@ class FakeFiller:
         from music_hunter.embedding import TrackEmbedding
 
         c = self.conn.execute("SELECT * FROM candidates WHERE id = ?", (cid,)).fetchone()
+        if c["video_id"] is None:              # not matched on YouTube yet (v3+): a stand-in ID, as a match would give
+            with self.conn:
+                self.conn.execute("UPDATE candidates SET video_id = ?, matched = 1 WHERE id = ?", (f"fake{cid}", cid))
+            c = self.conn.execute("SELECT * FROM candidates WHERE id = ?", (cid,)).fetchone()
+        if self.conn.execute("SELECT 1 FROM tracks WHERE video_id = ?", (c["video_id"],)).fetchone():
+            with self.conn:                    # same video as a track already analysed: merged (as Matcher does)
+                self.conn.execute("UPDATE candidates SET status = 'merged' WHERE id = ?", (cid,))
+            return False
         v = self.base[self.rng.integers(len(self.base))] + self.rng.normal(0, 0.003, len(self.base[0])).astype(np.float32)
         v /= np.linalg.norm(v)
         rel = f"cache/{c['video_id']}.webm"

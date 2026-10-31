@@ -255,25 +255,28 @@ def test_run_ends_and_results_unseal(conn, monkeypatch):
         assert not res["sealed"] and res["control"]["n"] == 2 and 0.10 <= res["control_rate"] <= 0.25
 
 
-def test_multi_source_refill_needs_a_new_seed(conn, monkeypatch):
-    """Multi-source tracks all go in first, so a refill for agreement only helps when a seed hasn't been pulled for."""
+def test_refill_for_new_seeds(conn, monkeypatch):
+    """v4 placeholder rule (SPEC.md §17.8): pull once a new seed (an Add) is waiting and enough plays have passed;
+    a seed counts as pulled once a pull has queried it, even if its sources returned nothing."""
     from music_hunter import web
     from music_hunter.config import CONFIG
     from music_hunter.pool import unpulled_seeds
+    from music_hunter.pull import mark_pulled, seeds
 
-    monkeypatch.setitem(CONFIG["pool"], "refill_below", 0)                 # isolate the multi-source trigger
-    monkeypatch.setitem(CONFIG["pool"], "refill_multi_source_below", 10**6)
-    monkeypatch.setitem(CONFIG["pool"], "refill_min_plays", 1)
-    with conn:
-        conn.execute("UPDATE candidates SET status = 'not_selected' WHERE status = 'candidate'")
+    monkeypatch.setitem(CONFIG["pool"], "refill_below", 0)
+    monkeypatch.setitem(CONFIG["pool"], "refill_min_plays", 2)
+    monkeypatch.setitem(CONFIG["pool"], "target_size", 1)                 # no top-up due
     gen = conn.execute("SELECT max(id) FROM generations").fetchone()[0]
-    p = show(conn)
-    with conn:
-        conn.execute("UPDATE plays SET generation = ? WHERE id = ?", (gen, p))
-    rate(conn, p, OFF)
-    assert not unpulled_seeds(conn) and web.Worker.job_needed(conn) is None   # same seeds: nothing new to find
-    p = show(conn)
-    with conn:
-        conn.execute("UPDATE plays SET generation = ? WHERE id = ?", (gen, p))
-    rate(conn, p, ADD)                                                       # a new seed, never pulled for
-    assert unpulled_seeds(conn) and web.Worker.job_needed(conn) == "pull"
+
+    def play(rating):
+        p = show(conn)
+        with conn:
+            conn.execute("UPDATE plays SET generation = ? WHERE id = ?", (gen, p))
+        rate(conn, p, rating)
+
+    play(OFF)
+    assert not unpulled_seeds(conn) and web.Worker.job_needed(conn) is None
+    play(ADD)                                                             # a new seed, never pulled for…
+    assert unpulled_seeds(conn) and web.Worker.job_needed(conn) == "pull"  # …and 2 plays since the pull
+    mark_pulled(conn, [s.track_id for s in seeds(conn)])                  # the pull queried it (even with no results)
+    assert not unpulled_seeds(conn) and web.Worker.job_needed(conn) is None

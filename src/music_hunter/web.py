@@ -81,17 +81,17 @@ class Worker:
         left = conn.execute("SELECT count(*) FROM candidates WHERE generation = ?"
                             " AND status IN ('candidate', 'not_selected')",
                             (gen,)).fetchone()[0]
+        played_since = conn.execute("SELECT count(*) FROM plays WHERE generation = ?", (gen,)).fetchone()[0]
+        waiting = unpulled_seeds(conn)
+        if played_since and (len(waiting) >= pool_cfg["refill_new_seeds"]
+                             or (waiting and played_since >= pool_cfg["refill_min_plays"])):
+            return "pull"                     # placeholder Add-seed rule (§17.8, to be discussed); before top-ups,
+                                              # which are due after almost every rating and would starve it
         if left and playable < pool_cfg["target_size"]:
             return "fill"
         if missing_audio(conn):
             return "restore"
-        played_since = conn.execute("SELECT count(*) FROM plays WHERE generation = ?", (gen,)).fetchone()[0]
-        if not played_since:
-            return None
-        waiting = unpulled_seeds(conn)
-        if len(waiting) >= pool_cfg["refill_new_seeds"] or (waiting and played_since >= pool_cfg["refill_min_plays"]):
-            return "pull"                     # placeholder Add-seed rule (§17.8, to be discussed)
-        if playable < pool_cfg["refill_below"]:
+        if played_since and playable < pool_cfg["refill_below"]:
             return "pull"
         return None
 
