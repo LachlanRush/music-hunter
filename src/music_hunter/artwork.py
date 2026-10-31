@@ -9,7 +9,7 @@ import requests
 from .config import path
 
 
-def fetch(yt, video_id: str):
+def fetch(yt, video_id: str, folder=None):
     """Save the track's cover art. Returns (file path or None, publish date 'YYYY-MM-DD' or None).
 
     The publish date stands in for the release date when Deezer didn't supply one.
@@ -23,7 +23,7 @@ def fetch(yt, video_id: str):
     best = max(thumbs, key=lambda t: t.get("width", 0) * t.get("height", 0))
     resp = requests.get(best["url"], timeout=30)
     resp.raise_for_status()
-    folder = path("cache") / "art"
+    folder = folder or path("cache") / "art"
     folder.mkdir(parents=True, exist_ok=True)
     dest = folder / f"{video_id}.jpg"
     dest.write_bytes(resp.content)

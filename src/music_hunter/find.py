@@ -76,7 +76,10 @@ def sync_add(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: int
                     with lib:
                         lib.execute("UPDATE tracks SET file_path = coalesce(file_path, ?) WHERE id = ?", (p["file_path"], lid))
             else:
+                from .library import keep_art
+
                 vals = {k: p[k] for k in COPY}
+                vals["art_path"] = keep_art(vals["art_path"])
                 with lib:
                     lid = lib.execute(f"INSERT INTO tracks ({', '.join(vals)}, origin) VALUES"
                                       f" ({', '.join('?' * len(vals))}, 'library')", list(vals.values())).lastrowid

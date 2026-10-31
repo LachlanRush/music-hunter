@@ -82,12 +82,12 @@ def buckets(conn: sqlite3.Connection, generation: int) -> dict[tuple[int, str], 
 
 # --- download, loudness, analysis --------------------------------------------------------
 
-def download(video_id: str) -> Path:
-    """Full audio with yt-dlp into cache/, original container (no re-encode)."""
+def download(video_id: str, folder: Path | None = None) -> Path:
+    """Full audio with yt-dlp into cache/ (or `folder`), original container (no re-encode)."""
     import yt_dlp
 
-    cache = path("cache")
-    cache.mkdir(exist_ok=True)
+    cache = folder or path("cache")
+    cache.mkdir(parents=True, exist_ok=True)
     opts = {
         "format": CFG["download_format"],
         "outtmpl": str(cache / "%(id)s.%(ext)s"),

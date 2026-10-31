@@ -64,9 +64,10 @@ class Local:
     lock = threading.Lock()
     last_download = 0.0
 
-    def __init__(self):
+    def __init__(self, folder: Path | None = None):
         self.embedder = None
         self.yt = None
+        self.folder = folder        # the PC worker's own folder: its files are deleted once sent, so never cache/
 
     def analyse(self, video_id: str, bpm_prior: float | None = None, status=None) -> Result:
         from . import artwork, audio
@@ -83,7 +84,7 @@ class Local:
                 time.sleep(wait)
             t0 = time.monotonic()
             try:
-                file = download(video_id)
+                file = download(video_id, self.folder)
             except Exception as e:  # yt-dlp raises DownloadError and friends
                 raise DownloadFailed(str(e), download_s=time.monotonic() - t0) from e
             finally:
@@ -105,7 +106,7 @@ class Local:
             t2 = time.monotonic()
             art, published = None, None
             try:
-                art, published = artwork.fetch(self.yt, video_id)
+                art, published = artwork.fetch(self.yt, video_id, self.folder and self.folder / "art")
             except Exception as e:
                 notes["art_failed"] = str(e)[:200]
             return Result(file, len(samples) / sr, lufs, peak, gain, emb, self.embedder.model_name, tempo, art,
@@ -273,7 +274,7 @@ def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
         raise SystemExit("WORKER_TOKEN isn't set (in .env, the same on the PC and the Pi)")
     http = http or requests.Session()
     http.headers["Authorization"] = f"Bearer {token}"
-    local = local or _local
+    local = local or Local(path("cache") / "worker")
     base = server.rstrip("/") + "/api/worker"
     inhibitor, done, last_work, announced = Inhibitor(), 0, time.monotonic(), False
     while True:

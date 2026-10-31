@@ -61,6 +61,12 @@ li.unavailable { opacity: .5; }
   font: 400 11px var(--mono); color: var(--muted); }
 input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 .empty { color: var(--muted); }
+.tempo { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 14px; }
+.tempo label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
+.tempo input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
+.tempo input[type=number] { width: 72px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface); color: var(--fg); font: 500 14px var(--mono); }
+.tempo input:disabled { opacity: .45; }
 .error { color: var(--bad); font-size: 14px; }
 @media (max-width: 520px) {
   li { grid-template-columns: 32px minmax(0, 1fr) auto auto; }
@@ -94,6 +100,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
     <button class="btn danger" id="delete">Delete</button>
   </section>
 
+  <section class="tempo" aria-label="Tempo">
+    <label><input type="checkbox" id="same-bpm"> Same BPM</label>
+    <label>at <input type="number" id="bpm-target" min="60" max="200" step="0.5" inputmode="decimal" aria-label="Target BPM"> BPM</label>
+    <span class="meta" id="tempo-note"></span>
+  </section>
+
   <section id="find-status" hidden></section>
   <section id="job" hidden></section>
   <div class="error" id="error" hidden></div>
@@ -111,7 +123,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 <div class="player" id="player" hidden>
   <div class="player-in">
     <img class="art" id="p-art" alt="">
-    <div class="t"><b id="p-title"></b><span id="p-artist"></span></div>
+    <div class="t"><b id="p-title"></b><span id="p-artist"></span><span class="meta" id="p-tempo"></span></div>
     <div class="controls">
       <button class="round" id="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg></button>
       <button class="round primary" id="play" aria-label="Play"><svg viewBox="0 0 24 24" id="play-icon"><path d="M7 4l13 8-13 8z"/></svg></button>
@@ -199,8 +211,8 @@ async function loadFind() {
     btn.disabled = !find.seeds;
     btn.textContent = "Find music";
     btn.title = find.seeds ? "" : "Star at least one track first — starred tracks are the seeds";
-    box.hidden = !!find.seeds;
-    box.innerHTML = find.seeds ? "" : `<div class="meta">Star some tracks to use Find music: starred tracks are the seeds.</div>`;
+    box.hidden = true;
+    box.innerHTML = "";
   } else if (find.state === "preparing") {
     btn.disabled = true; btn.textContent = "Preparing…";
     const pct = Math.min(100, Math.round(100 * find.playable / find.early_start));
@@ -308,6 +320,7 @@ async function playAt(i) {
   if (ctx.state === "suspended") await ctx.resume();
   gainNode.gain.value = Math.pow(10, (t.gain_db || 0) / 20);       // loudness normalisation
   audio.src = t.audio;
+  applyTempo();
   $("player").hidden = false;
   $("p-title").textContent = t.title; $("p-artist").textContent = t.artist;
   $("p-art").src = t.art || ""; $("p-art").style.visibility = t.art ? "visible" : "hidden";
@@ -344,7 +357,47 @@ $("shuffle").addEventListener("click", () => {
 });
 $("play-all").addEventListener("click", () => { shuffle = false; $("shuffle").classList.remove("on"); startQueue(null); });
 $("shuffle-all").addEventListener("click", () => { shuffle = true; $("shuffle").classList.add("on"); startQueue(null); });
-load();
+// --- Same BPM: every track time-stretched to one tempo, pitch kept (as Match tempo in Find music) -------------
+// A track's measured BPM can be a half, double or 2:3 reading of its real tempo, so the reading closest to the
+// target is used; a track that would need more than ±max_stretch plays at its own tempo.
+const TEMPO_KEY = `tempo-${PID}`;
+let tempo = {on: false, bpm: null};
+try { tempo = {...tempo, ...JSON.parse(localStorage.getItem(TEMPO_KEY) || "{}")}; } catch (e) {}
+function saveTempo() { try { localStorage.setItem(TEMPO_KEY, JSON.stringify(tempo)); } catch (e) {} }
+function medianBpm() {
+  const b = (data ? data.tracks : []).map((t) => t.bpm).filter(Boolean).sort((x, y) => x - y);
+  return b.length ? Math.round(b[Math.floor(b.length / 2)] * 2) / 2 : 128;
+}
+function rateFor(t) {
+  if (!tempo.on || !t.bpm) return {rate: 1, note: tempo.on ? "tempo unknown: original speed" : ""};
+  const target = tempo.bpm || medianBpm(), max = (data && data.max_stretch) || 0.12;
+  const reading = [1, 2, 0.5, 1.5, 2 / 3].map((f) => t.bpm * f).sort((a, b) => Math.abs(target / a - 1) - Math.abs(target / b - 1))[0];
+  const r = target / reading;
+  if (Math.abs(r - 1) > max) return {rate: 1, note: `original tempo (${Math.round(reading)} BPM is beyond ±${Math.round(max * 100)}%)`};
+  const pct = Math.round((r - 1) * 1000) / 10;
+  return {rate: r, note: `${target} BPM (${pct >= 0 ? "+" : ""}${pct}%)`};
+}
+function applyTempo() {
+  const t = queue[pos];
+  audio.preservesPitch = audio.mozPreservesPitch = audio.webkitPreservesPitch = true;
+  const {rate, note} = t ? rateFor(t) : {rate: 1, note: ""};
+  audio.playbackRate = rate;
+  $("p-tempo").textContent = note;
+}
+function renderTempo() {
+  $("same-bpm").checked = tempo.on;
+  $("bpm-target").value = tempo.bpm || medianBpm();
+  $("bpm-target").disabled = !tempo.on;
+  $("tempo-note").textContent = tempo.on && !tempo.bpm ? "the playlist's median" : "";
+}
+$("same-bpm").addEventListener("change", () => { tempo.on = $("same-bpm").checked; saveTempo(); renderTempo(); applyTempo(); });
+$("bpm-target").addEventListener("change", () => {
+  const v = Number($("bpm-target").value);
+  tempo.bpm = v >= 60 && v <= 200 ? v : null; saveTempo(); renderTempo(); applyTempo();
+});
+audio.addEventListener("loadedmetadata", applyTempo);             // some browsers reset the rate on a new source
+
+load().then(renderTempo);
 loadFind();
 </script>
 </body>

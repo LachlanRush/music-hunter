@@ -145,13 +145,28 @@ def match_on_youtube(yt, artists: list[str], title: str, duration_s: float):
     return min(close, key=lambda r: abs(r.duration_s - duration_s)), None
 
 
+def keep_art(art_path: str | None) -> str | None:
+    """A library copy of a cover (library/art/), so it survives the cache being cleared. Returns the new path."""
+    if not art_path or not resolve(art_path).exists():
+        return art_path
+    if art_path.startswith(CONFIG["paths"]["library"] + "/"):
+        return art_path
+    dest = path("library") / "art" / resolve(art_path).name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(resolve(art_path), dest)
+    return relative(dest)
+
+
 def store(conn: sqlite3.Connection, res, file, artist: str, title: str, origin: str, **extra) -> int:
     """Add an analysed track (analysis.Result, its audio now at `file`) to the library."""
     for what, reason in res.notes.items():
         db.log_event(conn, what, video_id=extra.get("video_id"), reason=reason)
+    art = keep_art(res.art and relative(res.art))
+    if art and res.art and resolve(art) != res.art:
+        res.art.unlink(missing_ok=True)
     cols = {"artist": artist, "title": title, "file_path": relative(file), "duration_s": res.duration_s,
             "origin": origin, "loudness_lufs": res.lufs, "true_peak_db": res.peak, "gain_db": res.gain, "bpm": res.bpm,
-            "art_path": res.art and relative(res.art), **extra}
+            "art_path": art, **extra}
     cols["release_date"] = cols.get("release_date") or res.published
     with conn:
         tid = conn.execute(f"INSERT INTO tracks ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
