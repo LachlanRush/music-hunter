@@ -1,7 +1,8 @@
 # Music Hunter add-on (SPEC.md §18.4): the web app, database and audio library on the Pi. No torch or MAEST here —
 # downloads and analysis are queued for the PC worker ([worker] mode = remote, set by run.sh).
-ARG BUILD_FROM=python:3.12-slim-trixie
-FROM ${BUILD_FROM}
+# The base image is fixed here (not Home Assistant's BUILD_FROM, which is its Alpine base): Debian's Python 3.12 with
+# ffmpeg and Node 20 from apt, multi-arch (arm64 for the Pi).
+FROM docker.io/library/python:3.12-slim-trixie
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg nodejs ca-certificates curl \
