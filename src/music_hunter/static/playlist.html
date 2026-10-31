@@ -89,11 +89,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
   <section class="actions">
     <button class="btn primary" id="play-all">Play</button>
     <button class="btn" id="shuffle-all">Shuffle</button>
-    <button class="btn" id="find" disabled title="Coming in the next step">Find music</button>
+    <button class="btn" id="find" disabled>Find music</button>
     <button class="btn" id="rename">Rename</button>
     <button class="btn danger" id="delete">Delete</button>
   </section>
 
+  <section id="find-status" hidden></section>
   <section id="job" hidden></section>
   <div class="error" id="error" hidden></div>
 
@@ -187,13 +188,54 @@ async function load() {
   catch (e) { showError(`Couldn't load the playlist: ${e.message}`); }
 }
 
+// --- Find music (SPEC.md §18.2): first time confirm → progress → Ready; after that it opens the interface ----
+let findTimer = null, find = null;
+async function loadFind() {
+  try { find = await api(`/api/playlists/${PID}/find`); } catch (e) { return; }
+  const btn = $("find"), box = $("find-status");
+  clearTimeout(findTimer);
+  btn.classList.toggle("primary", find.state === "ready");
+  if (find.state === "none") {
+    btn.disabled = !find.seeds;
+    btn.textContent = "Find music";
+    btn.title = find.seeds ? "" : "Star at least one track first — starred tracks are the seeds";
+    box.hidden = !!find.seeds;
+    box.innerHTML = find.seeds ? "" : `<div class="meta">Star some tracks to use Find music: starred tracks are the seeds.</div>`;
+  } else if (find.state === "preparing") {
+    btn.disabled = true; btn.textContent = "Preparing…";
+    const pct = Math.min(100, Math.round(100 * find.playable / find.early_start));
+    box.hidden = false;
+    box.innerHTML = `<div class="label">Finding music · ${find.playable} of ${find.early_start} tracks ready to start</div>
+      <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
+      <div class="meta">${esc(find.message || "Starting…")}</div>`;
+    findTimer = setTimeout(loadFind, 3000);
+  } else if (find.state === "error") {
+    btn.disabled = false; btn.textContent = "Try again";
+    box.hidden = false; box.innerHTML = `<div class="error">Find music stopped: ${esc(find.message)}</div>`;
+  } else {
+    btn.disabled = false; btn.textContent = "Find music";
+    box.hidden = false;
+    box.innerHTML = `<div class="meta">Ready · ${find.playable} tracks waiting${find.message ? ` · ${esc(find.message)}` : ""}</div>`;
+    if (find.message) findTimer = setTimeout(loadFind, 10000);
+  }
+}
+$("find").addEventListener("click", async () => {
+  if (!find) return;
+  if (find.state === "ready") { location.href = `/find/${PID}`; return; }
+  if (find.state === "none" && !confirm(`Find music for "${data.name}"?\n\nThis finds and downloads new tracks from your ${find.seeds} starred `
+      + `track${find.seeds > 1 ? "s" : ""} and analyses them — a few minutes before the first ${find.early_start} are ready; `
+      + "the rest keep coming in the background.")) return;
+  try { await api(`/api/playlists/${PID}/find`, {}); } catch (e) { showError(`Couldn't start Find music: ${e.message}`); }
+  loadFind();
+});
+
 // --- track actions ---------------------------------------------------------------------
 document.addEventListener("click", async (e) => {
   const star = e.target.closest("[data-star]");
   if (star) {
     const tid = Number(star.dataset.track), n = Number(star.dataset.star);
     const t = data.tracks.find((x) => x.id === tid);
-    try { await api(`/api/playlists/${PID}/tracks/${tid}`, {stars: t.stars === n ? null : n}, "PUT"); await load(); }
+    try { await api(`/api/playlists/${PID}/tracks/${tid}`, {stars: t.stars === n ? null : n}, "PUT"); await load(); loadFind(); }
     catch (err) { showError(`Couldn't save the stars: ${err.message}`); }
     return;
   }
@@ -303,6 +345,7 @@ $("shuffle").addEventListener("click", () => {
 $("play-all").addEventListener("click", () => { shuffle = false; $("shuffle").classList.remove("on"); startQueue(null); });
 $("shuffle-all").addEventListener("click", () => { shuffle = true; $("shuffle").classList.add("on"); startQueue(null); });
 load();
+loadFind();
 </script>
 </body>
 </html>

@@ -102,6 +102,10 @@ unrated_counts_as = 2                         # Close
 "2" = ["vocals", "lyrics", "too repetitive", "wrong energy", "the drop", "bassline", "too long", "know it already"]
 "3" = ["great vocals", "groove", "energy"]
 
+[find]
+# SPEC.md §18.2–18.3 (v5) — Find music per playlist
+add_seed_stars = 3               # an Add's one-off pull is weighted like a seed with this many stars
+
 [veto]
 # SPEC.md §17.2–17.4 (v4) — every analysed track is scored; the bottom is vetoed (audio dropped, fingerprint
 # kept) and picks are random from what passes. Statistics are anchored to all tracks analysed this run.

@@ -624,7 +624,7 @@ Three buttons (Off · Close · Add), Close as a mild like, unrated/skipped count
 
 ---
 
-## 18. Version 5 plan (draft, 2026-10-31 — not built)
+## 18. Version 5 plan (2026-10-31 — milestones 1–2 built)
 
 From my notes on 2026-10-31. v5 turns the test rig into an everyday app: a playlist library with stars, "Find music" per playlist, and an always-on home on the Raspberry Pi, with the PC woken for heavy work. Where v5 differs from earlier sections, this section wins; v4's listening interface (veto, random picks, vetoed tracks slipped in, tags, Off · Close · Add) carries over inside "Find music". Now in scope (were out in §1): multiple playlists, the Pi, Wake-on-LAN.
 
@@ -666,3 +666,12 @@ From my notes on 2026-10-31. v5 turns the test rig into an everyday app: a playl
 - **Playlist page** (`/playlist/<id>`): Added — waiting for stars on top, then tracks by stars (5 first, unstarred last); tap a star to set it, tap it again to clear; ⋯ menu to add to another playlist or remove; rename, delete; a normal player (names and artwork shown, loudness-normalised) with play, previous / next, seek and shuffle; import progress and the tracks that couldn't be imported, with reasons. Removing a track deletes its audio only once it's in no playlist (the fingerprint stays).
 - The Results page is hidden from the navigation (still at `/results`); the listening interface is at `/listen` until it becomes per-playlist in milestone 2.
 - **Checked**: importing "pump" from Spotify through the server: 10 of 12 tracks added with artwork, BPM and loudness (Jump N' Shout and No Joke ! aren't on YouTube Music, as in v3), 47 MB; pages reachable over Tailscale.
+
+### 18.8 As built — milestone 2 (2026-10-31)
+- **One session per playlist**: each playlist's Find music has its own database (`data/sessions/playlist-<id>.db`) with its own seeds, candidates, pool, plays, veto and secret control rate; the v4 machinery runs in it unchanged. The library (`data/music_hunter.db`) holds playlists and the shared audio library. Pool audio stays in `cache/` until Added.
+- **Find music button** (playlist page): disabled until a track is starred. First click → confirmation → progress bar ("x of 20 tracks ready to start", with the current step: candidates, downloading and analysing) → **Ready · N tracks waiting**; clicking then opens the listening interface at `/find/<id>` (same player as v4, with links back to the playlist). If a job fails, the button offers "Try again". Pool top-ups and refills keep running in the background; at server start every started session picks up where it left off.
+- **Seeds from stars**: the playlist's starred tracks are copied into the session (track, fingerprint, stars) when Find music starts and again at the start of every pull, so star changes take effect at the next pull; an unstarred track stops being a seed. Pool shares: **stars × (seed average ÷ prior)**, with the one-third floor (`share_by_seed_average` no longer applies in v5 sessions).
+- **Adds**: rating Add puts the track in the playlist's **Added — waiting for stars** section (audio moved to `library/`, fingerprint copied to the library); changing the rating away from Add takes it out again (unless it's been starred meanwhile). An Add is pulled for **once, straight away**, as a 3-star seed (`[find] add_seed_stars`); after that pull it isn't a seed unless I star it in the playlist. Off and Close don't touch the playlist.
+- **One session's downloads at a time**: if two playlists both have work, the second waits ("Waiting for another playlist's downloads to finish…"), so downloads stay paced.
+- **Command line**: `music-hunter --playlist <id> <command>` runs `pool`, `scores`, `veto`, `report`, `end-run`, `pull` etc. on that playlist's session (`pull` carries the stars over first).
+- Not yet: waking the PC (milestone 3) — everything runs on the PC for now.

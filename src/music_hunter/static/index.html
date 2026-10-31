@@ -91,7 +91,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 <body>
 <main>
   <header>
-    <nav><span class="brand">MUSIC HUNTER</span><a href="/">Playlists</a><a href="/listen" aria-current="page">Find music</a></nav>
+    <nav><span class="brand">MUSIC HUNTER</span><a href="/">Playlists</a><a id="nav-playlist" href="/">Playlist</a><a href="" aria-current="page">Find music</a></nav>
     <div class="status" id="status">Connecting…</div>
   </header>
 
@@ -145,6 +145,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 
 <script>
 const $ = (id) => document.getElementById(id);
+// v5: this page belongs to one playlist's Find music session; its API lives under /find/<id>/…
+const BASE = (location.pathname.match(/^\/find\/\d+/) || [""])[0];
+const PLAYLIST = BASE ? Number(BASE.split("/").pop()) : null;
+if (PLAYLIST) $("nav-playlist").href = `/playlist/${PLAYLIST}`; else $("nav-playlist").hidden = true;
 let LABELS = {};                        // rating -> button label, from config via /api/state
 let PLAY_TO_END = new Set();            // updated from the server's settings
 let PRELOAD = false, STALL_MS = 250;    // [ui] preload_next, stall_log_ms
@@ -196,14 +200,14 @@ function onAir() { return viewing === "previous" ? prev : current; }
 
 // Operational log: start latency, stalls, audio errors, track ends, script errors.
 function report(kind, data = {}) {
-  fetch("/api/event", {method: "POST", headers: {"Content-Type": "application/json"},
+  fetch(BASE + "/api/event", {method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({kind, play_id: onAir() ? onAir().play_id : null, data})}).catch(() => {});
 }
 window.addEventListener("error", (e) => report("page_error", {message: e.message, line: e.lineno}));
 window.addEventListener("unhandledrejection", (e) => report("page_error", {message: String(e.reason)}));
 
 async function api(path, body) {
-  const res = await fetch(path, body === undefined ? {} : {
+  const res = await fetch(BASE + path, body === undefined ? {} : {
     method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
@@ -249,12 +253,12 @@ function renderGate(s) {
   } else if (s.seeds === 0) {
     $("gate-label").textContent = "No seeds yet";
     $("gate-title").textContent = "Add your seed tracks first";
-    $("gate-text").textContent = "Run `music-hunter add-seeds <Spotify links>`, then restart `music-hunter serve`.";
+    $("gate-text").textContent = "Star some tracks in the playlist — starred tracks are the seeds.";
     $("gate-meter").hidden = true;
   } else if (s.unplayed === 0 && s.worker.state !== "running") {
     $("gate-label").textContent = "Pool empty";
     $("gate-title").textContent = "No unplayed tracks";
-    $("gate-text").textContent = "Run `music-hunter pull` to fetch a new generation, then reload.";
+    $("gate-text").textContent = "New candidates are fetched in the background; check back in a few minutes.";
     $("gate-meter").hidden = true;
   } else {
     $("gate-label").textContent = "Preparing the pool";

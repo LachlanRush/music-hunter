@@ -15,13 +15,13 @@ from contextlib import asynccontextmanager
 import traceback
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from fastapi.staticfiles import StaticFiles
 
-from . import db, jobs, library, ratings, reweight, veto
+from . import db, find, jobs, library, ratings, reweight, veto
 from .config import CONFIG, resolve
 from .results import results as results_data
 from .scoring import pool_tracks
@@ -34,6 +34,9 @@ async def lifespan(app):
     db.log_event(conn, "server_start", host=UI["host"], port=UI["port"],
                  hide_names_until_rated=UI["hide_names_until_rated"])
     worker.start_if_needed()
+    for p in library.list_playlists(conn):          # v5: resume each started session's background work
+        if find.started(p["id"]):
+            session_worker(p["id"]).start_if_needed()
     jobs.requeue_interrupted(conn)                  # v5: a job cut off by a restart runs again (jobs are re-runnable)
     job_runner.kick()
     yield
@@ -47,21 +50,29 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 # --- background pool worker: first pull, unfinished fills and refills (SPEC.md §4.2) -------------
 
 class Worker:
-    def __init__(self):
+    """Background pulls, top-ups and audio restores for one Find music session (v5: one per playlist; None = the
+    single database of earlier versions)."""
+
+    def __init__(self, playlist_id: int | None = None):
+        self.pid = playlist_id
         self.state, self.message = "idle", ""
         self.thread: threading.Thread | None = None
 
     def start_if_needed(self) -> None:
         if self.state == "running":
             return
-        conn = db.connect()
+        conn = db.connect(self.pid)
         job = self.job_needed(conn)
         conn.close()
         if job:
             self.state = "running"  # before the thread starts, so the gate never sees a false "idle"
             self.message = "Starting…"
-            self.thread = threading.Thread(target=self._run, args=(job,), daemon=True)
+            self.thread = threading.Thread(target=self._in_session, args=(job,), daemon=True)
             self.thread.start()
+
+    def _in_session(self, job: str) -> None:
+        db.SESSION.set(self.pid)                    # threads don't inherit the request's session
+        self._run(job)
 
     @staticmethod
     def job_needed(conn) -> str | None:
@@ -85,6 +96,10 @@ class Worker:
                             (gen,)).fetchone()[0]
         played_since = conn.execute("SELECT count(*) FROM plays WHERE generation = ?", (gen,)).fetchone()[0]
         waiting = unpulled_seeds(conn)
+        from .pull import is_v5_session
+        if waiting and is_v5_session(conn):
+            return "pull_new"                 # v5 (§18.3): new Adds are pulled for once, now (stars changed in the
+                                              # playlist are carried over at the next pull)
         if played_since and (len(waiting) >= pool_cfg["refill_new_seeds"]
                              or (waiting and played_since >= pool_cfg["refill_min_plays"])):
             return "pull"                     # placeholder Add-seed rule (§17.8, to be discussed); before top-ups,
@@ -98,7 +113,16 @@ class Worker:
         return None
 
     def _run(self, job: str) -> None:
-        conn = db.connect()
+        if not HEAVY.acquire(blocking=False):         # one session's downloads at a time (paced, no bursts)
+            self.message = "Waiting for another playlist's downloads to finish…"
+            HEAVY.acquire()
+        try:
+            self._run_locked(job)
+        finally:
+            HEAVY.release()
+
+    def _run_locked(self, job: str) -> None:
+        conn = db.connect(self.pid)
         started = time.monotonic()
         db.log_event(conn, "job_start", job=job)
         try:
@@ -124,18 +148,39 @@ class Worker:
                 time.sleep(CONFIG["pool"]["download_delay_seconds"])
             self.state, self.message = "idle", ""
             return
-        if job == "pull":
+        if job in ("pull", "pull_new"):
+            if self.pid is not None:              # v5: carry over stars changed in the playlist since the last pull
+                find.sync_seeds(db.connect_library(), conn, self.pid)
             first = conn.execute("SELECT count(*) FROM generations").fetchone()[0] == 0
-            head = "Finding candidates" if first else "Refilling the pool: finding candidates"
+            head = ("Finding candidates" if first else "Finding candidates for new seeds" if job == "pull_new"
+                    else "Refilling the pool: finding candidates")
             self.message = f"{head} (Last.fm, YouTube Music, Deezer and TIDAL)…"
             yt = YouTubeMusic()
+            seed_list = match_seeds(conn, yt)
+            if job == "pull_new":
+                from .pool import unpulled_seeds
+                waiting = set(unpulled_seeds(conn))
+                seed_list = [s for s in seed_list if s.track_id in waiting]
             gen = Pull(conn, yt, LastFM(), Deezer(), optional(Tidal)).run(
-                match_seeds(conn, yt), progress=lambda text: setattr(self, "message", f"{head}: {text}…"))
+                seed_list, progress=lambda text: setattr(self, "message", f"{head}: {text}…"))
         else:
             gen = conn.execute("SELECT max(id) FROM generations").fetchone()[0]
         self.message = "Downloading and analysing tracks…"
         fill(conn, gen, progress=lambda text: setattr(self, "message", f"Downloading and analysing: {text}"))
         self.state, self.message = "idle", ""
+
+
+HEAVY = threading.Lock()
+worker = Worker(None)                       # the single session of earlier versions (and tests)
+workers: dict[int | None, Worker] = {None: worker}
+
+
+def session_worker(playlist_id=None) -> Worker:
+    """The worker for a playlist's session (default: the current request's session)."""
+    pid = db.SESSION.get() if playlist_id is None else playlist_id
+    if pid not in workers:
+        workers[pid] = Worker(pid)
+    return workers[pid]
 
 
 class LogWriter(io.TextIOBase):
@@ -191,6 +236,19 @@ class ClientEvent(BaseModel):
 CLIENT_EVENTS = {"playing", "stall", "audio_error", "ended", "page_error", "back", "forward"}
 
 
+def _to_playlist(conn, play_id: int) -> None:
+    """v5: an Add joins the playlist's Added section; a rating changed away from Add takes it out again."""
+    pid = db.SESSION.get()
+    if pid is not None:
+        find.sync_add(db.connect_library(), conn, pid, play_id)
+
+
+def _base() -> str:
+    """URL prefix of the current session's listening endpoints ('' for the single database of earlier versions)."""
+    pid = db.SESSION.get()
+    return "" if pid is None else f"/find/{pid}"
+
+
 def track_info(conn, play) -> dict:
     """Everything the player is ever told about a play (SPEC.md §15.3).
 
@@ -201,12 +259,12 @@ def track_info(conn, play) -> dict:
     hidden = UI["hide_names_until_rated"] and play["rating"] is None
     return {"play_id": play["id"], "track_id": t["id"],
             "artist": None if hidden else t["artist"], "title": None if hidden else t["title"],
-            "art": None if hidden or not t["art_path"] else f"/art/{t['id']}",
+            "art": None if hidden or not t["art_path"] else f"{_base()}/art/{t['id']}",
             "rating": play["rating"], "duration_s": t["duration_s"], "gain_db": t["gain_db"] or 0.0,
             "bpm": t["bpm"],
             "tags": json.loads(play["tags"] or "[]") if play["rating"] is not None else [],
             "tag_options": ratings.tag_options(play["rating"]),
-            "audio": f"/audio/{t['id']}"}
+            "audio": f"{_base()}/audio/{t['id']}"}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -340,6 +398,38 @@ def add_track(playlist_id: int, body: AddTrackBody) -> dict:
     return {"added": added}
 
 
+@app.get("/api/playlists/{playlist_id}/find")
+def find_state(playlist_id: int) -> dict:
+    """Find music for this playlist: none (not started) / preparing (progress) / ready / error."""
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    seeds = conn.execute("SELECT count(*) FROM playlist_tracks WHERE playlist_id = ? AND stars IS NOT NULL",
+                         (playlist_id,)).fetchone()[0]
+    return {**find.state(playlist_id, workers.get(playlist_id)), "seeds": seeds}
+
+
+@app.post("/api/playlists/{playlist_id}/find")
+def start_find(playlist_id: int) -> dict:
+    """First time: create the playlist's session, copy its starred tracks in as seeds, start pulling and filling."""
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    if not conn.execute("SELECT 1 FROM playlist_tracks WHERE playlist_id = ? AND stars IS NOT NULL",
+                        (playlist_id,)).fetchone():
+        raise HTTPException(400, "Star at least one track first — starred tracks are the seeds")
+    find.sync_seeds(conn, db.connect(playlist_id), playlist_id)
+    session_worker(playlist_id).start_if_needed()
+    return find_state(playlist_id)
+
+
+@app.get("/find/{playlist_id}", response_class=HTMLResponse)
+def find_page(playlist_id: int):
+    from fastapi.responses import RedirectResponse
+
+    if not find.started(playlist_id):
+        return RedirectResponse(f"/playlist/{playlist_id}")
+    return HTMLResponse((STATIC / "index.html").read_text())
+
+
 @app.get("/cover/{playlist_id}")
 def cover(playlist_id: int) -> FileResponse:
     p = _playlist_or_404(db.connect(), playlist_id)
@@ -348,7 +438,10 @@ def cover(playlist_id: int) -> FileResponse:
     return FileResponse(resolve(p["image_path"]))
 
 
-@app.get("/api/state")
+router = APIRouter()
+
+
+@router.get("/api/state")
 def state() -> dict:
     conn = db.connect()
     unplayed = len(ratings.playable_ids(conn))          # v4: playable tracks with audio ready
@@ -356,13 +449,13 @@ def state() -> dict:
     first_pull = plays[0] == 0
     complete = ratings.run_complete(conn)
     ready = not complete and unplayed > 0 and \
-        (not first_pull or unplayed >= UI["early_start_tracks"] or worker.state != "running")
+        (not first_pull or unplayed >= UI["early_start_tracks"] or session_worker().state != "running")
     last = ratings.last_rated(conn)
     return {
         "ready": ready, "run_complete": complete, "unplayed": unplayed, "early_start": UI["early_start_tracks"],
         "pool_target": CONFIG["pool"]["target_size"],
         "plays": plays[0], "rated": plays[1],
-        "worker": {"state": worker.state, "message": worker.message},
+        "worker": {"state": session_worker().state, "message": session_worker().message},
         "last": track_info(conn, last) if last else None,
         "labels": ratings.LABELS, "hints": CONFIG["ratings"]["hints"], "add": ratings.ADD,
         "play_to_end": UI["play_to_end"], "preload_next": UI["preload_next"], "stall_log_ms": UI["stall_log_ms"],
@@ -370,7 +463,7 @@ def state() -> dict:
     }
 
 
-@app.post("/api/next")
+@router.post("/api/next")
 def next_track() -> dict:
     """The play awaiting a rating, or a new one: a random playable track, or (a control) a random vetoed one."""
     from .pool import restore_audio
@@ -382,7 +475,7 @@ def next_track() -> dict:
             raise HTTPException(409, "Run complete")
         track_id = ratings.upcoming(conn)
         if track_id is None:
-            worker.start_if_needed()
+            session_worker().start_if_needed()
             raise HTTPException(409, "No playable tracks in the pool")
         if not restore_audio(conn, track_id):          # an injected vetoed track's audio, if not fetched ahead
             db.set_setting(conn, "next_draw", None, log=False)
@@ -392,7 +485,7 @@ def next_track() -> dict:
     return track_info(conn, play)
 
 
-@app.get("/api/upcoming")
+@router.get("/api/upcoming")
 def upcoming() -> dict:
     """The track most likely to play next (never names or anything else), for fetching its audio early."""
     conn = db.connect()
@@ -404,28 +497,30 @@ def upcoming() -> dict:
     if not conn.execute("SELECT file_path FROM tracks WHERE id = ?", (track_id,)).fetchone()[0]:
         _fetch_in_background(track_id)                 # an injected vetoed track: audio fetched just in time
         raise HTTPException(404, "Audio still being fetched")
-    return {"track_id": track_id, "audio": f"/audio/{track_id}"}
+    return {"track_id": track_id, "audio": f"{_base()}/audio/{track_id}"}
 
 
-_fetching: set[int] = set()
+_fetching: set[tuple] = set()
 
 
 def _fetch_in_background(track_id: int) -> None:
     from .pool import restore_audio
 
-    if track_id in _fetching:
+    pid = db.SESSION.get()
+    if (pid, track_id) in _fetching:
         return
-    _fetching.add(track_id)
+    _fetching.add((pid, track_id))
 
     def run():
+        db.SESSION.set(pid)                      # threads don't inherit the request's session
         try:
             restore_audio(db.connect(), track_id)
         finally:
-            _fetching.discard(track_id)
+            _fetching.discard((pid, track_id))
     threading.Thread(target=run, daemon=True).start()
 
 
-@app.get("/api/previous")
+@router.get("/api/previous")
 def previous(exclude: int | None = None) -> dict:
     """The track the back button returns to (`exclude`: the track on screen, if already rated).
 
@@ -441,7 +536,7 @@ def previous(exclude: int | None = None) -> dict:
     return {**track_info(conn, play), "can_change": can_change}
 
 
-@app.post("/api/rate")
+@router.post("/api/rate")
 def rate(body: RateBody) -> dict:
     conn = db.connect()
     try:
@@ -450,11 +545,12 @@ def rate(body: RateBody) -> dict:
         raise HTTPException(400, str(e))
     reweight.after_rating(conn)
     veto.update(conn)                         # likes changed: re-score, move tracks across the line
-    worker.start_if_needed()
+    _to_playlist(conn, body.play_id)
+    session_worker().start_if_needed()
     return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone())
 
 
-@app.post("/api/skip")
+@router.post("/api/skip")
 def skip(body: SkipBody) -> dict:
     """Skipped, or ended without a rating: counts as [ratings] unrated_counts_as (Close), marked automatic.
     With 0, the old rule: the track counts as shown and teaches nothing."""
@@ -462,7 +558,7 @@ def skip(body: SkipBody) -> dict:
     auto = CONFIG["ratings"]["unrated_counts_as"]
     if not auto:
         ratings.skip(conn, body.play_id, body.played_seconds)
-        worker.start_if_needed()
+        session_worker().start_if_needed()
         return {"ok": True, "rated": False}
     play = conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone()
     if play is None:
@@ -475,12 +571,12 @@ def skip(body: SkipBody) -> dict:
         db.log_event(conn, "auto_rated", body.play_id, rating=auto)
         reweight.after_rating(conn)
         veto.update(conn)                     # likes changed: re-score, move tracks across the line
-    worker.start_if_needed()
+    session_worker().start_if_needed()
     return {**track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone()),
             "rated": True}
 
 
-@app.post("/api/change")
+@router.post("/api/change")
 def change(body: ChangeBody) -> dict:
     conn = db.connect()
     try:
@@ -488,11 +584,12 @@ def change(body: ChangeBody) -> dict:
     except ValueError as e:
         raise HTTPException(400, str(e))
     veto.update(conn)
-    worker.start_if_needed()
+    _to_playlist(conn, play_id)
+    session_worker().start_if_needed()
     return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone())
 
 
-@app.post("/api/tags")
+@router.post("/api/tags")
 def set_tags(body: TagsBody) -> dict:
     """Optional reason tags for the most recent rating (logged only)."""
     conn = db.connect()
@@ -503,7 +600,7 @@ def set_tags(body: TagsBody) -> dict:
     return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone())
 
 
-@app.get("/api/settings")
+@router.get("/api/settings")
 def get_settings() -> dict:
     from .scoring import target_bpm, tempo_settings
 
@@ -513,7 +610,7 @@ def get_settings() -> dict:
             "max_stretch": CONFIG["bpm"]["max_stretch"]}
 
 
-@app.post("/api/settings")
+@router.post("/api/settings")
 def set_settings(body: SettingsBody) -> dict:
     """Target BPM steers ranking (bpm_match) and, with match_tempo, playback speed. Changes are logged.
 
@@ -530,7 +627,7 @@ def set_settings(body: SettingsBody) -> dict:
     return get_settings()
 
 
-@app.post("/api/event")
+@router.post("/api/event")
 def client_event(body: ClientEvent) -> dict:
     """Player-side events: start latency, stalls, audio errors, track ends, script errors."""
     if body.kind not in CLIENT_EVENTS:
@@ -539,17 +636,17 @@ def client_event(body: ClientEvent) -> dict:
     return {"ok": True}
 
 
-@app.get("/results", response_class=HTMLResponse)
+@router.get("/results", response_class=HTMLResponse)
 def results_page() -> str:
     return (STATIC / "results.html").read_text()
 
 
-@app.get("/api/results")
+@router.get("/api/results")
 def results() -> dict:
     return results_data(db.connect())
 
 
-@app.get("/audio/{track_id}")
+@router.get("/audio/{track_id}")
 def audio(track_id: int) -> FileResponse:
     conn = db.connect()
     t = conn.execute("SELECT file_path FROM tracks WHERE id = ?", (track_id,)).fetchone()
@@ -561,7 +658,7 @@ def audio(track_id: int) -> FileResponse:
     return FileResponse(resolve(rel))
 
 
-@app.get("/art/{track_id}")
+@router.get("/art/{track_id}")
 def art(track_id: int) -> FileResponse:
     """Cover art: library tracks always; Find music pool tracks only once rated (blind until then)."""
     conn = db.connect()
@@ -571,6 +668,18 @@ def art(track_id: int) -> FileResponse:
     if not resolve(t["art_path"]).exists():
         raise HTTPException(404, "No artwork")
     return FileResponse(resolve(t["art_path"]))
+
+
+# The listening interface's endpoints: at the root for the single database of earlier versions (and tests), and per
+# playlist under /find/<id>/… for v5 sessions (SPEC.md §18.2).
+async def use_session(playlist_id: int) -> None:
+    if not find.started(playlist_id):
+        raise HTTPException(404, "Find music hasn't been started for this playlist")
+    db.SESSION.set(playlist_id)
+
+
+app.include_router(router)
+app.include_router(router, prefix="/find/{playlist_id}", dependencies=[Depends(use_session)])
 
 
 def serve() -> None:

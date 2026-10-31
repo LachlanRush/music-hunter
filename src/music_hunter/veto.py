@@ -58,10 +58,15 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
     ids = np.array([r["id"] for r in rows])
     P = np.stack([db.from_blob(r["embedding"]) for r in rows]).astype(np.float64)
 
+    from .pull import seeds as current_seeds
+
+    seed_set = {s.track_id for s in current_seeds(conn)} | \
+        {r[0] for r in conn.execute(f"SELECT track_id FROM plays WHERE is_control = 0 AND rating = {ADD}")}
     seeds = conn.execute(
         "SELECT t.id, e.embedding FROM tracks t JOIN track_embeddings e ON e.track_id = t.id"
-        " WHERE t.origin = 'original_reference'"
-        f" OR t.id IN (SELECT track_id FROM plays WHERE is_control = 0 AND rating = {ADD})").fetchall()
+        f" WHERE t.id IN ({','.join('?' * len(seed_set))})", sorted(seed_set)).fetchall() if seed_set else []
+    if not seeds:
+        return {}
     S = np.stack([db.from_blob(r["embedding"]) for r in seeds]).astype(np.float64)
     seed_ids = np.array([r["id"] for r in seeds])
     sims = P @ S.T

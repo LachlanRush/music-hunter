@@ -37,6 +37,17 @@ def source_db():
     return None
 
 
+@pytest.fixture(autouse=True)
+def fresh_workers():
+    """Background workers are module-level; a state left by one test must not stop the next one's jobs."""
+    from music_hunter import db, web
+    web.worker.state, web.worker.message, web.worker.thread = "idle", "", None
+    web.workers.clear()
+    web.workers[None] = web.worker
+    db.SESSION.set(None)
+    yield
+
+
 @pytest.fixture
 def conn(tmp_path, monkeypatch):
     db_file = source_db()

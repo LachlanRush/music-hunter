@@ -277,11 +277,11 @@ def test_session(conn, monkeypatch):
     from music_hunter.report import report
     report(c)
 
-    # Add saves to collection/ (learning or control); nothing else is kept, apart from the latest
+    # Add saves to library/ (learning or control); nothing else is kept, apart from the latest
     # rating's held audio (the back button can still change it).
     from music_hunter.ratings import ADD
     added = [p for p in plays if p["rating"] == ADD]
-    assert len(list((config.ROOT / "collection").glob("*"))) == len(added) > 0
+    assert len(list((config.ROOT / "library").glob("*.*"))) == len(added) > 0
     held = c.execute("SELECT count(*) FROM plays WHERE undo_path IS NOT NULL").fetchone()[0]
     assert held <= 1
     assert all(p["target_bpm"] == 128.0 for p in plays)

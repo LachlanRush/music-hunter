@@ -4,6 +4,8 @@ import json
 import logging
 import re
 import sqlite3
+from contextvars import ContextVar
+from pathlib import Path
 
 import numpy as np
 
@@ -245,6 +247,8 @@ MIGRATIONS = [
     ("candidates", "pool_seed", "INTEGER REFERENCES tracks(id)"),
     ("plays", "scored_for_seed", "INTEGER"),          # v3: the seed pool whose view of the track scored best
     ("plays", "auto_rated", "INTEGER NOT NULL DEFAULT 0"),   # 1: skipped / ended unrated, counted as [ratings] unrated_counts_as
+    ("tracks", "stars", "INTEGER"),                    # v5 session: a seed's stars (synced from its playlist)
+    ("tracks", "library_id", "INTEGER"),               # v5 session: the library track this is a copy of / was saved as
     ("tracks", "veto_state", "TEXT"),                  # v4: NULL/'playable' or 'vetoed' (audio dropped, fingerprint kept)
     ("tracks", "veto", "TEXT"),                        # v4: latest veto score, z-scores and every rule's verdict (JSON)
     ("plays", "veto", "TEXT"),                         # v4: the track's veto details at the moment it was shown
@@ -274,9 +278,23 @@ def _nullable_video_id(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys = ON")
 
 
-def connect() -> sqlite3.Connection:
-    path("data").mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path("db"), timeout=30)
+# v5 (SPEC.md §18.2): each playlist's Find music session has its own database, so the v4 machinery (pulls, pool,
+# veto, plays) works unchanged inside it. SESSION names the playlist whose session a request or background job
+# works on; None = the library database (playlists, library tracks, jobs).
+SESSION: ContextVar[int | None] = ContextVar("session", default=None)
+_CURRENT = object()
+
+
+def session_path(playlist_id: int) -> Path:
+    return path("data") / "sessions" / f"playlist-{playlist_id}.db"
+
+
+def connect(session=_CURRENT) -> sqlite3.Connection:
+    """The current session's database (see SESSION), a given playlist's session, or (None) the library database."""
+    pid = SESSION.get() if session is _CURRENT else session
+    target = path("db") if pid is None else session_path(pid)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(target, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")  # downloads write while other commands read
@@ -286,6 +304,10 @@ def connect() -> sqlite3.Connection:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
     _nullable_video_id(conn)
     return conn
+
+
+def connect_library() -> sqlite3.Connection:
+    return connect(None)
 
 
 def log_event(conn: sqlite3.Connection, kind: str, play_id: int | None = None, **data) -> None:

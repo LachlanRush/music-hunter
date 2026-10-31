@@ -259,7 +259,18 @@ def multi_source_unplayed(conn: sqlite3.Connection) -> int:
 
 
 def seed_targets(conn: sqlite3.Connection, seed_ids: list[int]) -> dict[int, int]:
-    """Each seed's share of target_size: equal (v4), or by seed average with the min_seed_share floor."""
+    """Each seed's share of target_size, with the min_seed_share floor. v5 (SPEC.md §18.3): by stars × seed score
+    (the seed's average relative to the prior); v4: equal; earlier: by seed average."""
+    from .pull import is_v5_session, seeds
+
+    if not seed_ids:
+        return {}
+    if is_v5_session(conn):
+        stars = {s.track_id: s.stars for s in seeds(conn)}
+        avgs = seed_averages(conn, seed_ids)
+        prior = CONFIG["averages"]["prior"]
+        weights = {s: stars.get(s, CONFIG["find"]["add_seed_stars"]) * (avgs[s] / prior) for s in seed_ids}
+        return round_quotas(seed_shares(weights), CFG["target_size"])
     if not CFG.get("share_by_seed_average", True):
         return round_quotas({s: 1 / len(seed_ids) for s in seed_ids}, CFG["target_size"])
     return round_quotas(seed_shares(seed_averages(conn, seed_ids)), CFG["target_size"])

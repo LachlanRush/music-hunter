@@ -334,8 +334,8 @@ def _place(conn: sqlite3.Connection, play, rating: int) -> None:
         db.log_event(conn, "no_audio_to_place", play["id"], rating=rating)
         return
     src = resolve(track["file_path"] or play["undo_path"])
-    if rating == ADD:
-        dest = _unique(path("collection") / f"{_safe(track['artist'])} - {_safe(track['title'])}{src.suffix}", src)
+    if rating == ADD:                               # v5: saved to the library (it joins the playlist via find.sync_add)
+        dest = _unique(path("library") / f"{_safe(track['artist'])} - {_safe(track['title'])}{src.suffix}", src)
         file_path, undo_path = relative(dest), None
     else:
         dest = _unique(path("data") / "undo" / src.name, src)

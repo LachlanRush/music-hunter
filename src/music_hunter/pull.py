@@ -32,17 +32,34 @@ class Seed:
     title: str
     duration_s: float
     video_id: str | None = None
+    stars: float = 3.0                 # v5: the seed's weight before its seed score (an Add's one-off pull: default)
 
     @property
     def label(self) -> str:
         return f"{self.artist} – {self.title}"
 
 
+def is_v5_session(conn: sqlite3.Connection) -> bool:
+    return bool(conn.execute("SELECT 1 FROM tracks WHERE library_id IS NOT NULL OR stars IS NOT NULL LIMIT 1").fetchone())
+
+
 def seeds(conn: sqlite3.Connection) -> list[Seed]:
-    """The originals plus every learning play rated Add (SPEC.md §15.2).
+    """v5 (SPEC.md §18.3): the playlist's starred tracks, plus each learning Add once — until a pull has queried it
+    (then only if I star it in the playlist). Earlier runs: the originals plus every learning play rated Add.
 
     Rated pool tracks came from YouTube Music, so they already have their video ID.
     """
+    if is_v5_session(conn):
+        pulled = set(db.get_setting(conn, "pulled_seeds", []))
+        rows = conn.execute(
+            "SELECT t.id, t.artist, t.title, t.duration_s, coalesce(m.video_id, t.video_id), t.stars FROM tracks t"
+            " LEFT JOIN seed_matches m ON m.track_id = t.id"
+            " WHERE t.stars IS NOT NULL"
+            f"    OR t.id IN (SELECT track_id FROM plays WHERE is_control = 0 AND rating = {ADD})"
+            " ORDER BY t.id").fetchall()
+        default = CONFIG["find"]["add_seed_stars"]
+        return [Seed(r[0], r[1], r[2], r[3], r[4], float(r[5]) if r[5] is not None else default)
+                for r in rows if r[5] is not None or r[0] not in pulled]
     rows = conn.execute(
         "SELECT t.id, t.artist, t.title, t.duration_s, coalesce(m.video_id, t.video_id) FROM tracks t"
         " LEFT JOIN seed_matches m ON m.track_id = t.id"

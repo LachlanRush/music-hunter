@@ -1,7 +1,7 @@
 """Scripted ratings produce the expected updates — v3 rules (SPEC.md §16.4, §15.4, §5, §7).
 
 Buttons: 1 Off (negative set), 2 Close (mild positive, weight 0.5), 3 Add (positive, weight 2, seed,
-saved to collection/). Audio of tracks not Added is held in data/undo/ until the next rating, then
+saved to library/). Audio of tracks not Added is held in data/undo/ until the next rating, then
 deleted. Runs on a temporary copy of a pool.
 """
 
@@ -82,14 +82,14 @@ def test_scripted_ratings(conn):
     pool_size = c.execute("SELECT count(*) FROM tracks WHERE origin = 'pool'").fetchone()[0]
     assert len(before) == pool_size
 
-    # 1. Learning play Added: collection/, positive weight 2, becomes a seed.
+    # 1. Learning play Added: library/, positive weight 2, becomes a seed.
     p1 = show(c)
     t1 = track_of(c, p1)
     old_file = root / t1["file_path"]
     rate(c, p1, ADD, played_seconds=120)
     history.append((t1["id"], ADD, gen))
     t1 = track_of(c, p1)
-    assert t1["file_path"].startswith("collection/") and (root / t1["file_path"]).exists()
+    assert t1["file_path"].startswith("library/") and (root / t1["file_path"]).exists()
     assert not old_file.exists()
     ids, _, w = positive_set(c)
     assert w[ids.index(t1["id"])] == 2.0
@@ -155,13 +155,13 @@ def test_scripted_ratings(conn):
     history.append((t5["id"], CLOSE, gen))
     assert not skipped_file.exists() and track_of(c, p4)["file_path"] is None
 
-    # 6. Control Added (v3, SPEC.md §16.6): saved to collection/, counts for learning (positive set, seed and
+    # 6. Control Added (v3, SPEC.md §16.6): saved to library/, counts for learning (positive set, seed and
     #    source credit) — but never becomes a seed, so random picks don't steer the sources.
     p6 = show(c, control=True, rng=random.Random(3))
     t6 = track_of(c, p6)
     rate(c, p6, ADD)
     history.append((t6["id"], ADD, gen))
-    assert track_of(c, p6)["file_path"].startswith("collection/")
+    assert track_of(c, p6)["file_path"].startswith("library/")
     ids, _, w = positive_set(c)
     assert w[ids.index(t6["id"])] == 2.0
     assert all(s.track_id != t6["id"] for s in seeds(c))

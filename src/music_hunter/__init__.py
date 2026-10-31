@@ -368,6 +368,8 @@ def mean_offdiag(sim: np.ndarray) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="music-hunter")
+    parser.add_argument("--playlist", type=int, metavar="ID",
+                        help="Work on that playlist's Find music session (v5) instead of the main database")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("add-seeds", help="Add seeds from Spotify track or playlist links")
@@ -417,6 +419,15 @@ def main() -> None:
 
     args = parser.parse_args()
     db.setup_logging()
+    if args.playlist is not None:
+        from . import find
+        if args.command in ("add-seeds", "embed-seeds", "serve"):
+            sys.exit(f"{args.command} doesn't take --playlist (seeds come from the playlist's stars)")
+        if not find.started(args.playlist):
+            sys.exit(f"Playlist {args.playlist} has no Find music session yet (start it from the playlist page)")
+        db.SESSION.set(args.playlist)
+        if args.command == "pull":
+            find.sync_seeds(db.connect_library(), db.connect(), args.playlist)
     if args.command == "add-seeds":
         add_seeds(args.links, args.file)
     elif args.command == "embed-seeds":

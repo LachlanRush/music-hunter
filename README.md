@@ -27,7 +27,17 @@ uv run music-hunter serve           # then open http://127.0.0.1:8765 (or the PC
 ```
 
 Home page: your playlists; import one from a Spotify link or create an empty one. In a playlist: star tracks (starred
-tracks are the seeds), remove them, add them to another playlist, play or shuffle. Find music per playlist comes next.
+tracks are the seeds), remove them, add them to another playlist, play or shuffle.
+
+**Find music** (on a playlist's page, once a track is starred): the first click confirms and starts finding tracks
+from that playlist's seeds, with a progress bar; once ready, clicking it opens the listening interface for that
+playlist (Off · Close · Add, as in v4). Each playlist has its own session (`data/sessions/playlist-<id>.db`). Added
+tracks appear at the top of the playlist under "Added — waiting for stars" and are pulled for once; star them to keep
+them as seeds. Seed shares follow stars × how well each seed's suggestions are rated.
+
+```sh
+uv run music-hunter --playlist 1 veto     # any command on playlist 1's session (pool, scores, report, end-run, pull…)
+```
 
 ## v4: veto and random picks
 
