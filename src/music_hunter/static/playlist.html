@@ -7,8 +7,12 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/tempo.js"></script>
+<script src="/static/media.js"></script>
 <style>
 body { padding-bottom: 140px; }
 .head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: end; }
@@ -342,13 +346,18 @@ async function playAt(i) {
   pos = i;
   const t = queue[i];
   if (!t) { audio.pause(); return; }
-  if (!ctx) {
-    ctx = new AudioContext(); gainNode = ctx.createGain(); volumeNode = ctx.createGain();
-    volumeNode.gain.value = Number($("volume").value) / 100;
-    ctx.createMediaElementSource(audio).connect(gainNode).connect(volumeNode).connect(ctx.destination);
+  if (Media.desktop) {                                             // loudness levelling (static/media.js)
+    if (!ctx) {
+      ctx = new AudioContext(); gainNode = ctx.createGain(); volumeNode = ctx.createGain();
+      volumeNode.gain.value = Number($("volume").value) / 100;
+      ctx.createMediaElementSource(audio).connect(gainNode).connect(volumeNode).connect(ctx.destination);
+    }
+    if (ctx.state === "suspended") await ctx.resume();
+    gainNode.gain.value = Math.pow(10, (t.gain_db || 0) / 20);
+  } else {
+    audio.volume = Media.phoneVolume(t.gain_db, data.phone_headroom_db ?? 6);
   }
-  if (ctx.state === "suspended") await ctx.resume();
-  gainNode.gain.value = Math.pow(10, (t.gain_db || 0) / 20);       // loudness normalisation
+  Media.metadata({title: t.title, artist: t.artist, album: data.name, art: t.art});
   audio.src = await tempoPlayer.start(t.id, t.audio, tempoPlan(t).rate);
   if (queue[pos] !== t) return;                                   // another track was chosen meanwhile
   const nextT = queue[pos + 1];
@@ -363,8 +372,15 @@ function setIcon(on) {
   $("play-icon").innerHTML = on ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M7 4l13 8-13 8z"/>';
   $("play").setAttribute("aria-label", on ? "Pause" : "Play");
 }
-audio.addEventListener("play", () => setIcon(true));
-audio.addEventListener("pause", () => setIcon(false));
+audio.addEventListener("play", () => { setIcon(true); Media.playing(true); });
+audio.addEventListener("pause", () => { setIcon(false); Media.playing(false); });
+audio.addEventListener("loadedmetadata", () => Media.position(audio));
+audio.addEventListener("seeked", () => Media.position(audio));
+Media.handlers({                                                    // lock screen / notification controls
+  play: () => audio.play(), pause: () => audio.pause(),
+  nexttrack: () => $("next").click(), previoustrack: () => $("prev").click(),
+  seekto: (d) => { audio.currentTime = d.seekTime; Media.position(audio); },
+});
 audio.addEventListener("ended", () => { if (pos + 1 < queue.length) playAt(pos + 1); });
 audio.addEventListener("timeupdate", () => {
   if (seeking) return;

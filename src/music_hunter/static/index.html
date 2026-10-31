@@ -7,8 +7,12 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/tempo.js"></script>
+<script src="/static/media.js"></script>
 <style>
 /* Now playing */
 .now { display: grid; gap: 18px; }
@@ -151,6 +155,8 @@ if (PLAYLIST) {
     $("crumb").textContent = `Finding music for ${p.name}`;
     document.title = `Find music · ${p.name} · Music Hunter`;
     playlistBpm = SameBpm.median(p.tracks.map((t) => t.bpm));
+    playlistName = p.name; headroom = p.phone_headroom_db ?? headroom;
+    if (onAir()) showNames(onAir());
     maxStretch = p.max_stretch || maxStretch;
     renderTempo();
   }).catch(() => {});
@@ -275,8 +281,9 @@ function renderGate(s) {
 }
 
 // --- playback ----------------------------------------------------------------------
+let playlistName = "", headroom = 6;
 function ensureAudioGraph() {
-  if (ctx) return;
+  if (ctx || !Media.desktop) return;          // phones level with the element's volume (static/media.js)
   ctx = new AudioContext();
   gainNode = ctx.createGain();                   // per-track loudness normalisation
   volumeNode = ctx.createGain();                 // the volume slider (computers only), after the levelling
@@ -312,7 +319,8 @@ async function loadTrack(track, startAt, alreadyPlayed, autoplay = true) {
   ensureAudioGraph();
   played = alreadyPlayed; lastPos = startAt;
   showNames(track);
-  gainNode.gain.value = Math.pow(10, track.gain_db / 20);   // loudness normalisation
+  if (Media.desktop) gainNode.gain.value = Math.pow(10, track.gain_db / 20);   // loudness levelling
+  else audio.volume = Media.phoneVolume(track.gain_db, headroom);
   const cached = blobs.get(track.track_id);
   const src = await tempoPlayer.start(track.track_id, cached || track.audio, tempoPlan(track).rate);
   if (onAir() !== track) return;                       // moved on meanwhile
@@ -372,12 +380,14 @@ function showNames(track) {
   $("title").textContent = hidden ? "Hidden until rated" : track.title;
   $("title").classList.toggle("hidden-name", hidden);
   $("art-box").innerHTML = track.art ? `<img class="art" src="${track.art}" alt="">` : "?";
+  Media.metadata(hidden ? {title: "Hidden until rated", artist: playlistName ? `Finding music for ${playlistName}` : "Find music"}
+                        : {title: track.title, artist: track.artist, album: playlistName, art: track.art});
 }
 
 // Browsers only allow sound after a click or key press; any of them unlocks it.
 async function unlockAudio() {
   ensureAudioGraph();
-  if (ctx.state === "suspended") await ctx.resume();
+  if (ctx && ctx.state === "suspended") await ctx.resume();
 }
 
 async function goBack() {
@@ -486,7 +496,14 @@ audio.addEventListener("timeupdate", () => {
   $("pos").textContent = fmt(audio.currentTime);
   if (audio.duration) $("dur").textContent = fmt(audio.duration);
 });
-audio.addEventListener("play", () => setPlayIcon(true));
+audio.addEventListener("play", () => { setPlayIcon(true); Media.playing(true); });
+audio.addEventListener("loadedmetadata", () => Media.position(audio));
+audio.addEventListener("seeked", () => Media.position(audio));
+Media.handlers({                                     // lock screen / notification controls
+  play: () => { if (audio.paused) togglePlay(); }, pause: () => audio.pause(),
+  nexttrack: () => skip(), previoustrack: () => goBack(),
+  seekto: (d) => { audio.currentTime = d.seekTime; lastPos = audio.currentTime; Media.position(audio); },
+});
 audio.addEventListener("playing", () => {
   const now = performance.now();
   if (awaitingFirstPlay) {
@@ -502,7 +519,7 @@ audio.addEventListener("waiting", () => { if (!awaitingFirstPlay && !seeking) st
 audio.addEventListener("error", () => {
   if (audio.error) report("audio_error", {code: audio.error.code, message: audio.error.message || ""});
 });
-audio.addEventListener("pause", () => setPlayIcon(false));
+audio.addEventListener("pause", () => { setPlayIcon(false); Media.playing(false); });
 audio.addEventListener("ended", () => {
   if (viewing === "previous") {
     report("ended", {rated: prev.rating, played_s: Math.round(played), previous: true});

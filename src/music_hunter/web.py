@@ -355,7 +355,7 @@ def get_playlist(playlist_id: int) -> dict:
             "tracks": [{**t, "audio": f"/audio/{t['id']}" if t["has_audio"] else None,
                         "art": f"/art/{t['id']}" if t["has_art"] else None} for t in tracks],
             "others": [{"id": o["id"], "name": o["name"]} for o in library.list_playlists(conn) if o["id"] != playlist_id],
-            "max_stretch": CONFIG["bpm"]["max_stretch"]}
+            "max_stretch": CONFIG["bpm"]["max_stretch"], "phone_headroom_db": CONFIG["loudness"]["phone_headroom_db"]}
 
 
 @app.patch("/api/playlists/{playlist_id}")

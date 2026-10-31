@@ -223,6 +223,8 @@ sigma = 3.0                      # year_match: closeness to the target year fall
 # (applied by the player) so it plays at target_lufs, limited so peaks stay below
 # max_true_peak_db.
 target_lufs = -14.0
+phone_headroom_db = 6.0         # v5: on phones the player levels with the element's volume (≤ 1), so everything
+                                 # plays this much quieter and tracks needing up to +6 dB can still be raised
 max_true_peak_db = -1.0
 
 [report]
