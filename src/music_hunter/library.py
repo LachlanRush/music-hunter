@@ -55,13 +55,15 @@ def list_playlists(conn: sqlite3.Connection) -> list[dict]:
 
 
 def playlist_tracks(conn: sqlite3.Connection, playlist_id: int) -> list[dict]:
-    """Added (waiting for stars) first, newest first; then by stars, 5 at the top and unstarred last."""
+    """Added (waiting for stars) first, newest first; then by stars, 5 at the top and unstarred last; within the same
+    stars, the most recently starred first (then the most recently added)."""
     return [dict(r) for r in conn.execute(
         "SELECT t.id, t.artist, t.title, t.duration_s, t.gain_db, t.bpm, t.release_date,"
         " t.art_path IS NOT NULL AS has_art, t.file_path IS NOT NULL AS has_audio, pt.stars, pt.status, pt.added_at"
         " FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id WHERE pt.playlist_id = ?"
         " ORDER BY pt.status = 'added' DESC, CASE WHEN pt.status = 'added' THEN pt.added_at END DESC,"
-        " pt.stars IS NULL, pt.stars DESC, pt.added_at", (playlist_id,))]
+        " pt.stars IS NULL, pt.stars DESC, coalesce(pt.starred_at, pt.added_at) DESC, pt.added_at DESC, t.id DESC",
+        (playlist_id,))]
 
 
 def set_stars(conn: sqlite3.Connection, playlist_id: int, track_id: int, stars: int | None) -> None:
@@ -69,7 +71,8 @@ def set_stars(conn: sqlite3.Connection, playlist_id: int, track_id: int, stars: 
     if stars is not None and stars not in range(1, 6):
         raise ValueError("Stars must be 1–5, or none")
     with conn:
-        n = conn.execute("UPDATE playlist_tracks SET stars = ?, status = CASE WHEN ? IS NULL THEN status ELSE 'member' END"
+        n = conn.execute("UPDATE playlist_tracks SET stars = ?, status = CASE WHEN ? IS NULL THEN status ELSE 'member' END,"
+                         " starred_at = strftime('%Y-%m-%d %H:%M:%f', 'now')"
                          " WHERE playlist_id = ? AND track_id = ?", (stars, stars, playlist_id, track_id)).rowcount
     if not n:
         raise ValueError("That track isn't in this playlist")

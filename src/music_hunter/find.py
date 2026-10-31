@@ -56,7 +56,39 @@ def sync_seeds(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: i
         keep = [t["id"] for t in starred] or [-1]
         unstarred = sess.execute(f"UPDATE tracks SET stars = NULL WHERE library_id IS NOT NULL AND stars IS NOT NULL"
                                  f" AND library_id NOT IN ({','.join('?' * len(keep))})", keep).rowcount
+    drop_orphans(lib, sess, playlist_id)
     return {"seeds": len(starred), "added": added, "unstarred": unstarred}
+
+
+def drop_orphans(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: int) -> dict:
+    """Unplayed pool tracks whose every suggesting seed has left the playlist leave the pool ('dropped': audio
+    deleted, fingerprint and history kept). Unstarring doesn't count — the track is still in the playlist. A dropped
+    track comes back if a seed still in the playlist suggests it (a later pull, or the seed added back).
+    Returns {'dropped', 'returned'}."""
+    in_playlist = {r[0] for r in lib.execute("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?",
+                                             (playlist_id,))}
+    refs = {r["id"] for r in sess.execute("SELECT id, library_id FROM tracks WHERE library_id IS NOT NULL")
+            if r["library_id"] in in_playlist}
+    rows = sess.execute(
+        "SELECT t.id, t.veto_state, t.file_path, group_concat(DISTINCT s.seed_track_id) AS seeds"
+        " FROM tracks t JOIN suggestions s ON s.candidate_id = t.candidate_id"
+        " WHERE t.origin = 'pool' AND t.id NOT IN (SELECT track_id FROM plays) GROUP BY t.id").fetchall()
+    dropped, returned = [], []
+    with sess:
+        for r in rows:
+            keep = bool({int(x) for x in r["seeds"].split(",")} & refs)
+            if not keep and r["veto_state"] != "dropped":
+                dropped.append(r["id"])
+                sess.execute("UPDATE tracks SET veto_state = 'dropped' WHERE id = ?", (r["id"],))
+                if r["file_path"] and r["file_path"].startswith(CONFIG["paths"]["cache"] + "/"):
+                    resolve(r["file_path"]).unlink(missing_ok=True)
+                    sess.execute("UPDATE tracks SET file_path = NULL WHERE id = ?", (r["id"],))
+            elif keep and r["veto_state"] == "dropped":
+                returned.append(r["id"])                 # the veto decides again; a restore brings its audio back
+                sess.execute("UPDATE tracks SET veto_state = 'playable' WHERE id = ?", (r["id"],))
+    if dropped or returned:
+        db.log_event(sess, "seed_tracks_dropped", dropped=len(dropped), returned=len(returned))
+    return {"dropped": len(dropped), "returned": len(returned)}
 
 
 def sync_add(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: int, play_id: int) -> None:

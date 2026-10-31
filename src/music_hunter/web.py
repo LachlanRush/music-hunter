@@ -40,6 +40,8 @@ async def lifespan(app):
             session_worker(p["id"]).start_if_needed()
     jobs.requeue_interrupted(conn)                  # v5: a job cut off by a restart runs again (jobs are re-runnable)
     job_runner.kick()
+    from . import tempo
+    threading.Thread(target=tempo.sync_all, daemon=True).start()   # Same BPM copies for every playlist
     yield
     db.log_event(conn, "server_stop")
 
@@ -241,13 +243,37 @@ def _to_playlist(conn, play_id: int) -> None:
     """v5: an Add joins the playlist's Added section; a rating changed away from Add takes it out again."""
     pid = db.SESSION.get()
     if pid is not None:
-        find.sync_add(db.connect_library(), conn, pid, play_id)
+        lib = db.connect_library()
+        find.sync_add(lib, conn, pid, play_id)
+        _sync_tempo(lib, pid)                      # an Added track gets the playlist's Same BPM copy too
+        from . import tempo
+        tempo.sync_session(conn, pid)              # Find music: drop copies of tracks played a while ago
+
+
+def _sync_tempo(lib, playlist_id: int) -> None:
+    """Keep a playlist's Same BPM copies in step with its tracks (never fails a request)."""
+    from . import tempo
+
+    try:
+        tempo.sync_playlist(lib, playlist_id)
+    except Exception as e:  # noqa: BLE001 — playback extras must not break rating or editing
+        db.log_event(lib, "tempo_sync_failed", playlist_id=playlist_id, error=str(e)[:200])
 
 
 def _base() -> str:
     """URL prefix of the current session's listening endpoints ('' for the single database of earlier versions)."""
     pid = db.SESSION.get()
     return "" if pid is None else f"/find/{pid}"
+
+
+def _find_rate(conn, bpm) -> dict:
+    """Same BPM in Find music: the rate this track plays at, and a short note (none outside a v5 session)."""
+    from . import tempo
+
+    if db.SESSION.get() is None:
+        return {"rate": 1.0, "tempo_note": ""}
+    rate, note = tempo.rate_for(bpm, tempo.session_settings(conn))
+    return {"rate": rate, "tempo_note": note}
 
 
 def track_info(conn, play) -> dict:
@@ -262,7 +288,7 @@ def track_info(conn, play) -> dict:
             "artist": None if hidden else t["artist"], "title": None if hidden else t["title"],
             "art": None if hidden or not t["art_path"] else f"{_base()}/art/{t['id']}",
             "rating": play["rating"], "duration_s": t["duration_s"], "gain_db": t["gain_db"] or 0.0,
-            "bpm": t["bpm"],
+            "bpm": t["bpm"], **_find_rate(conn, t["bpm"]),
             "tags": json.loads(play["tags"] or "[]") if play["rating"] is not None else [],
             "tag_options": ratings.tag_options(play["rating"]),
             "audio": f"{_base()}/audio/{t['id']}"}
@@ -293,6 +319,15 @@ job_runner = jobs.Runner()
 class NewPlaylist(BaseModel):
     name: str | None = None
     spotify_url: str | None = None
+
+
+class TempoBody(BaseModel):
+    on: bool
+    bpm: float | None = None
+
+
+def _tempo_view(s: dict) -> dict:
+    return {"on": s["on"], "bpm": s["bpm"], "target": s["target"], "max_stretch": CONFIG["bpm"]["max_stretch"]}
 
 
 class StarsBody(BaseModel):
@@ -348,14 +383,37 @@ def new_playlist(body: NewPlaylist) -> dict:
 def get_playlist(playlist_id: int) -> dict:
     conn = db.connect()
     p = _playlist_or_404(conn, playlist_id)
+    from . import tempo
+
     tracks = library.playlist_tracks(conn, playlist_id)
+    s = tempo.playlist_settings(conn, playlist_id)
+    median = tempo.median_bpm(t["bpm"] for t in tracks)
+
+    def view(t):
+        rate, note = tempo.rate_for(t["bpm"], s)
+        return {**t, "audio": f"/audio/{t['id']}" if t["has_audio"] else None,
+                "art": f"/art/{t['id']}" if t["has_art"] else None,
+                "bpm_shown": tempo.shown_bpm(t["bpm"], median), "rate": rate, "tempo_note": note}
     return {"id": p["id"], "name": p["name"], "description": p["description"],
             "image": f"/cover/{p['id']}" if p["image_path"] else None,
             "job": _job_view(jobs.latest_for(conn, playlist_id)),
-            "tracks": [{**t, "audio": f"/audio/{t['id']}" if t["has_audio"] else None,
-                        "art": f"/art/{t['id']}" if t["has_art"] else None} for t in tracks],
+            "tracks": [view(t) for t in tracks], "tempo": _tempo_view(s),
             "others": [{"id": o["id"], "name": o["name"]} for o in library.list_playlists(conn) if o["id"] != playlist_id],
             "max_stretch": CONFIG["bpm"]["max_stretch"], "phone_headroom_db": CONFIG["loudness"]["phone_headroom_db"]}
+
+
+@app.put("/api/playlists/{playlist_id}/tempo")
+def set_playlist_tempo(playlist_id: int, body: TempoBody) -> dict:
+    """The playlist's Same BPM: on/off and target. Every track's copy at that target is rendered in the background;
+    copies at the old target are deleted (one target per playlist)."""
+    from . import tempo
+
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    if body.bpm is not None and not 60 <= body.bpm <= 200:
+        raise HTTPException(400, "BPM between 60 and 200")
+    tempo.save(conn, tempo.playlist_key(playlist_id), body.on, body.bpm)
+    return _tempo_view(tempo.sync_playlist(conn, playlist_id))
 
 
 @app.patch("/api/playlists/{playlist_id}")
@@ -386,7 +444,13 @@ def star_track(playlist_id: int, track_id: int, body: StarsBody) -> dict:
 
 @app.delete("/api/playlists/{playlist_id}/tracks/{track_id}")
 def remove_track(playlist_id: int, track_id: int) -> dict:
-    library.remove_from_playlist(db.connect(), playlist_id, track_id)
+    conn = db.connect()
+    library.remove_from_playlist(conn, playlist_id, track_id)
+    _sync_tempo(conn, playlist_id)
+    if find.started(playlist_id):         # the tracks it found for Find music leave too, unless another seed found them
+        sess = db.connect(playlist_id)
+        find.sync_seeds(conn, sess, playlist_id)
+        session_worker(playlist_id).start_if_needed()        # top the pool up from the remaining seeds
     return {"ok": True}
 
 
@@ -395,6 +459,7 @@ def add_track(playlist_id: int, body: AddTrackBody) -> dict:
     conn = db.connect()
     try:
         added = library.add_to_playlist(conn, playlist_id, body.track_id)
+        _sync_tempo(conn, playlist_id)
     except ValueError as e:
         raise HTTPException(404, str(e))
     return {"added": added}
@@ -626,7 +691,7 @@ def upcoming() -> dict:
         _fetch_in_background(track_id)                 # an injected vetoed track: audio fetched just in time
         raise HTTPException(404, "Audio still being fetched")
     bpm = conn.execute("SELECT bpm FROM tracks WHERE id = ?", (track_id,)).fetchone()[0]
-    return {"track_id": track_id, "audio": f"{_base()}/audio/{track_id}", "bpm": bpm}
+    return {"track_id": track_id, "audio": f"{_base()}/audio/{track_id}", **_find_rate(conn, bpm)}
 
 
 _fetching: set[tuple] = set()
@@ -797,27 +862,66 @@ def _audio_path(track_id: int) -> str | None:
 
 
 @router.get("/tempo/{track_id}")
-def tempo_status(track_id: int, rate: float) -> dict:
-    """Same BPM: is the stretched copy ready? Starts rendering it if not (SPEC.md §18.13)."""
+def tempo_status(track_id: int, rate: float, pl: int | None = None, ahead: int = 0) -> dict:
+    """Same BPM: is the stretched copy ready? Queues it if not — first in line unless `ahead` (SPEC.md §18.13).
+    `pl` = the playlist, for the playlist page (Find music's session is known from the URL)."""
     from . import tempo
 
     if not 0.5 <= rate <= 2:
         raise HTTPException(400, "Rate out of range")
+    if db.SESSION.get() is None and pl is None:
+        raise HTTPException(400, "Which playlist?")
     rel = _audio_path(track_id)
     if rel is None:
         raise HTTPException(404, "Audio not available")
-    st = tempo.status(db.SESSION.get(), track_id, rel, rate)
-    return {"state": st, "url": f"{_base()}/tempo/{track_id}/audio?rate={rate}" if st == "ready" else None}
+    scope = tempo.scope_for(db.SESSION.get(), pl)
+    st = tempo.status(scope, track_id, rel, rate, urgent=not ahead)
+    q = f"rate={rate}" + (f"&pl={pl}" if pl is not None else "")
+    return {"state": st, "url": f"{_base()}/tempo/{track_id}/audio?{q}" if st == "ready" else None}
 
 
 @router.get("/tempo/{track_id}/audio")
-def tempo_audio(track_id: int, rate: float) -> FileResponse:
+def tempo_audio(track_id: int, rate: float, pl: int | None = None) -> FileResponse:
     from . import tempo
 
-    f = tempo.target(db.SESSION.get(), track_id, rate)
+    f = tempo.target(tempo.scope_for(db.SESSION.get(), pl), track_id, rate)
     if not f.exists():
         raise HTTPException(404, "Not rendered yet")
     return FileResponse(f, media_type="audio/webm")
+
+
+@router.get("/api/tempo")
+def find_tempo() -> dict:
+    """Find music's own Same BPM setting (separate from the playlist's)."""
+    from . import tempo
+
+    return _tempo_view(tempo.session_settings(db.connect()))
+
+
+@router.put("/api/tempo")
+def set_find_tempo(body: TempoBody) -> dict:
+    from . import tempo
+
+    if db.SESSION.get() is None:
+        raise HTTPException(404, "Only in a playlist's Find music")
+    if body.bpm is not None and not 60 <= body.bpm <= 200:
+        raise HTTPException(400, "BPM between 60 and 200")
+    conn = db.connect()
+    tempo.save(conn, "same_bpm", body.on, body.bpm)
+    tempo.sync_session(conn, db.SESSION.get())               # copies at another target are deleted
+    return _tempo_view(tempo.session_settings(conn))
+
+
+@router.get("/api/tempo/{track_id}")
+def find_track_tempo(track_id: int) -> dict:
+    from . import tempo
+
+    conn = db.connect()
+    t = conn.execute("SELECT bpm FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if t is None:
+        raise HTTPException(404, "No such track")
+    rate, note = tempo.rate_for(t[0], tempo.session_settings(conn))
+    return {"rate": rate, "tempo_note": note}
 
 
 @router.get("/art/{track_id}")

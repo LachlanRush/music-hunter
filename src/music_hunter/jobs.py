@@ -65,6 +65,8 @@ def run_job(conn: sqlite3.Connection, job: dict) -> None:
         if job["kind"] == "import":
             result = library.import_spotify(conn, job["payload"]["link"], job["playlist_id"], report)
             progress.update(result)
+            from . import tempo
+            tempo.sync_playlist(conn, job["playlist_id"])          # Same BPM copies for the new tracks
         else:
             raise ValueError(f"Unknown job kind {job['kind']!r}")
         _set(conn, job["id"], state="done", progress=progress)

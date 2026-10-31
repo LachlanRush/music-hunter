@@ -174,7 +174,7 @@ function row(t) {
   return `<li data-row="${t.id}" class="${playing ? "playing" : ""} ${t.audio ? "" : "unavailable"}">
     <button class="cover-btn" data-play="${t.id}" aria-label="Play ${esc(t.title)}" ${t.audio ? "" : "disabled"}>
       ${t.art ? `<img src="${t.art}" alt="" loading="lazy">` : "♪"}</button>
-    <div class="t"><b>${esc(t.title)}</b><span>${esc(t.artist)} · ${fmt(t.duration_s)}</span></div>
+    <div class="t"><b>${esc(t.title)}</b><span>${esc(t.artist)} · ${fmt(t.duration_s)}${t.bpm_shown ? ` · ${t.bpm_shown}` : ""}</span></div>
     ${stars(t)}
     <div class="more"><button data-more="${t.id}" aria-label="More for ${esc(t.title)}" aria-expanded="false">⋯</button></div>
   </li>`;
@@ -358,10 +358,10 @@ async function playAt(i) {
     audio.volume = Media.phoneVolume(t.gain_db, data.phone_headroom_db ?? 6);
   }
   Media.metadata({title: t.title, artist: t.artist, album: data.name, art: t.art});
-  audio.src = await tempoPlayer.start(t.id, t.audio, tempoPlan(t).rate);
+  audio.src = await tempoPlayer.start(t.id, t.audio, fresh(t).rate);
   if (queue[pos] !== t) return;                                   // another track was chosen meanwhile
   const nextT = queue[pos + 1];
-  if (nextT) tempoPlayer.prepare(nextT.id, tempoPlan(nextT).rate); // render the next one's copy ahead
+  if (nextT) tempoPlayer.prepare(nextT.id, fresh(nextT).rate);    // its copy first in line after this one
   $("player").hidden = false;
   $("p-title").textContent = t.title; $("p-artist").textContent = t.artist;
   $("p-art").src = t.art || ""; $("p-art").style.visibility = t.art ? "visible" : "hidden";
@@ -420,30 +420,28 @@ $("volume").addEventListener("input", () => {
   try { localStorage.setItem("volume", $("volume").value); } catch (e) {}
 });
 // --- Same BPM (static/tempo.js): stretched copies rendered on the server, shared with this playlist's Find music ---
-let tempo = SameBpm.settings(PID);
-const tempoPlayer = SameBpm.player(audio, "", () => showTempoNote());
-const playlistBpm = () => SameBpm.median((data ? data.tracks : []).map((t) => t.bpm));
-function tempoPlan(t) { return SameBpm.plan(t.bpm, tempo, playlistBpm(), (data && data.max_stretch) || 0.12); }
-function showTempoNote() {
-  const t = queue[pos];
-  if (!t) { $("p-tempo").textContent = ""; return; }
-  const p = tempoPlan(t), waiting = p.rate !== 1 && tempoPlayer.rate() !== p.rate;
-  $("p-tempo").textContent = waiting ? `${p.note} · getting it ready…` : p.note;
+// The playlist's own Same BPM setting, kept on the server (which renders every track's copy in the background).
+const tempoPlayer = SameBpm.player(audio, "", `pl=${PID}`, () => showTempoNote());
+const fresh = (t) => (data && data.tracks.find((x) => x.id === t.id)) || t;   // rates change with the setting
+function showTempoNote() { $("p-tempo").textContent = queue[pos] ? SameBpm.note(fresh(queue[pos]), tempoPlayer.rate()) : ""; }
+function renderTempo() {
+  const s = data.tempo;
+  $("same-bpm").checked = s.on;
+  $("bpm-target").value = s.target;
+  $("bpm-target").disabled = !s.on;
 }
-function retune() {
+async function saveTempo(on, bpm) {
+  try { await api(`/api/playlists/${PID}/tempo`, {on, bpm}, "PUT"); } catch (e) { showError(`Couldn't save: ${e.message}`); }
+  await load();
+  renderTempo();
   const t = queue[pos];
-  if (t) tempoPlayer.retune(t.id, t.audio, tempoPlan(t).rate);
+  if (t) tempoPlayer.retune(t.id, t.audio, fresh(t).rate);
   showTempoNote();
 }
-function renderTempo() {
-  $("same-bpm").checked = tempo.on;
-  $("bpm-target").value = tempo.bpm || playlistBpm();
-  $("bpm-target").disabled = !tempo.on;
-}
-$("same-bpm").addEventListener("change", () => { tempo.on = $("same-bpm").checked; SameBpm.store(PID, tempo); renderTempo(); retune(); });
+$("same-bpm").addEventListener("change", () => saveTempo($("same-bpm").checked, data.tempo.bpm));
 $("bpm-target").addEventListener("change", () => {
   const v = Number($("bpm-target").value);
-  tempo.bpm = v >= 60 && v <= 200 ? v : null; SameBpm.store(PID, tempo); renderTempo(); retune();
+  saveTempo(true, v >= 60 && v <= 200 ? v : null);
 });
 
 load().then(renderTempo);

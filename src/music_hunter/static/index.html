@@ -154,11 +154,8 @@ if (PLAYLIST) {
   fetch(`/api/playlists/${PLAYLIST}`).then((r) => r.json()).then((p) => {
     $("crumb").textContent = `Finding music for ${p.name}`;
     document.title = `Find music · ${p.name} · Music Hunter`;
-    playlistBpm = SameBpm.median(p.tracks.map((t) => t.bpm));
     playlistName = p.name; headroom = p.phone_headroom_db ?? headroom;
     if (onAir()) showNames(onAir());
-    maxStretch = p.max_stretch || maxStretch;
-    renderTempo();
   }).catch(() => {});
 }
 let LABELS = {};                        // rating -> button label, from config via /api/state
@@ -172,7 +169,7 @@ async function prefetchUpcoming() {
   if (!PRELOAD || viewing !== "current") return;
   try {
     const up = await api("/api/upcoming");
-    tempoPlayer.prepare(up.track_id, tempoPlan(up).rate);   // Same BPM: its stretched copy, rendered ahead
+    tempoPlayer.prepare(up.track_id, up.rate);             // Same BPM: its stretched copy, rendered ahead
     if (blobs.has(up.track_id) || preloading === up.track_id) return;
     preloading = up.track_id;
     const res = await fetch(up.audio);
@@ -322,7 +319,7 @@ async function loadTrack(track, startAt, alreadyPlayed, autoplay = true) {
   if (Media.desktop) gainNode.gain.value = Math.pow(10, track.gain_db / 20);   // loudness levelling
   else audio.volume = Media.phoneVolume(track.gain_db, headroom);
   const cached = blobs.get(track.track_id);
-  const src = await tempoPlayer.start(track.track_id, cached || track.audio, tempoPlan(track).rate);
+  const src = await tempoPlayer.start(track.track_id, cached || track.audio, track.rate);
   if (onAir() !== track) return;                       // moved on meanwhile
   startedFromMemory = src === cached;
   audio.src = src;
@@ -341,36 +338,40 @@ async function loadTrack(track, startAt, alreadyPlayed, autoplay = true) {
   }
 }
 
-// --- Same BPM (static/tempo.js): shared with the playlist page; stretched copies rendered on the server ---------
-let tempo = SameBpm.settings(PLAYLIST), playlistBpm = null, maxStretch = 0.12;
-const tempoPlayer = SameBpm.player(audio, BASE, () => showTempoNote());
-function tempoPlan(track) { return SameBpm.plan(track.bpm, tempo, playlistBpm, maxStretch); }
-function showTempoNote() {
-  const t = onAir();
-  if (!t) { $("tempo-note").textContent = ""; return; }
-  const p = tempoPlan(t), waiting = p.rate !== 1 && tempoPlayer.rate() !== p.rate;
-  $("tempo-note").textContent = waiting ? `${p.note} · getting it ready…` : p.note;
-}
+// --- Same BPM (static/tempo.js): Find music's own setting (separate from the playlist's), kept on the server ------
+let tempo = {on: false, bpm: null, target: null};
+const tempoPlayer = SameBpm.player(audio, BASE, "", () => showTempoNote());
+function showTempoNote() { $("tempo-note").textContent = SameBpm.note(onAir(), tempoPlayer.rate()); }
 function renderTempo() {
   $("same-bpm").checked = tempo.on;
-  $("bpm-target").value = tempo.bpm || playlistBpm || "";
+  $("bpm-target").value = tempo.target ?? "";
   $("bpm-target").disabled = !tempo.on;
 }
-function retune() {
+async function saveTempo(on, bpm) {
+  try {
+    const r = await fetch(BASE + "/api/tempo", {method: "PUT", headers: {"Content-Type": "application/json"},
+                                                body: JSON.stringify({on, bpm})});
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    tempo = await r.json();
+  } catch (e) { showError(`Couldn't save: ${e.message}`); }
+  renderTempo();
   const t = onAir();
-  if (t) tempoPlayer.retune(t.track_id, blobs.get(t.track_id) || t.audio, tempoPlan(t).rate);
+  if (!t) return;
+  try { Object.assign(t, await api(`/api/tempo/${t.track_id}`)); } catch (e) { return; }   // its new rate
+  tempoPlayer.retune(t.track_id, blobs.get(t.track_id) || t.audio, t.rate);
   showTempoNote();
 }
-$("same-bpm").addEventListener("change", () => { tempo.on = $("same-bpm").checked; SameBpm.store(PLAYLIST, tempo); renderTempo(); retune(); });
+$("same-bpm").addEventListener("change", () => saveTempo($("same-bpm").checked, tempo.bpm));
 $("bpm-target").addEventListener("change", () => {
   const v = Number($("bpm-target").value);
-  tempo.bpm = v >= 60 && v <= 200 ? v : null; SameBpm.store(PLAYLIST, tempo); renderTempo(); retune();
+  saveTempo(true, v >= 60 && v <= 200 ? v : null);
 });
 $("bpm-target").addEventListener("keydown", (e) => { if (e.key === "Enter") $("bpm-target").blur(); });
+api("/api/tempo").then((s) => { tempo = s; renderTempo(); }).catch(() => {});
 
 function tempoReport() {
   const t = onAir(), rate = tempoPlayer.rate();
-  return {played_bpm: t && t.bpm ? (rate !== 1 ? tempoPlan(t).target : t.bpm) : null, playback_rate: rate};
+  return {played_bpm: t && t.bpm ? (rate !== 1 ? tempo.target : t.bpm) : null, playback_rate: rate};
 }
 
 // Artist and title arrive only once a track is rated (server setting hide_names_until_rated).
@@ -598,7 +599,6 @@ function renderReveal(rev) {
 }
 
 poll();
-renderTempo();
 setInterval(poll, 4000);
 </script>
 </body>

@@ -100,3 +100,43 @@ def test_find_api(setup, monkeypatch):
         assert state["seeds"] == 1 and state["unplayed"] == 0
         assert client.get(f"/find/{pid}").status_code == 200
         assert client.get("/find/9999/api/state").status_code == 404
+
+
+def test_removed_seed_takes_its_tracks(setup):
+    """A track removed from the playlist takes the pool tracks it found with it, unless another seed found them too;
+    unstarring doesn't; adding it back brings them back."""
+    import music_hunter.config as config
+
+    lib, pid, tracks = setup
+    a, b = tracks[0], tracks[1]
+    library.set_stars(lib, pid, a, 4)
+    library.set_stars(lib, pid, b, 3)
+    sess = db.connect(pid)
+    find.sync_seeds(lib, sess, pid)
+    seed = {r["library_id"]: r["id"] for r in sess.execute("SELECT id, library_id FROM tracks WHERE library_id IS NOT NULL")}
+    (config.ROOT / "cache").mkdir(exist_ok=True)
+    pool = {}
+    with sess:
+        g = sess.execute("INSERT INTO generations DEFAULT VALUES").lastrowid
+        for name, by in (("only_a", [a]), ("both", [a, b])):
+            c = sess.execute("INSERT INTO candidates (generation, artist, title, song_title, song_artists, is_extended)"
+                             " VALUES (?, 'X', ?, ?, '[\"x\"]', 0)", (g, name, name)).lastrowid
+            for s in by:
+                sess.execute("INSERT INTO suggestions (generation, seed_track_id, source, rank, artist, title, outcome,"
+                             " candidate_id) VALUES (?, ?, 'deezer', 1, 'X', ?, 'new', ?)", (g, seed[s], name, c))
+            (config.ROOT / "cache" / f"{name}.webm").write_bytes(b"audio")
+            pool[name] = sess.execute("INSERT INTO tracks (artist, title, file_path, duration_s, origin, candidate_id)"
+                                      " VALUES ('X', ?, ?, 200, 'pool', ?)", (name, f"cache/{name}.webm", c)).lastrowid
+    state = lambda n: sess.execute("SELECT veto_state, file_path FROM tracks WHERE id = ?", (pool[n],)).fetchone()
+    library.set_stars(lib, pid, a, None)                         # unstarred, still in the playlist: nothing leaves
+    find.sync_seeds(lib, sess, pid)
+    assert state("only_a")[0] != "dropped"
+    library.remove_from_playlist(lib, pid, a)
+    find.sync_seeds(lib, sess, pid)
+    assert tuple(state("only_a")) == ("dropped", None) and not (config.ROOT / "cache" / "only_a.webm").exists()
+    assert state("both")[0] != "dropped"                          # b found it too
+    from music_hunter.ratings import playable_ids
+    assert pool["only_a"] not in playable_ids(sess)
+    library.add_to_playlist(lib, pid, a)                          # back in the playlist: it returns (audio re-fetched)
+    find.sync_seeds(lib, sess, pid)
+    assert state("only_a")[0] == "playable"

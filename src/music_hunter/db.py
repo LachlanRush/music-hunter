@@ -265,7 +265,9 @@ MIGRATIONS = [
     ("plays", "auto_rated", "INTEGER NOT NULL DEFAULT 0"),   # 1: skipped / ended unrated, counted as [ratings] unrated_counts_as
     ("tracks", "stars", "INTEGER"),                    # v5 session: a seed's stars (synced from its playlist)
     ("tracks", "library_id", "INTEGER"),               # v5 session: the library track this is a copy of / was saved as
-    ("tracks", "veto_state", "TEXT"),                  # v4: NULL/'playable' or 'vetoed' (audio dropped, fingerprint kept)
+    ("playlist_tracks", "starred_at", "TEXT"),         # v5: when its stars were last set (order within the same stars)
+    ("tracks", "veto_state", "TEXT"),                  # v4: NULL/'playable' or 'vetoed' (audio dropped, fingerprint kept);
+                                                       # v5: 'dropped' — every seed that suggested it left the playlist
     ("tracks", "veto", "TEXT"),                        # v4: latest veto score, z-scores and every rule's verdict (JSON)
     ("plays", "veto", "TEXT"),                         # v4: the track's veto details at the moment it was shown
     ("plays", "settings_version", "INTEGER"),          # v4: which settings the play ran under (settings_versions)

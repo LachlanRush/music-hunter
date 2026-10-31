@@ -132,7 +132,9 @@ def update(conn: sqlite3.Connection) -> dict:
         for tid, d in details.items():
             r = rows[tid]
             state = r["veto_state"] or "playable"
-            if active and not r["played"]:
+            if state == "dropped":                    # v5: its seeds left the playlist (find.drop_orphans)
+                pass
+            elif active and not r["played"]:
                 if state != "vetoed" and (d["z"] < -CFG["cut_sd"] or d["rules"]["backstop"]):
                     state = "vetoed"
                     vetoed_now.append(tid)

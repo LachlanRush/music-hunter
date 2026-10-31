@@ -31,7 +31,12 @@ def test_order_by_stars_with_added_on_top(lib):
     library.set_stars(conn, pid, b, 5)
     library.set_stars(conn, pid, d, 2)
     order = [t["id"] for t in library.playlist_tracks(conn, pid)]
-    assert order == [e, b, d, a, c]                                  # Added first, then 5 → 2, unstarred last
+    assert order == [e, b, d, c, a]                                  # Added first, then 5 → 2, unstarred last
+    import time
+    time.sleep(0.01)
+    library.set_stars(conn, pid, a, 2)                               # same stars as d, starred later: above it
+    assert [t["id"] for t in library.playlist_tracks(conn, pid)][:4] == [e, b, a, d]
+    library.set_stars(conn, pid, a, None)
     library.set_stars(conn, pid, e, 4)                              # starring an Added track moves it into the list
     rows = {t["id"]: t for t in library.playlist_tracks(conn, pid)}
     assert rows[e]["status"] == "member" and [t["id"] for t in library.playlist_tracks(conn, pid)][:2] == [b, e]
@@ -97,7 +102,7 @@ def test_playlist_api(lib, monkeypatch):
 
 
 def test_same_bpm_render(lib):
-    """Same BPM: a stretched copy is rendered on the server in the background, then served."""
+    """Same BPM: a playlist's copies are rendered on the server at its target; one target at a time."""
     import subprocess
     import time
 
@@ -109,14 +114,31 @@ def test_same_bpm_render(lib):
     f = root / "library" / "Someone - Tone.webm"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
                     "-c:a", "libopus", str(f)], check=True)
+    with conn:
+        conn.execute("UPDATE tracks SET bpm = 93.6 WHERE id = ?", (t,))          # a 2:3 reading of ~140
+    pid = library.create_playlist(conn, "p")
+    library.add_to_playlist(conn, pid, t)
     client = TestClient(web.app)
-    assert client.get(f"/tempo/{t}", params={"rate": 3}).status_code == 400
-    st = client.get(f"/tempo/{t}", params={"rate": 1.05}).json()
-    for _ in range(100):
-        if st["state"] != "rendering":
-            break
-        time.sleep(0.1)
-        st = client.get(f"/tempo/{t}", params={"rate": 1.05}).json()
-    assert st["state"] == "ready", st
-    r = client.get(st["url"])
-    assert r.status_code == 200 and len(r.content) > 1000
+    d = client.get(f"/api/playlists/{pid}").json()
+    assert d["tempo"]["on"] is False and d["tracks"][0]["rate"] == 1 and d["tracks"][0]["bpm_shown"] == 94
+    assert client.put(f"/api/playlists/{pid}/tempo", json={"on": True, "bpm": 145}).json()["target"] == 145
+    tr = client.get(f"/api/playlists/{pid}").json()["tracks"][0]
+    assert tr["rate"] == round(145 / 140.4, 3) and tr["tempo_note"].startswith("145 BPM")
+
+    def wait(rate):
+        for _ in range(100):
+            st = client.get(f"/tempo/{t}", params={"rate": rate, "pl": pid}).json()
+            if st["state"] != "rendering":
+                return st
+            time.sleep(0.1)
+    st = wait(tr["rate"])
+    assert st["state"] == "ready" and len(client.get(st["url"]).content) > 1000
+    folder = root / "cache" / "tempo"
+    assert len(list(folder.glob("*.webm"))) == 1
+    client.put(f"/api/playlists/{pid}/tempo", json={"on": True, "bpm": 138})       # new target: old copy gone
+    rate2 = client.get(f"/api/playlists/{pid}").json()["tracks"][0]["rate"]
+    assert wait(rate2)["state"] == "ready"
+    assert [p.name for p in folder.glob("*.webm")] == [f"pl{pid}-{t}-{rate2:.3f}.webm"]
+    client.put(f"/api/playlists/{pid}/tempo", json={"on": False})                  # off: none kept
+    assert not list(folder.glob("*.webm"))
+    assert client.get(f"/tempo/{t}", params={"rate": 1.05}).status_code == 400      # which playlist?
