@@ -117,17 +117,15 @@ def loudness(file: Path) -> tuple[float, float, float]:
 
 class Filler:
     def __init__(self, conn: sqlite3.Connection, generation: int):
-        from .embedding import Embedder
-
+        from .analysis import backend
         from .pull import Matcher, optional
         from .sources import Deezer, LastFM, YouTubeMusic
 
         self.conn, self.generation = conn, generation
-        self.embedder = Embedder()
+        self.backend = backend()             # here, or the PC worker (SPEC.md §18.4)
         self.yt = YouTubeMusic()
         self.matcher = Matcher(conn, self.yt, optional(LastFM), Deezer())
         self.unusable: list[str] = []
-        self.last_download = 0.0
         self.ready = 0
         self.failed: list[str] = []
 
@@ -147,66 +145,42 @@ class Filler:
             # Same song as a candidate not yet tried (now with this one's provenance): it takes the slot.
             return bool(self.matcher.merged_into) and self.process(self.matcher.merged_into, seed)
         c = self.conn.execute("SELECT * FROM candidates WHERE id = ?", (cid,)).fetchone()
-        wait = CFG["download_delay_seconds"] - (time.monotonic() - self.last_download)
-        if wait > 0:
-            time.sleep(wait)
-        t0 = time.monotonic()
+        from .analysis import AnalysisFailed, DownloadFailed
+        from .bpm import seeds_median
+
+        if not hasattr(self, "bpm_prior"):
+            self.bpm_prior = seeds_median(self.conn)      # 3:2 tie-break: prefer tempos near the seeds'
+        say = getattr(self, "progress", None)
         try:
-            file = download(c["video_id"])
-        except Exception as e:  # yt-dlp raises DownloadError and friends
-            return self._fail(c, f"download: {e}", download_s=time.monotonic() - t0)
-        finally:
-            self.last_download = time.monotonic()
-        t1 = time.monotonic()
-        try:
-            lufs, peak, gain = loudness(file)
-            sr = self.embedder.sample_rate
-            samples = audio.decode(file, sr)
-            emb = self.embedder.embed_track(samples)
-        except Exception as e:
-            return self._fail(c, f"analysis: {e}", download_s=t1 - t0, analysis_s=time.monotonic() - t1)
-        try:
-            from .bpm import estimate, seeds_median
-            if not hasattr(self, "bpm_prior"):
-                self.bpm_prior = seeds_median(self.conn)      # 3:2 tie-break: prefer tempos near the seeds'
-            bpm_sr = CONFIG["bpm"]["analysis_sample_rate"]
-            tempo = estimate(audio.decode(file, bpm_sr), bpm_sr, self.bpm_prior)
-        except Exception as e:
-            tempo = None
-            db.log_event(self.conn, "bpm_failed", generation=self.generation, video_id=c["video_id"], reason=str(e)[:200])
-        t2 = time.monotonic()
-        art, published = self._artwork(c["video_id"])
+            res = self.backend.analyse(c["video_id"], self.bpm_prior,
+                                       status=say and (lambda text: say(f"{c['artist']} – {c['title']}: {text}")))
+        except AnalysisFailed as e:
+            return self._fail(c, f"analysis: {e}", **e.timings)
+        except DownloadFailed as e:
+            return self._fail(c, f"download: {e}", **e.timings)
+        for what, reason in res.notes.items():
+            db.log_event(self.conn, what, generation=self.generation, video_id=c["video_id"], reason=reason)
 
         with self.conn:
             tid = self.conn.execute(
                 "INSERT INTO tracks (artist, title, file_path, duration_s, origin, candidate_id, generation,"
                 " video_id, loudness_lufs, true_peak_db, gain_db, art_path, release_date, bpm)"
                 " VALUES (?, ?, ?, ?, 'pool', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (c["artist"], c["title"], relative(file), len(samples) / sr, cid,
-                 self.generation, c["video_id"], lufs, peak, gain, art and relative(art),
-                 c["release_date"] or published, tempo)).lastrowid
-            db.store_embedding(self.conn, tid, self.embedder.model_name, emb)
+                (c["artist"], c["title"], relative(res.file), res.duration_s, cid,
+                 self.generation, c["video_id"], res.lufs, res.peak, res.gain, res.art and relative(res.art),
+                 c["release_date"] or res.published, res.bpm)).lastrowid
+            db.store_embedding(self.conn, tid, res.model, res.embedding)
             self.conn.execute("UPDATE candidates SET status = 'pool', track_id = ?, pool_seed = ? WHERE id = ?",
                               (tid, seed, cid))
         self.ready += 1
         if getattr(self, "progress", None):
             self.progress(f"{unrated_pool_size(self.conn)} of {CFG['target_size']} tracks in the pool")
         db.log_event(self.conn, "track_ready", generation=self.generation, track_id=tid, video_id=c["video_id"],
-                     download_s=round(t1 - t0, 2), analysis_s=round(t2 - t1, 2), waited_s=round(max(wait, 0), 2),
-                     bytes=file.stat().st_size, duration_s=round(len(samples) / sr, 1), chunks=len(emb.chunks),
-                     bpm=tempo)
-        print(f"  [{self.ready:2d}] {c['artist']} – {c['title']}  "
-              f"({len(samples) / sr / 60:.1f} min, {len(emb.chunks)} chunks, {lufs:.1f} LUFS, gain {gain:+.1f} dB)")
+                     **{k: round(v, 2) for k, v in res.timings.items()}, bytes=res.file.stat().st_size,
+                     duration_s=round(res.duration_s, 1), chunks=len(res.embedding.chunks), bpm=res.bpm)
+        print(f"  [{self.ready:2d}] {c['artist']} – {c['title']}  ({res.duration_s / 60:.1f} min, "
+              f"{len(res.embedding.chunks)} chunks, {res.lufs:.1f} LUFS, gain {res.gain:+.1f} dB)")
         return True
-
-    def _artwork(self, video_id: str):
-        from . import artwork
-
-        try:
-            return artwork.fetch(self.yt, video_id)
-        except Exception as e:
-            db.log_event(self.conn, "art_failed", generation=self.generation, video_id=video_id, reason=str(e)[:200])
-            return None, None
 
     def _fail(self, c, reason: str, **timings) -> bool:
         reason = re.sub(r"\x1b\[[0-9;]*m", "", reason).splitlines()[0][:300]   # drop yt-dlp's colour codes

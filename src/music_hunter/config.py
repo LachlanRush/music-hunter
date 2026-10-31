@@ -4,8 +4,11 @@ import os
 import tomllib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = ROOT / "config.toml"
+# MUSIC_HUNTER_ROOT moves the data (database, audio, .env and an optional config.toml) elsewhere, e.g. /data in the
+# Home Assistant add-on or a scratch copy; without it, everything lives in the project folder.
+PROJECT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.environ.get("MUSIC_HUNTER_ROOT") or PROJECT)
+CONFIG_PATH = ROOT / "config.toml" if (ROOT / "config.toml").exists() else PROJECT / "config.toml"
 
 with CONFIG_PATH.open("rb") as f:
     CONFIG = tomllib.load(f)

@@ -412,6 +412,10 @@ def main() -> None:
 
     sub.add_parser("serve", help="Start the localhost player")
 
+    p = sub.add_parser("worker", help="PC worker: download and analyse tracks queued by the app (v5, SPEC.md §18.4)")
+    p.add_argument("--server", default=CONFIG["worker"]["server"], help="Where the app runs (default from config)")
+    p.add_argument("--once", action="store_true", help="Stop when the queue is empty")
+
     sub.add_parser("report", help="Operational report: sessions, delays, pipeline timings, errors")
 
     p = sub.add_parser("candidates", help="List candidates with sources and filter-reason counts")
@@ -421,7 +425,7 @@ def main() -> None:
     db.setup_logging()
     if args.playlist is not None:
         from . import find
-        if args.command in ("add-seeds", "embed-seeds", "serve"):
+        if args.command in ("add-seeds", "embed-seeds", "serve", "worker"):
             sys.exit(f"{args.command} doesn't take --playlist (seeds come from the playlist's stars)")
         if not find.started(args.playlist):
             sys.exit(f"Playlist {args.playlist} has no Find music session yet (start it from the playlist page)")
@@ -455,6 +459,9 @@ def main() -> None:
     elif args.command == "serve":
         from .web import serve
         serve()
+    elif args.command == "worker":
+        from .analysis import run_worker
+        run_worker(args.server, once=args.once)
     elif args.command == "report":
         from .report import report
         report(db.connect())

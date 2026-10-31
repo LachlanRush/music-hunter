@@ -278,3 +278,25 @@ permutations = 200               # shuffled-rating baseline runs
 bootstrap = 1000                 # resamples for 95% ranges
 top_n = 10                       # top-N precision ("would its top picks have been my likes?")
 pca_components = 16              # audio dimensions added to agreement/year/BPM in the "added value" test
+
+# v5 (SPEC.md §18.4): who downloads and analyses tracks. local = this machine (the PC on its own); remote = queue it
+# for the PC worker (`music-hunter worker` on the PC), waking the PC through Home Assistant when no worker is about.
+# Pulls, YouTube matching, the veto and scoring always run where the app runs.
+[worker]
+mode = "local"
+server = "http://127.0.0.1:8765"     # the PC worker's default --server: where the app runs (the Pi's Tailscale address)
+poll_seconds = 5                     # worker: how often to ask for work while busy (or just finished)
+idle_poll_seconds = 30               # … and once idle
+idle_minutes = 3                     # worker: release the PC (let it sleep) after this long without work
+connected_seconds = 90               # app: a worker that asked for work this recently counts as connected
+rewake_minutes = 10                  # app: wake the PC again if it still hasn't connected
+wait_poll_seconds = 1                # app: how often a queued track is checked while waiting
+item_timeout_minutes = 15            # app: a claimed track with no result after this long goes back to the queue
+
+[worker.wake]
+# Home Assistant service that wakes the PC. Inside the add-on, url can stay empty (the Supervisor's proxy is used);
+# elsewhere set url and put a long-lived access token in .env as HA_TOKEN. send_magic_packet needs `wake_on_lan:`
+# in Home Assistant's configuration.yaml; a Wake-on-LAN switch or button entity works too (e.g. button/press).
+url = ""
+service = "wake_on_lan/send_magic_packet"
+data = { mac = "9c:6b:00:98:16:83" }

@@ -39,6 +39,17 @@ them as seeds. Seed shares follow stars × how well each seed's suggestions are 
 uv run music-hunter --playlist 1 veto     # any command on playlist 1's session (pool, scores, report, end-run, pull…)
 ```
 
+**Pi and PC** (`[worker]` in config.toml): with `mode = "remote"` the app (on the Pi) queues downloads and analysis
+for the PC, waking it through Home Assistant. On the PC, the worker runs as a user service:
+
+```sh
+systemctl --user enable --now music-hunter-worker   # starts on boot; set [worker] server to the Pi's address
+journalctl --user -u music-hunter-worker -f         # what it's doing
+uv run music-hunter worker --server http://<pi>:8765 --once   # or by hand, until the queue is empty
+```
+
+Both sides need the same `WORKER_TOKEN` in `.env`. `MUSIC_HUNTER_ROOT` points the app at another data folder.
+
 ## v4: veto and random picks
 
 ```sh

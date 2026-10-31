@@ -11,7 +11,6 @@ Tracks already in the library (same Spotify ID or YouTube video) are reused, not
 
 import shutil
 import sqlite3
-import time
 
 import requests
 
@@ -146,45 +145,19 @@ def match_on_youtube(yt, artists: list[str], title: str, duration_s: float):
     return min(close, key=lambda r: abs(r.duration_s - duration_s)), None
 
 
-class Analyser:
-    """Loudness, MAEST fingerprint, BPM and cover art for a downloaded file (models loaded once)."""
-
-    def __init__(self):
-        from .embedding import Embedder
-        from .sources import YouTubeMusic
-
-        self.embedder = Embedder()
-        self.yt = YouTubeMusic()
-
-    def store(self, conn: sqlite3.Connection, file, artist: str, title: str, origin: str, **extra) -> int:
-        from . import artwork, audio
-        from .bpm import estimate
-        from .pool import loudness
-
-        sr = self.embedder.sample_rate
-        samples = audio.decode(file, sr)
-        emb = self.embedder.embed_track(samples)
-        lufs, peak, gain = loudness(file)
-        bpm_sr = CONFIG["bpm"]["analysis_sample_rate"]
-        try:
-            tempo = estimate(audio.decode(file, bpm_sr), bpm_sr)
-        except Exception:
-            tempo = None
-        art, published = None, None
-        if extra.get("video_id"):
-            try:
-                art, published = artwork.fetch(self.yt, extra["video_id"])
-            except Exception as e:
-                db.log_event(conn, "art_failed", video_id=extra["video_id"], reason=str(e)[:200])
-        cols = {"artist": artist, "title": title, "file_path": relative(file), "duration_s": len(samples) / sr,
-                "origin": origin, "loudness_lufs": lufs, "true_peak_db": peak, "gain_db": gain, "bpm": tempo,
-                "art_path": art and relative(art), **extra}
-        cols["release_date"] = cols.get("release_date") or published
-        with conn:
-            tid = conn.execute(f"INSERT INTO tracks ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
-                               list(cols.values())).lastrowid
-            db.store_embedding(conn, tid, self.embedder.model_name, emb)
-        return tid
+def store(conn: sqlite3.Connection, res, file, artist: str, title: str, origin: str, **extra) -> int:
+    """Add an analysed track (analysis.Result, its audio now at `file`) to the library."""
+    for what, reason in res.notes.items():
+        db.log_event(conn, what, video_id=extra.get("video_id"), reason=reason)
+    cols = {"artist": artist, "title": title, "file_path": relative(file), "duration_s": res.duration_s,
+            "origin": origin, "loudness_lufs": res.lufs, "true_peak_db": res.peak, "gain_db": res.gain, "bpm": res.bpm,
+            "art_path": res.art and relative(res.art), **extra}
+    cols["release_date"] = cols.get("release_date") or res.published
+    with conn:
+        tid = conn.execute(f"INSERT INTO tracks ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                           list(cols.values())).lastrowid
+        db.store_embedding(conn, tid, res.model, res.embedding)
+    return tid
 
 
 def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progress=None) -> dict:
@@ -192,15 +165,15 @@ def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progre
     library are reused. `progress(done, total, message)` is told how far it's got. Returns
     {'added', 'reused', 'failures': [{'artist', 'title', 'reason'}]}."""
     from . import spotify
-    from .pool import download
+    from .analysis import AnalysisFailed, DownloadFailed, backend
     from .ratings import _safe, _unique
+    from .sources import YouTubeMusic
 
     report = lambda done, total, msg: progress and progress(done, total, msg)
     ids = spotify.expand([link])
-    analyser, folder = None, path("library")
+    yt, folder = None, path("library")
     folder.mkdir(parents=True, exist_ok=True)
     out = {"added": 0, "reused": 0, "failures": []}
-    last_download = 0.0
     for i, sid in enumerate(ids):
         report(i, len(ids), "Reading Spotify")
         row = conn.execute("SELECT id FROM tracks WHERE spotify_id = ? ORDER BY id LIMIT 1", (sid,)).fetchone()
@@ -214,8 +187,8 @@ def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progre
             continue
         artist = ", ".join(t.artists)
         report(i, len(ids), f"{artist} – {t.title}")
-        analyser = analyser or Analyser()
-        best, reason = match_on_youtube(analyser.yt, t.artists, t.title, t.duration_s)
+        yt = yt or YouTubeMusic()
+        best, reason = match_on_youtube(yt, t.artists, t.title, t.duration_s)
         if best is None:
             out["failures"].append({"artist": artist, "title": t.title, "reason": reason})
             db.log_event(conn, "import_failed", playlist_id=playlist_id, spotify_id=sid, reason=reason)
@@ -225,20 +198,16 @@ def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progre
         if row:                                          # already downloaded (e.g. a pool track): reuse it
             out["reused"] += add_to_playlist(conn, playlist_id, row[0])
             continue
-        wait = CONFIG["pool"]["download_delay_seconds"] - (time.monotonic() - last_download)
-        if wait > 0:
-            time.sleep(wait)
         try:
-            downloaded = download(best.video_id)
-        except Exception as e:
-            out["failures"].append({"artist": artist, "title": t.title, "reason": f"download failed ({str(e)[:120]})"})
+            res = backend().analyse(best.video_id, status=lambda text: report(i, len(ids), f"{artist} – {t.title}: {text}"))
+        except DownloadFailed as e:          # (or AnalysisFailed)
+            what = "analysis" if isinstance(e, AnalysisFailed) else "download"
+            out["failures"].append({"artist": artist, "title": t.title, "reason": f"{what} failed ({str(e)[:120]})"})
             continue
-        finally:
-            last_download = time.monotonic()
-        dest = _unique(folder / f"{_safe(artist)} - {_safe(t.title)}{downloaded.suffix}", downloaded)
-        shutil.move(downloaded, dest)
-        tid = analyser.store(conn, dest, artist, t.title, "library", video_id=best.video_id, spotify_id=sid,
-                             release_date=t.release_date)
+        dest = _unique(folder / f"{_safe(artist)} - {_safe(t.title)}{res.file.suffix}", res.file)
+        shutil.move(res.file, dest)
+        tid = store(conn, res, dest, artist, t.title, "library", video_id=best.video_id, spotify_id=sid,
+                    release_date=t.release_date)
         add_to_playlist(conn, playlist_id, tid)
         out["added"] += 1
         db.log_event(conn, "track_imported", playlist_id=playlist_id, track_id=tid, spotify_id=sid,

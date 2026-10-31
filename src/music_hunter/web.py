@@ -15,13 +15,13 @@ from contextlib import asynccontextmanager
 import traceback
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from fastapi.staticfiles import StaticFiles
 
-from . import db, find, jobs, library, ratings, reweight, veto
+from . import analysis, db, find, jobs, library, ratings, reweight, veto
 from .config import CONFIG, resolve
 from .results import results as results_data
 from .scoring import pool_tracks
@@ -33,6 +33,7 @@ async def lifespan(app):
     conn = db.connect()
     db.log_event(conn, "server_start", host=UI["host"], port=UI["port"],
                  hide_names_until_rated=UI["hide_names_until_rated"])
+    analysis.drop_unfinished(conn)                  # v5: nobody waits for tracks queued for the PC before a restart
     worker.start_if_needed()
     for p in library.list_playlists(conn):          # v5: resume each started session's background work
         if find.started(p["id"]):
@@ -419,6 +420,73 @@ def start_find(playlist_id: int) -> dict:
     find.sync_seeds(conn, db.connect(playlist_id), playlist_id)
     session_worker(playlist_id).start_if_needed()
     return find_state(playlist_id)
+
+
+# --- the PC worker's API (SPEC.md §18.4): it asks for tracks to download and analyse, and sends them back ---------
+
+def worker_auth(request: Request) -> None:
+    token = analysis.worker_token()
+    if not token:
+        raise HTTPException(503, "WORKER_TOKEN isn't set on this side")
+    if request.headers.get("authorization") != f"Bearer {token}":
+        raise HTTPException(401, "Wrong worker token")
+
+
+@app.post("/api/worker/claim", dependencies=[Depends(worker_auth)])
+def worker_claim():
+    item = analysis.claim(db.connect_library())
+    return item if item is not None else Response(status_code=204)
+
+
+@app.post("/api/worker/{work_id}/file/{kind}", dependencies=[Depends(worker_auth)])
+async def worker_file(work_id: int, kind: str, request: Request, ext: str = ""):
+    if kind not in ("audio", "art", "embedding"):
+        raise HTTPException(404, "Unknown file kind")
+    body = await request.body()
+    if not analysis.receive_file(db.connect_library(), work_id, kind, body, ext):
+        raise HTTPException(409, "Not wanted any more")
+    return {"ok": True}
+
+
+class WorkDone(BaseModel):
+    duration_s: float
+    lufs: float
+    peak: float
+    gain: float
+    model: str
+    bpm: float | None = None
+    published: str | None = None
+    timings: dict = {}
+    notes: dict = {}
+
+
+@app.post("/api/worker/{work_id}/done", dependencies=[Depends(worker_auth)])
+def worker_done(work_id: int, body: WorkDone):
+    try:
+        ok = analysis.finish(db.connect_library(), work_id, body.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not ok:
+        raise HTTPException(409, "Not wanted any more")
+    return {"ok": True}
+
+
+class WorkFailed(BaseModel):
+    stage: str
+    error: str
+    timings: dict = {}
+
+
+@app.post("/api/worker/{work_id}/failed", dependencies=[Depends(worker_auth)])
+def worker_failed(work_id: int, body: WorkFailed):
+    if not analysis.finish(db.connect_library(), work_id, {"stage": body.stage, "timings": body.timings}, body.error):
+        raise HTTPException(409, "Not wanted any more")
+    return {"ok": True}
+
+
+@app.get("/api/worker")
+def worker_status() -> dict:
+    return analysis.status(db.connect_library())
 
 
 @app.get("/find/{playlist_id}", response_class=HTMLResponse)

@@ -197,6 +197,22 @@ CREATE TABLE IF NOT EXISTS jobs (
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- v5 (SPEC.md §18.4): tracks waiting to be downloaded and analysed by the PC worker ([worker] mode = remote).
+CREATE TABLE IF NOT EXISTS work (
+    id             INTEGER PRIMARY KEY,
+    video_id       TEXT NOT NULL,
+    bpm_prior      REAL,
+    state          TEXT NOT NULL DEFAULT 'queued',  -- queued | claimed | done | failed | collected | cancelled
+    claimed_at     TEXT,
+    file_path      TEXT,                            -- uploaded audio, art and fingerprint (npz)
+    art_path       TEXT,
+    embedding_path TEXT,
+    result         TEXT,                            -- JSON measurements (or failure stage and timings)
+    error          TEXT,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- v4: each distinct set of run settings (veto, controls, pool), so plays can be split by what they ran under.
 CREATE TABLE IF NOT EXISTS settings_versions (
     id          INTEGER PRIMARY KEY,

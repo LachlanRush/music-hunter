@@ -11,7 +11,8 @@ from itertools import zip_longest
 
 import requests
 
-from .config import CONFIG, ROOT
+from . import config
+from .config import CONFIG
 from .names import fold, parse_upload, split_artists
 
 CFG = CONFIG["sources"]
@@ -56,7 +57,9 @@ class CallStats:
 
 
 def load_env() -> None:
-    env = ROOT / ".env"
+    env = config.ROOT / ".env"
+    if not env.exists():
+        env = config.PROJECT / ".env"
     if env.exists():
         for line in env.read_text().splitlines():
             if "=" in line and not line.lstrip().startswith("#"):

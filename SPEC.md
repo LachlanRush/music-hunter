@@ -624,7 +624,7 @@ Three buttons (Off · Close · Add), Close as a mild like, unrated/skipped count
 
 ---
 
-## 18. Version 5 plan (2026-10-31 — milestones 1–2 built)
+## 18. Version 5 plan (2026-10-31 — milestones 1–3 built)
 
 From my notes on 2026-10-31. v5 turns the test rig into an everyday app: a playlist library with stars, "Find music" per playlist, and an always-on home on the Raspberry Pi, with the PC woken for heavy work. Where v5 differs from earlier sections, this section wins; v4's listening interface (veto, random picks, vetoed tracks slipped in, tags, Off · Close · Add) carries over inside "Find music". Now in scope (were out in §1): multiple playlists, the Pi, Wake-on-LAN.
 
@@ -675,3 +675,12 @@ From my notes on 2026-10-31. v5 turns the test rig into an everyday app: a playl
 - **One session's downloads at a time**: if two playlists both have work, the second waits ("Waiting for another playlist's downloads to finish…"), so downloads stay paced.
 - **Command line**: `music-hunter --playlist <id> <command>` runs `pool`, `scores`, `veto`, `report`, `end-run`, `pull` etc. on that playlist's session (`pull` carries the stars over first).
 - Not yet: waking the PC (milestone 3) — everything runs on the PC for now.
+
+### 18.9 As built — milestone 3 (2026-10-31)
+- **What runs where** (changed from 18.4): the PC does only the heavy part — **download, loudness, BPM, MAEST and cover art** for one track at a time. Pulls, YouTube matching, the veto and scoring stay with the app on the Pi: they're web requests and arithmetic, and this way candidates can be found while the PC is off. The Pi also re-downloads a vetoed track's audio itself (no analysis needed).
+- `[worker] mode`: **local** (everything on this machine, as before — the setting until the Pi is set up) or **remote** (the Pi). In remote mode, each track to analyse goes into a `work` queue in the library database; the pull/fill or import waits for it, showing "waiting for the PC to wake up" / "waiting for the PC" in its progress line.
+- **Waking**: if no worker has asked for work in the last 90 s, the app calls a Home Assistant service (`[worker.wake]`, default `wake_on_lan/send_magic_packet` with the PC's MAC `9c:6b:00:98:16:83`; inside the add-on it uses the Supervisor's token, elsewhere `HA_TOKEN` in `.env`), and again every 10 min while it still hasn't connected.
+- **PC worker** (`music-hunter worker`, a systemd user service `music-hunter-worker.service` that starts on boot — linger is on): asks the app for work every 5 s while busy and every 30 s once idle, downloads and analyses, sends the audio, cover, fingerprint and measurements back, and deletes its own copies. A shared `WORKER_TOKEN` (in `.env` on both sides) protects the worker API. A track claimed but not returned within 15 min goes back to the queue; tracks queued before an app restart are dropped (their jobs start again).
+- **Turning off**: while working, the worker tries to hold a sleep inhibitor so the PC doesn't sleep mid-job, and releases it after 3 min without work. Found while testing: this PC has no desktop session after a wake (only SSH/systemd sessions), and outside one polkit refuses the inhibitor — so the worker carries on without it, and nothing on the PC itself turns it off afterwards. **Open question** for milestone 4 (see below).
+- **Data location**: `MUSIC_HUNTER_ROOT` moves the database, audio, `.env` and an optional `config.toml` elsewhere (for the add-on's `/data`, and scratch copies).
+- **Checked**: tests for the round trip, failures coming back, the token and stale items; and on a scratch copy, the app in remote mode with the real worker: a Spotify import queued, waited ("waiting for the PC to wake up"), and completed when the worker connected — audio in `library/`, 8-chunk fingerprint, loudness, BPM, cover. The pool filler checked the same way in local mode.
