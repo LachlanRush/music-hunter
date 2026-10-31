@@ -54,6 +54,13 @@ Both sides need the same `WORKER_TOKEN` in `.env`. `MUSIC_HUNTER_ROOT` points th
 ⋮ → Repositories → add `https://github.com/LachlanRush/music-hunter`, install Music Hunter, fill in its options
 (see its Documentation tab) and start it. A new version needs a matching `v<version>` tag on GitHub.
 
+```sh
+uv run music-hunter migrate          # send this PC's playlists, sessions and audio to the Pi (once)
+uv run music-hunter snapshot         # the Pi's databases and log → runs/pi/<time>/ for analysis
+MUSIC_HUNTER_ROOT=runs/pi/<time> uv run music-hunter --playlist 1 report
+uv run music-hunter pi log | restart | update   # update needs HA_TOKEN in .env
+```
+
 ## v4: veto and random picks
 
 ```sh

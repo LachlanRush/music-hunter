@@ -490,6 +490,65 @@ def worker_status() -> dict:
     return analysis.status(db.connect_library())
 
 
+# --- admin, for the PC (SPEC.md §18.11): moving data in, snapshots out for analysis, log, restart -------------------
+
+def _restart_soon() -> None:
+    """Exit shortly; the add-on's start script starts the app again (unpacking an uploaded bundle first)."""
+    import os
+
+    threading.Timer(1.0, os._exit, [0]).start()
+
+
+@app.get("/api/admin/snapshot", dependencies=[Depends(worker_auth)])
+def admin_snapshot():
+    import tempfile
+
+    from starlette.background import BackgroundTask
+
+    from . import transfer
+    from .config import path as cpath
+
+    tmp = Path(tempfile.mkstemp(suffix=".tar", dir=cpath("data"))[1])
+    transfer.bundle(tmp, audio=False, log=True)
+    return FileResponse(tmp, media_type="application/x-tar", filename="snapshot.tar",
+                        background=BackgroundTask(tmp.unlink, missing_ok=True))
+
+
+@app.post("/api/admin/restore", dependencies=[Depends(worker_auth)])
+async def admin_restore(request: Request, force: int = 0):
+    from . import config
+
+    if config.ROOT == config.PROJECT:
+        raise HTTPException(400, "Only in the add-on (a separate data folder)")
+    if library.list_playlists(db.connect_library()) and not force:
+        raise HTTPException(409, "This app already has playlists; send with force to replace them")
+    incoming = config.ROOT / "incoming.tar"
+    part = incoming.with_suffix(".part")
+    with part.open("wb") as f:
+        async for chunk in request.stream():
+            f.write(chunk)
+    part.rename(incoming)
+    _restart_soon()
+    return {"ok": True, "bytes": incoming.stat().st_size}
+
+
+@app.post("/api/admin/restart", dependencies=[Depends(worker_auth)])
+def admin_restart():
+    _restart_soon()
+    return {"ok": True}
+
+
+@app.get("/api/admin/log", dependencies=[Depends(worker_auth)])
+def admin_log(lines: int = 200):
+    from fastapi.responses import PlainTextResponse
+
+    from .config import path as cpath
+
+    f = cpath("data") / "music-hunter.log"
+    text = f.read_text(errors="replace").splitlines()[-lines:] if f.exists() else []
+    return PlainTextResponse("\n".join(text))
+
+
 @app.get("/find/{playlist_id}", response_class=HTMLResponse)
 def find_page(playlist_id: int):
     from fastapi.responses import RedirectResponse

@@ -412,6 +412,18 @@ def main() -> None:
 
     sub.add_parser("serve", help="Start the localhost player")
 
+    p = sub.add_parser("migrate", help="Send this machine's playlists, sessions and audio to the Pi (v5)")
+    p.add_argument("--server", help="The app on the Pi (default: [worker] server)")
+    p.add_argument("--force", action="store_true", help="Replace the Pi's data even if it already has playlists")
+
+    p = sub.add_parser("snapshot", help="Fetch the Pi's databases and log into runs/pi/<time>/ for analysis")
+    p.add_argument("--server", help="The app on the Pi (default: [worker] server)")
+
+    p = sub.add_parser("pi", help="The app on the Pi: show its log, restart it, or install an update")
+    p.add_argument("action", choices=["log", "restart", "update"])
+    p.add_argument("--server", help="The app on the Pi (default: [worker] server)")
+    p.add_argument("--lines", type=int, default=200)
+
     p = sub.add_parser("worker", help="PC worker: download and analyse tracks queued by the app (v5, SPEC.md §18.4)")
     p.add_argument("--server", default=CONFIG["worker"]["server"], help="Where the app runs (default from config)")
     p.add_argument("--once", action="store_true", help="Stop when the queue is empty")
@@ -425,7 +437,7 @@ def main() -> None:
     db.setup_logging()
     if args.playlist is not None:
         from . import find
-        if args.command in ("add-seeds", "embed-seeds", "serve", "worker"):
+        if args.command in ("add-seeds", "embed-seeds", "serve", "worker", "migrate", "snapshot", "pi"):
             sys.exit(f"{args.command} doesn't take --playlist (seeds come from the playlist's stars)")
         if not find.started(args.playlist):
             sys.exit(f"Playlist {args.playlist} has no Find music session yet (start it from the playlist page)")
@@ -459,6 +471,15 @@ def main() -> None:
     elif args.command == "serve":
         from .web import serve
         serve()
+    elif args.command == "migrate":
+        from .transfer import migrate
+        migrate(args.server, args.force)
+    elif args.command == "snapshot":
+        from .transfer import snapshot
+        snapshot(args.server)
+    elif args.command == "pi":
+        from .transfer import pi
+        pi(args.action, args.server, args.lines)
     elif args.command == "worker":
         from .analysis import run_worker
         run_worker(args.server, once=args.once)

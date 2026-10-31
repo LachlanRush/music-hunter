@@ -301,3 +301,7 @@ item_timeout_minutes = 15            # app: a claimed track with no result after
 # in .env as HA_TOKEN.
 url = ""
 entity_id = ""
+
+# v5 (SPEC.md §18.11): reaching Home Assistant from the PC (`music-hunter pi update`; HA_TOKEN in .env).
+[pi]
+home_assistant = "http://100.90.89.29:8123"

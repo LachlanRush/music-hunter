@@ -22,4 +22,14 @@ mode = "remote"
 entity_id = "{entity}"
 """)
 PY
-exec python3 -c 'import sys; sys.argv = ["music-hunter", "serve"]; from music_hunter import main; main()'
+# The app exits to restart (after data is uploaded from the PC, or on request); loop so it comes straight back,
+# unpacking an uploaded bundle first.
+APP=""
+trap 'if [ -n "$APP" ]; then kill -TERM "$APP"; wait "$APP"; fi; exit 0' TERM INT
+while true; do
+  python3 -c 'import pathlib; from music_hunter.transfer import unpack_incoming; unpack_incoming(pathlib.Path("/data"))'
+  python3 -c 'import sys; sys.argv = ["music-hunter", "serve"]; from music_hunter import main; main()' &
+  APP=$!
+  wait "$APP" || sleep 5
+  APP=""
+done
