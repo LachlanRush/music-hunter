@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from fastapi.staticfiles import StaticFiles
 
-from . import db, ratings, reweight
+from . import db, ratings, reweight, veto
 from .config import CONFIG, resolve
 from .results import results as results_data
 from .scoring import pool_tracks
@@ -63,13 +63,13 @@ class Worker:
 
     @staticmethod
     def job_needed(conn) -> str | None:
-        """'pull' for the first pull or a refill, 'fill' to finish an interrupted fill, else None.
-
-        A refill needs at least one play since the latest pull started, so a pull that
-        finds little new can't trigger another straight away.
+        """The background job due now, if any (SPEC.md §17.2, §17.8):
+        'pull' — the first pull, or a refill: 5 seeds not yet pulled for, or at least one after refill_min_plays plays,
+                 or the playable pool short with no candidates left;
+        'fill' — top the playable pool up to target_size from the latest pull's remaining candidates;
+        'restore' — download audio again for vetoed tracks that became playable.
         """
-        from .pool import multi_source_unplayed, unpulled_seeds, unrated_pool_size
-        from .scoring import score_pool
+        from .pool import missing_audio, unpulled_seeds, unrated_pool_size
 
         pool_cfg = CONFIG["pool"]
         if not conn.execute("SELECT count(*) FROM tracks WHERE origin = 'original_reference'").fetchone()[0]:
@@ -77,23 +77,22 @@ class Worker:
         gen = conn.execute("SELECT max(id) FROM generations").fetchone()[0]
         if gen is None:
             return "pull"
-        unplayed = unrated_pool_size(conn)
-        left = conn.execute("SELECT count(*) FROM candidates WHERE generation = ? AND status = 'candidate'",
+        playable = unrated_pool_size(conn)
+        left = conn.execute("SELECT count(*) FROM candidates WHERE generation = ?"
+                            " AND status IN ('candidate', 'not_selected')",
                             (gen,)).fetchone()[0]
-        if left and unplayed < pool_cfg["target_size"]:
+        if left and playable < pool_cfg["target_size"]:
             return "fill"
+        if missing_audio(conn):
+            return "restore"
         played_since = conn.execute("SELECT count(*) FROM plays WHERE generation = ?", (gen,)).fetchone()[0]
         if not played_since:
             return None
-        if unplayed < pool_cfg["refill_below"]:
+        waiting = unpulled_seeds(conn)
+        if len(waiting) >= pool_cfg["refill_new_seeds"] or (waiting and played_since >= pool_cfg["refill_min_plays"]):
+            return "pull"                     # placeholder Add-seed rule (§17.8, to be discussed)
+        if playable < pool_cfg["refill_below"]:
             return "pull"
-        if played_since >= pool_cfg["refill_min_plays"] and \
-                multi_source_unplayed(conn) < pool_cfg["refill_multi_source_below"] and unpulled_seeds(conn):
-            return "pull"                     # v3: agreement has run out, and a new seed can bring more
-        if pool_cfg["refill_min_best_score"] > 0:
-            scored = score_pool(conn)
-            if scored and scored[0]["score"] < pool_cfg["refill_min_best_score"]:
-                return "pull"
         return None
 
     def _run(self, job: str) -> None:
@@ -111,10 +110,18 @@ class Worker:
                          seconds=round(time.monotonic() - started, 1))
 
     def _job(self, conn, job: str) -> None:
-        from .pool import fill
+        from .pool import fill, missing_audio, restore_audio
         from .pull import Pull, match_seeds, optional
         from .sources import Deezer, LastFM, Tidal, YouTubeMusic
 
+        if job == "restore":
+            todo = missing_audio(conn)
+            for i, tid in enumerate(todo, 1):
+                self.message = f"Bringing back {i} of {len(todo)} tracks that passed the veto again…"
+                restore_audio(conn, tid)
+                time.sleep(CONFIG["pool"]["download_delay_seconds"])
+            self.state, self.message = "idle", ""
+            return
         if job == "pull":
             first = conn.execute("SELECT count(*) FROM generations").fetchone()[0] == 0
             head = "Finding candidates" if first else "Refilling the pool: finding candidates"
@@ -201,7 +208,7 @@ def index() -> str:
 @app.get("/api/state")
 def state() -> dict:
     conn = db.connect()
-    unplayed = len(pool_tracks(conn))
+    unplayed = len(ratings.playable_ids(conn))          # v4: playable tracks with audio ready
     plays = conn.execute("SELECT count(*), count(rating) FROM plays").fetchone()
     first_pull = plays[0] == 0
     complete = ratings.run_complete(conn)
@@ -222,15 +229,21 @@ def state() -> dict:
 
 @app.post("/api/next")
 def next_track() -> dict:
-    """The play awaiting a rating, or a new one: top-scored, or a random pool track for a control."""
+    """The play awaiting a rating, or a new one: a random playable track, or (a control) a random vetoed one."""
+    from .pool import restore_audio
+
     conn = db.connect()
     play = ratings.current_play(conn)
     if play is None:
         if ratings.run_complete(conn):
             raise HTTPException(409, "Run complete")
-        if not pool_tracks(conn):
+        track_id = ratings.upcoming(conn)
+        if track_id is None:
             worker.start_if_needed()
-            raise HTTPException(409, "No unplayed tracks in the pool")
+            raise HTTPException(409, "No playable tracks in the pool")
+        if not restore_audio(conn, track_id):          # an injected vetoed track's audio, if not fetched ahead
+            db.set_setting(conn, "next_draw", None, log=False)
+            raise HTTPException(503, "Couldn't fetch the next track's audio; try again")
         play_id = ratings.show_next(conn)
         play = conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone()
     return track_info(conn, play)
@@ -245,7 +258,28 @@ def upcoming() -> dict:
     track_id = ratings.upcoming(conn)
     if track_id is None:
         raise HTTPException(404, "No unplayed tracks")
+    if not conn.execute("SELECT file_path FROM tracks WHERE id = ?", (track_id,)).fetchone()[0]:
+        _fetch_in_background(track_id)                 # an injected vetoed track: audio fetched just in time
+        raise HTTPException(404, "Audio still being fetched")
     return {"track_id": track_id, "audio": f"/audio/{track_id}"}
+
+
+_fetching: set[int] = set()
+
+
+def _fetch_in_background(track_id: int) -> None:
+    from .pool import restore_audio
+
+    if track_id in _fetching:
+        return
+    _fetching.add(track_id)
+
+    def run():
+        try:
+            restore_audio(db.connect(), track_id)
+        finally:
+            _fetching.discard(track_id)
+    threading.Thread(target=run, daemon=True).start()
 
 
 @app.get("/api/previous")
@@ -272,6 +306,7 @@ def rate(body: RateBody) -> dict:
     except ValueError as e:
         raise HTTPException(400, str(e))
     reweight.after_rating(conn)
+    veto.update(conn)                         # likes changed: re-score, move tracks across the line
     worker.start_if_needed()
     return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone())
 
@@ -296,6 +331,7 @@ def skip(body: SkipBody) -> dict:
             raise HTTPException(400, str(e))
         db.log_event(conn, "auto_rated", body.play_id, rating=auto)
         reweight.after_rating(conn)
+        veto.update(conn)                     # likes changed: re-score, move tracks across the line
     worker.start_if_needed()
     return {**track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone()),
             "rated": True}
@@ -308,6 +344,8 @@ def change(body: ChangeBody) -> dict:
         play_id = ratings.change_last_rating(conn, body.rating)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    veto.update(conn)
+    worker.start_if_needed()
     return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone())
 
 

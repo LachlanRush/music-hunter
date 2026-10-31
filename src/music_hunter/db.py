@@ -163,6 +163,14 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_kind ON events(kind, at);
 
 -- Listener settings that affect ranking or playback (v2: target BPM), with history in events.
+-- v4: each distinct set of run settings (veto, controls, pool), so plays can be split by what they ran under.
+CREATE TABLE IF NOT EXISTS settings_versions (
+    id          INTEGER PRIMARY KEY,
+    hash        TEXT NOT NULL UNIQUE,
+    settings    TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key         TEXT PRIMARY KEY,
     value       TEXT,                -- JSON
@@ -205,6 +213,11 @@ MIGRATIONS = [
     ("candidates", "pool_seed", "INTEGER REFERENCES tracks(id)"),
     ("plays", "scored_for_seed", "INTEGER"),          # v3: the seed pool whose view of the track scored best
     ("plays", "auto_rated", "INTEGER NOT NULL DEFAULT 0"),   # 1: skipped / ended unrated, counted as [ratings] unrated_counts_as
+    ("tracks", "veto_state", "TEXT"),                  # v4: NULL/'playable' or 'vetoed' (audio dropped, fingerprint kept)
+    ("tracks", "veto", "TEXT"),                        # v4: latest veto score, z-scores and every rule's verdict (JSON)
+    ("plays", "veto", "TEXT"),                         # v4: the track's veto details at the moment it was shown
+    ("plays", "settings_version", "INTEGER"),          # v4: which settings the play ran under (settings_versions)
+    ("plays", "tags", "TEXT"),                         # v4: optional reason tags (JSON list)
 ]
 
 

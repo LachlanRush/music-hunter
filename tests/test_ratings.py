@@ -209,18 +209,23 @@ def test_controls_are_random(conn):
 
 
 def test_upcoming_matches_next_play(conn):
-    """The preloaded track is the one that plays next when nothing changes in between, controls included;
-    the control decision is drawn once, ahead, at the configured rate."""
+    """v4: the preloaded track is the one that plays next when nothing changes in between, controls included;
+    a control is a random *vetoed* track, a normal pick a random playable one."""
+    from music_hunter import veto
     from music_hunter.ratings import show_next, upcoming
 
+    counts = veto.update(conn)
+    assert counts["active"] and counts["vetoed"] > 0
     rng = random.Random(5)
     controls = 0
     for _ in range(40):
         predicted = upcoming(conn, rng)
         assert upcoming(conn, rng) == predicted            # asking again doesn't redraw
         play = show_next(conn, rng)
-        row = conn.execute("SELECT track_id, is_control FROM plays WHERE id = ?", (play,)).fetchone()
+        row = conn.execute("SELECT p.track_id, p.is_control, t.veto_state FROM plays p JOIN tracks t ON t.id = p.track_id"
+                           " WHERE p.id = ?", (play,)).fetchone()
         assert row["track_id"] == predicted
+        assert (row["veto_state"] == "vetoed") == bool(row["is_control"])
         controls += row["is_control"]
         skip(conn, play)
     assert 0 < controls < 40

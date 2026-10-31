@@ -20,6 +20,17 @@ uv run music-hunter reembed                                       # after changi
 Spotify links are read from public pages (no account), matched on YouTube Music (same song, ±5 s),
 downloaded into `seeds/` and analysed. v1's data is archived in `runs/v1/`.
 
+## v4: veto and random picks
+
+```sh
+uv run music-hunter veto            # what the veto allows and blocks, and why
+uv run music-hunter end-run         # end the run now and unseal the results
+```
+
+Every analysed track is scored on closeness to the seeds, closeness to your likes and number of sources; tracks
+far below the run's median are vetoed (audio dropped, fingerprint kept) and picks are random from the rest. Now and
+then a vetoed track is slipped in to test the veto. Settings: `[veto]` in config.toml.
+
 ## Candidates and pool
 
 ```sh

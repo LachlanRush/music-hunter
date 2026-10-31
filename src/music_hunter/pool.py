@@ -21,7 +21,7 @@ from collections import Counter, deque
 from pathlib import Path
 
 from . import audio, db
-from .config import CONFIG, path, relative
+from .config import CONFIG, path, relative, resolve
 from .ratings import SOURCES, seed_averages, source_averages
 from .scoring import current_weights
 
@@ -221,6 +221,13 @@ class Filler:
 
 
 def unrated_pool_size(conn: sqlite3.Connection) -> int:
+    """v4: playable pool tracks (unplayed, not vetoed) — what the pool is topped up to [pool] target_size."""
+    from .veto import playable_count
+
+    return playable_count(conn)
+
+
+def unplayed_pool_size(conn: sqlite3.Connection) -> int:
     """Pool tracks not yet shown (rated or skipped tracks have left the pool)."""
     return conn.execute("SELECT count(*) FROM tracks WHERE origin = 'pool' AND rating IS NULL"
                         " AND id NOT IN (SELECT track_id FROM plays)").fetchone()[0]
@@ -252,36 +259,124 @@ def multi_source_unplayed(conn: sqlite3.Connection) -> int:
 
 
 def seed_targets(conn: sqlite3.Connection, seed_ids: list[int]) -> dict[int, int]:
-    """Each seed's share of target_size (by seed average, with the min_seed_share floor)."""
+    """Each seed's share of target_size: equal (v4), or by seed average with the min_seed_share floor."""
+    if not CFG.get("share_by_seed_average", True):
+        return round_quotas({s: 1 / len(seed_ids) for s in seed_ids}, CFG["target_size"])
     return round_quotas(seed_shares(seed_averages(conn, seed_ids)), CFG["target_size"])
 
 
 def seed_pool_counts(conn: sqlite3.Connection) -> dict[int, int]:
-    """Unplayed pool tracks per seed share (tracks from before shares existed count for their first seed)."""
+    """Playable pool tracks per seed share (unplayed, not vetoed; tracks from before shares existed count for their
+    first seed)."""
     out: dict[int, int] = {}
     for (seed,) in conn.execute(
             "SELECT coalesce(c.pool_seed, (SELECT min(seed_track_id) FROM suggestions s WHERE s.candidate_id = c.id))"
             " FROM tracks t JOIN candidates c ON c.id = t.candidate_id WHERE t.origin = 'pool' AND t.rating IS NULL"
-            " AND t.id NOT IN (SELECT track_id FROM plays)"):
+            " AND coalesce(t.veto_state, 'playable') = 'playable' AND t.id NOT IN (SELECT track_id FROM plays)"):
         out[seed] = out.get(seed, 0) + 1
     return out
 
 
+def restore_audio(conn: sqlite3.Connection, track_id: int) -> bool:
+    """Download a track's audio again (a vetoed track that became playable, or an injected control). Its
+    fingerprint and loudness are already stored, so nothing is re-analysed. True if the audio is there."""
+    t = conn.execute("SELECT video_id, file_path FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if t["file_path"] and resolve(t["file_path"]).exists():
+        return True
+    t0 = time.monotonic()
+    try:
+        file = download(t["video_id"])
+    except Exception as e:
+        db.log_event(conn, "audio_restore_failed", track_id=track_id, reason=re.sub(r"\x1b\[[0-9;]*m", "", str(e))[:200])
+        return False
+    with conn:
+        conn.execute("UPDATE tracks SET file_path = ? WHERE id = ?", (relative(file), track_id))
+    db.log_event(conn, "audio_restored", track_id=track_id, seconds=round(time.monotonic() - t0, 2))
+    return True
+
+
+def missing_audio(conn: sqlite3.Connection) -> list[int]:
+    """Playable tracks whose audio was dropped while they were vetoed."""
+    from .veto import PLAYABLE
+
+    return [r[0] for r in conn.execute(f"SELECT t.id FROM tracks t WHERE {PLAYABLE} AND t.file_path IS NULL")]
+
+
 def unpulled_seeds(conn: sqlite3.Connection) -> list[int]:
-    """Seeds no pull has queried yet (new Adds): the only way a refill can find new multi-source tracks."""
+    """Seeds no pull has queried yet (new Adds). A seed counts as pulled once a pull has queried it, even if its
+    sources returned nothing (older databases: once it has suggestions)."""
     from .pull import seeds
 
-    queried = {r[0] for r in conn.execute("SELECT DISTINCT seed_track_id FROM suggestions")}
+    queried = set(db.get_setting(conn, "pulled_seeds", [])) | \
+        {r[0] for r in conn.execute("SELECT DISTINCT seed_track_id FROM suggestions")}
     return [s.track_id for s in seeds(conn) if s.track_id not in queried]
 
 
 def fill(conn: sqlite3.Connection, generation: int, progress=None) -> dict:
-    """Fill every seed's share of the pool from this generation's candidates. Safe to re-run (resumes).
+    """Top up every seed's share of the playable pool from this generation's candidates. Safe to re-run (resumes).
 
-    `progress(text)`, if given, is told the pool size after each track (shown in the player)."""
-    from .pull import seeds
+    v4 (SPEC.md §17.2): in rounds of [veto] rescore_every new tracks, re-running the veto after each round, until
+    the playable pool reaches target_size or the candidates run out. Candidates not needed stay available for later
+    top-ups. `progress(text)`, if given, is told the pool size after each track (shown in the player)."""
+    from . import veto
 
     started = time.monotonic()
+    with conn:                                        # v3 set leftovers aside once its pool was full; v4 tops up from them
+        conn.execute("UPDATE candidates SET status = 'candidate' WHERE generation = ? AND status = 'not_selected'",
+                     (generation,))
+    veto.update(conn)
+    filler, passes = None, []
+    while True:
+        before = filler.ready if filler else 0
+        p = _fill_pass(conn, generation, progress, filler, CONFIG["veto"]["rescore_every"])
+        filler = p["filler"]
+        passes.append(p)
+        counts = veto.update(conn)
+        if unrated_pool_size(conn) >= CFG["target_size"] or (filler.ready if filler else 0) == before:
+            break
+        print(f"  veto: {counts['playable']} playable, {counts['vetoed']} vetoed of {counts['analysed']} analysed")
+    target, quota = passes[0]["target"], passes[0]["quota"]
+    multi = passes[0]["multi"]
+    multi_added: dict[int, int] = {}
+    for p in passes:
+        for k, v in p["multi_added"].items():
+            multi_added[k] = multi_added.get(k, 0) + v
+
+    label = {r["id"]: f"{r['artist']} – {r['title']}" for r in conn.execute("SELECT id, artist, title FROM tracks")}
+    stats = json.loads(conn.execute("SELECT stats FROM generations WHERE id = ?", (generation,)).fetchone()[0] or "{}")
+    unusable = Counter()
+    for r in conn.execute("SELECT status, fail_reason FROM candidates WHERE generation = ?"
+                          " AND status IN ('match_failed', 'merged', 'known')", (generation,)):
+        unusable[f"{r[0]}: {r[1].split(' (into')[0]}"] += 1
+    stats.update({
+        "multi_source_candidates": len(multi),
+        "multi_source_added": stats.get("multi_source_added", 0) + sum(multi_added.values()),
+        "seed_pools": {label[s]: {"target": target[s], "unplayed": seed_pool_counts(conn).get(s, 0),
+                                  "multi_source_added": multi_added.get(s, 0)} for s in target},
+        "unusable_at_selection": dict(unusable.most_common()),
+        "seed_averages": {label[s]: a for s, a in seed_averages(conn, list(target)).items()},
+        "source_averages": source_averages(conn),
+        "quotas": {f"{label[s]} / {src or 'no candidates left'}": n for (s, src), n in quota.items()},
+        "download_failures": stats.get("download_failures", []) + (filler.failed if filler else []),
+        "pool_size": unrated_pool_size(conn),
+        "veto": veto.update(conn),
+        "weights": current_weights(conn)[1],
+        "fill_seconds": round(stats.get("fill_seconds", 0) + time.monotonic() - started, 1),
+    })
+    with conn:
+        conn.execute("UPDATE generations SET stats = ? WHERE id = ?", (json.dumps(stats), generation))
+    db.log_event(conn, "fill_done", generation=generation, ready=filler.ready if filler else 0,
+                 failed=len(filler.failed) if filler else 0, seconds=round(time.monotonic() - started, 1),
+                 pool_size=stats["pool_size"], vetoed=stats["veto"]["vetoed"])
+    return stats
+
+
+def _fill_pass(conn: sqlite3.Connection, generation: int, progress=None, filler=None, ready_limit=None) -> dict:
+    """One round of filling: up to ready_limit new tracks across the seed shares still short."""
+    from .pull import seeds
+
+    start_ready = filler.ready if filler else 0
+    limit_hit = lambda: bool(ready_limit) and filler is not None and filler.ready - start_ready >= ready_limit
     queues = {b: deque(cids) for b, cids in buckets(conn, generation).items()}
     seed_ids = [s.track_id for s in seeds(conn)]
     target = seed_targets(conn, seed_ids) if seed_ids else {}
@@ -315,6 +410,8 @@ def fill(conn: sqlite3.Connection, generation: int, progress=None) -> dict:
         if filler.process(cid, seed):
             have[seed] = have.get(seed, 0) + 1
             multi_added[seed] = multi_added.get(seed, 0) + 1
+        if limit_hit():
+            break
 
     # 2. The rest of each seed's share, split between its lists by source average.
     src_avgs = source_averages(conn)
@@ -333,7 +430,7 @@ def fill(conn: sqlite3.Connection, generation: int, progress=None) -> dict:
     remaining = {b: n for b, n in quota.items() if b[1] is not None}
     orphan = sum(n for b, n in quota.items() if b[1] is None)
     order = sorted(remaining)  # each round takes one from every list
-    while slots and (sum(remaining.values()) or orphan):
+    while slots and (sum(remaining.values()) or orphan) and not limit_hit():
         spare: dict[int | None, int] = {None: orphan} if orphan else {}
         orphan = 0
         for b in order:
@@ -351,6 +448,8 @@ def fill(conn: sqlite3.Connection, generation: int, progress=None) -> dict:
             filler = get_filler()
             if filler.process(cid, b[0]):
                 remaining[b] -= 1
+            if limit_hit():
+                break
         # Leftover slots go to the same seed's lists that still have candidates (biggest quota first);
         # only a seed with nothing left passes them to other seeds' lists.
         open_lists = [b for b in queues if any(c not in tried for c in queues[b])]
@@ -371,34 +470,5 @@ def fill(conn: sqlite3.Connection, generation: int, progress=None) -> dict:
         if not open_lists:
             break
 
-    if unrated_pool_size(conn) >= CFG["target_size"]:
-        with conn:
-            conn.execute("UPDATE candidates SET status = 'not_selected' WHERE generation = ? AND status = 'candidate'",
-                         (generation,))
+    return {"target": target, "quota": quota, "multi": multi, "multi_added": multi_added, "filler": filler}
 
-    label = {r["id"]: f"{r['artist']} – {r['title']}" for r in conn.execute("SELECT id, artist, title FROM tracks")}
-    stats = json.loads(conn.execute("SELECT stats FROM generations WHERE id = ?", (generation,)).fetchone()[0] or "{}")
-    unusable = Counter()
-    for r in conn.execute("SELECT status, fail_reason FROM candidates WHERE generation = ?"
-                          " AND status IN ('match_failed', 'merged', 'known')", (generation,)):
-        unusable[f"{r[0]}: {r[1].split(' (into')[0]}"] += 1
-    stats.update({
-        "multi_source_candidates": len(multi),
-        "multi_source_added": stats.get("multi_source_added", 0) + sum(multi_added.values()),
-        "seed_pools": {label[s]: {"target": target[s], "unplayed": seed_pool_counts(conn).get(s, 0),
-                                  "multi_source_added": multi_added.get(s, 0)} for s in target},
-        "unusable_at_selection": dict(unusable.most_common()),
-        "seed_averages": {label[s]: a for s, a in seed_averages(conn, list(target)).items()},
-        "source_averages": src_avgs,
-        "quotas": {f"{label[s]} / {src or 'no candidates left'}": n for (s, src), n in quota.items()},
-        "download_failures": stats.get("download_failures", []) + (filler.failed if filler else []),
-        "pool_size": unrated_pool_size(conn),
-        "weights": current_weights(conn)[1],
-        "fill_seconds": round(stats.get("fill_seconds", 0) + time.monotonic() - started, 1),
-    })
-    with conn:
-        conn.execute("UPDATE generations SET stats = ? WHERE id = ?", (json.dumps(stats), generation))
-    db.log_event(conn, "fill_done", generation=generation, ready=filler.ready if filler else 0,
-                 failed=len(filler.failed) if filler else 0, seconds=round(time.monotonic() - started, 1),
-                 pool_size=stats["pool_size"])
-    return stats

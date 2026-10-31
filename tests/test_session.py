@@ -1,4 +1,5 @@
-"""Milestone 6 check: a simulated listening session through the web API, with every log populated.
+"""Simulated listening session through the web API, with every log populated (v4: veto, random picks,
+injected vetoed tracks, rotating pool).
 
 A synthetic listener rates by how close a track sounds to the references, plus noise.
 The refill's network pull is replaced by re-using generation 1's unselected candidates
@@ -49,16 +50,17 @@ class FakeFiller:
 
 
 def fake_job(job):
-    """Worker job without network: a 'pull' re-offers generation 1's unselected candidates."""
+    """Worker job without network: a 'pull' re-offers earlier generations' unused candidates; 'restore' writes
+    placeholder audio."""
     conn = db.connect()
     if job == "pull":
         with conn:
             gen = conn.execute("INSERT INTO generations DEFAULT VALUES").lastrowid
             # One per video, and never a video already downloaded (as a real pull's filters ensure).
             for c in conn.execute(
-                    "SELECT * FROM candidates WHERE status = 'not_selected'"
+                    "SELECT * FROM candidates WHERE status IN ('not_selected', 'candidate') AND generation < ?"
                     " AND video_id NOT IN (SELECT video_id FROM tracks WHERE video_id IS NOT NULL)"
-                    " GROUP BY video_id").fetchall():
+                    " GROUP BY video_id", (gen,)).fetchall():
                 new = conn.execute(
                     "INSERT INTO candidates (generation, video_id, artist, title, duration_s, song_title,"
                     " song_artists, is_extended) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -70,9 +72,26 @@ def fake_job(job):
                     " FROM suggestions WHERE candidate_id = ?", (gen, new, c["id"]))
                 conn.execute("UPDATE candidates SET status = 'reoffered' WHERE id = ?", (c["id"],))
             conn.execute("UPDATE generations SET stats = '{}' WHERE id = ?", (gen,))
+        from music_hunter.pull import mark_pulled, seeds
+        mark_pulled(conn, [s.track_id for s in seeds(conn)])          # a real pull queries every seed
+    elif job == "restore":
+        for tid in pool.missing_audio(conn):
+            pool.restore_audio(conn, tid)
+        return
     else:
         gen = conn.execute("SELECT max(id) FROM generations").fetchone()[0]
     pool.fill(conn, gen)
+
+
+def fake_restore(conn, track_id):
+    """Stands in for re-downloading a track's audio: a placeholder file."""
+    t = conn.execute("SELECT video_id, file_path FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if not t["file_path"]:
+        rel = f"cache/{t['video_id']}.webm"
+        (config.ROOT / rel).write_bytes(b"placeholder audio")
+        with conn:
+            conn.execute("UPDATE tracks SET file_path = ? WHERE id = ?", (rel, track_id))
+    return True
 
 
 class InlineThread:
@@ -89,6 +108,7 @@ def test_session(conn, monkeypatch):
     c = conn
     random.seed(5)                                   # control draws are random (SPEC.md §15.4); keep the test repeatable
     monkeypatch.setattr(pool, "Filler", FakeFiller)
+    monkeypatch.setattr(pool, "restore_audio", fake_restore)
     # The real pool size changes as listening goes on; set thresholds so a refill happens mid-session.
     from music_hunter.config import CONFIG
     from music_hunter.pool import unrated_pool_size
@@ -170,15 +190,30 @@ def test_session(conn, monkeypatch):
         assert json.loads(p["provenance"]) and p["rank"] >= 1 and p["generation"] >= 1
         assert p["played_seconds"] is not None and p["shown_at"]
 
-    # Controls: at the run's secret rate (1 in 4 to 1 in 10), independently; a random pool track (ranks vary).
+    # v4: controls are injected vetoed tracks (at the run's secret rate, once anything is vetoed); normal picks are
+    # random playable tracks, not the top score. Every play logs its veto details and settings version.
     controls = [p for p in plays if p["is_control"]]
-    assert 0.08 < len(controls) / PLAYS < 0.35
-    assert len({p["rank"] for p in controls}) > 1
-    assert all(p["rank"] == 1 for p in plays if not p["is_control"])
+    assert 0.03 < len(controls) / PLAYS < 0.3
+    assert all(json.loads(p["veto"])["state"] == "vetoed" for p in controls)
+    assert all(json.loads(p["veto"])["state"] == "playable" for p in plays if not p["is_control"] and p["veto"])
+    assert len({p["rank"] for p in plays if not p["is_control"]}) > 5          # random picks: all over the ranking
+    assert all(p["settings_version"] for p in plays)
+    v = json.loads(plays[-1]["veto"])
+    assert {"fixed_10pct", "fixed_20pct", "sd_1.0", "sd_1.25", "sd_1.5", "seed_closeness_below_0.75", "backstop"} \
+        == set(v["rules"]) and v["analysed"] >= config.CONFIG["veto"]["min_analysed"]
+    vetoed = c.execute("SELECT count(*), count(file_path) FROM tracks WHERE veto_state = 'vetoed'"
+                       " AND id NOT IN (SELECT track_id FROM plays)").fetchone()
+    assert vetoed[0] > 0 and vetoed[1] == 0                                  # vetoed tracks keep no audio
+
+    if not RW.get("enabled", True):                                          # v4: re-weighting is off
+        assert not c.execute("SELECT count(*) FROM reweightings").fetchone()[0]
+        RW_ON = False
+    else:
+        RW_ON = True
 
     # Re-weighting on schedule, each logged with a new weight set and later evaluated.
     learning = c.execute("SELECT count(*) FROM plays WHERE rating IS NOT NULL").fetchone()[0]   # v3: controls learn too
-    expected = list(range(RW["first_at"], learning + 1, RW["every"]))
+    expected = list(range(RW["first_at"], learning + 1, RW["every"])) if RW_ON else []
     rws = c.execute("SELECT * FROM reweightings ORDER BY at_ratings").fetchall()
     assert [r["at_ratings"] for r in rws] == expected
     assert c.execute("SELECT count(*) FROM weight_sets").fetchone()[0] == 1 + len(rws)
@@ -219,9 +254,13 @@ def test_session(conn, monkeypatch):
 
     # Operational log.
     kinds = {r[0]: r[1] for r in c.execute("SELECT kind, count(*) FROM events GROUP BY kind")}
-    assert kinds["shown"] == PLAYS and kinds["reweighted"] == len(rws) and kinds["rating_changed"] == 1
+    assert kinds["shown"] == PLAYS and kinds.get("reweighted", 0) == len(rws) and kinds["rating_changed"] == 1
     assert kinds["job_start"] == kinds["job_done"] == len(jobs) and kinds["server_start"] == 1
-    assert kinds["fill_start"] >= len(jobs) and kinds["fill_done"] >= len(jobs)
+    fills = [j for j in jobs if j in ("pull", "fill")]
+    assert kinds["fill_done"] >= len(fills)
+    churn = [json.loads(r[0]) for r in c.execute("SELECT data FROM events WHERE kind = 'veto_update'")]
+    print(f"\nveto churn over {PLAYS} plays: {sum(d['newly_vetoed'] for d in churn)} vetoed, "
+          f"{sum(d['returned'] for d in churn)} returned, in {len(churn)} updates; jobs {dict(__import__('collections').Counter(jobs))}")
     assert kinds["player_playing"] == 1 and kinds["player_stall"] == 1
     from music_hunter.report import report
     report(c)

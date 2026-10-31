@@ -76,6 +76,13 @@ def match_seeds(conn: sqlite3.Connection, yt: YouTubeMusic) -> list[Seed]:
     return out
 
 
+def mark_pulled(conn: sqlite3.Connection, seed_ids) -> None:
+    """Remember which seeds a pull has queried, whether or not their sources returned anything — so a seed that
+    finds nothing doesn't count as waiting for ever (and trigger a pull after every rating)."""
+    done = set(db.get_setting(conn, "pulled_seeds", []))
+    db.set_setting(conn, "pulled_seeds", sorted(done | set(seed_ids)), log=False)
+
+
 def optional(source_class):
     """A source that needs credentials, or None (with a note) when they aren't set."""
     try:
@@ -136,6 +143,7 @@ class Pull:
             for source, items in self._lists(seed):
                 for rank, item in enumerate(items, 1):
                     self.process(seed, source, rank, item)
+        mark_pulled(self.conn, [s.track_id for s in seed_list])
 
         stats = summary(self.conn, self.generation)
         stats["seed_lookups"] = self.lookups

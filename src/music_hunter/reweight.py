@@ -203,6 +203,8 @@ def evaluate_pending(conn: sqlite3.Connection) -> None:
 
 
 def after_rating(conn: sqlite3.Connection) -> dict | None:
-    """Run after every new rating: evaluate earlier updates, then update if due."""
+    """Run after every new rating: evaluate earlier updates, then update if due (off in v4)."""
+    if not CFG.get("enabled", True):
+        return None
     evaluate_pending(conn)
     return reweight(conn) if due(conn) else None

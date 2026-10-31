@@ -57,18 +57,18 @@ target_size = 250                # unplayed, analysed tracks to fill the pool to
 # of the source lists anyway (first v3 pull: 41% of a quota-filled pool), and agreement counts in the score.
 # Forcing them in first filled every seed's share with them (273 for 250 places), leaving no single-source
 # tracks and making controls (random pool tracks) all multi-source.
+share_by_seed_average = false       # v4: equal seed shares (seeds didn't differ in v1–v3; §17.3)
 multi_source_first = false
 multi_source_always_added = true    # only used when multi_source_first is on
 min_seed_share = 0.3333          # floor on a seed's share, as a fraction of an equal share
 download_delay_seconds = 5       # minimum gap between downloads (analysis runs in the gap)
 download_format = "bestaudio"    # yt-dlp format; kept in its original container, no re-encode
 # SPEC.md §4.2 refills (run in the background while listening)
-refill_below = 100               # pull a new generation when fewer unplayed tracks remain (was 25)
-# v3: …or when fewer than this many unplayed multi-source tracks remain and a seed hasn't been pulled for yet
-# (a new Add): multi-source candidates all go in first, so only new seeds can bring new agreement. At least
-# refill_min_plays plays since the last pull.
-refill_multi_source_below = 5
-refill_min_plays = 10
+refill_below = 100               # pull a new generation when fewer playable tracks remain and no candidates are left
+# v4 placeholder Add-seed rule (§17.8, to be discussed): pull when this many seeds haven't been pulled for yet,
+# or when at least one has and refill_min_plays plays have passed since the last pull.
+refill_new_seeds = 5
+refill_min_plays = 15
 # …or when the best unplayed track scores below this. Scores are relative to the current
 # pool (components are normalised across it), so this is off (0) by default.
 refill_min_best_score = 0.0
@@ -94,16 +94,35 @@ negative_weights = { "1" = 1.0 }              # Off only
 # (added 2026-10-30 at my request). 0 = the old rule: skipped tracks teach nothing and an unrated track waits.
 unrated_counts_as = 2                         # Close
 
+[veto]
+# SPEC.md §17.2–17.4 (v4) — every analysed track is scored; the bottom is vetoed (audio dropped, fingerprint
+# kept) and picks are random from what passes. Statistics are anchored to all tracks analysed this run.
+enabled = true
+cut_sd = 1.25                    # vetoed when the veto score is this many robust SDs below the run's median…
+return_sd = 1.0                  # …and playable again only above this (two lines: no flip-flopping)
+backstop_sd = 2.5                # also vetoed: closeness to seeds this far below the median (clearly out of the area)
+min_analysed = 40                # no vetoes until this many tracks are analysed (statistics need a base)
+seed_top_k = 3                   # closeness to the k nearest seeds (original seeds and Adds)
+like_top_k = 3                   # closeness to the k nearest likes (Close / Add weights from [ratings])
+rescore_every = 10               # while filling, re-run the veto after this many new tracks
+
+[veto.weights]                   # veto score = weighted mean of the robust z-scores of these components
+seed_closeness = 1.0
+like_closeness = 1.0             # left out until there are likes
+sources = 1.0                    # number of distinct sources that suggested the track
+
 [controls]
-# SPEC.md §16.6 — a control is a random unplayed pool track; each play is one independently, at a rate the
-# system draws for itself at the start of the run (uniform between these), stores and never shows.
+# SPEC.md §17.5 (v4) — a control is a random *vetoed* track slipped in to test the veto, at a rate the run draws
+# for itself (uniform between these), stores and never shows; each play independently.
 rate_min = 0.10                  # 1 in 10
-rate_max = 0.25                  # 1 in 4
-target = 9                       # the run ends when this many controls have been rated; results sealed until then
-                                 # (25 by design; the first v3 run was ended early at 74 plays / 9 controls, 2026-10-30)
+rate_max = 0.1667                # 1 in 6
+target = 0                       # 0 = no automatic end: `music-hunter end-run` ends the run and unseals results
+                                 # (v3 ended at 25 rated controls; the first v3 run was ended early at 9)
 
 [reweighting]
-# SPEC.md §15.8 — small steps, guardrails, continuous re-evaluation against the whole history
+# SPEC.md §15.8 — small steps, guardrails, continuous re-evaluation against the whole history.
+# Off in v4 (§17.3): picks are random, so there's no ranking to re-weight; the veto's weights are in [veto.weights].
+enabled = false
 first_at = 20                    # learning ratings before the first update
 every = 5                        # then an update every this many learning ratings
 step = 0.05                      # each weight moves at most this much per update

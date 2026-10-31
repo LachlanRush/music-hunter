@@ -139,67 +139,93 @@ def rated_controls(conn: sqlite3.Connection) -> int:
 
 
 def run_complete(conn: sqlite3.Connection) -> bool:
-    """The run ends by itself once [controls] target controls are rated; results are sealed until then."""
-    return rated_controls(conn) >= CONFIG["controls"]["target"]
+    """The run is over — ended by hand (`music-hunter end-run`, v4), or once [controls] target controls are rated
+    (0 = no automatic end). Results are sealed until then."""
+    target = CONFIG["controls"]["target"]
+    return bool(db.get_setting(conn, "run_ended", False)) or (target > 0 and rated_controls(conn) >= target)
+
+
+def _ids(conn: sqlite3.Connection, where: str) -> list[int]:
+    return [r[0] for r in conn.execute(f"SELECT t.id FROM tracks t WHERE {where} ORDER BY t.id")]
+
+
+def playable_ids(conn: sqlite3.Connection) -> list[int]:
+    """Playable tracks ready to play now (audio present) — v4 picks come from these, at random."""
+    from .veto import PLAYABLE
+
+    return _ids(conn, f"{PLAYABLE} AND t.file_path IS NOT NULL AND t.id IN (SELECT track_id FROM track_embeddings)")
+
+
+def vetoed_ids(conn: sqlite3.Connection) -> list[int]:
+    """Unplayed vetoed tracks — injected controls come from these (SPEC.md §17.5)."""
+    return _ids(conn, "t.origin = 'pool' AND t.veto_state = 'vetoed' AND t.id NOT IN (SELECT track_id FROM plays)")
 
 
 def upcoming(conn: sqlite3.Connection, rng=random) -> int | None:
-    """The track the next play would show if it started now, so the player can fetch its audio early.
+    """The track the next play will show, drawn ahead so the player can fetch its audio early.
 
-    Whether the next play is a control (and, if so, which random pool track) is drawn here, ahead of time,
-    and kept until that play starts: it never depends on ratings, so drawing it early changes nothing. A
-    learning play's track is the current top score, which a rating in between can still change.
+    v4 (SPEC.md §17.5): at the run's secret rate the next play is a control — a random *vetoed* track slipped in
+    to test the veto — otherwise a random playable track. The control decision never depends on ratings, so it
+    is drawn once and kept until that play starts; only the track is redrawn if it no longer qualifies (e.g. a
+    rating in between vetoed it). With nothing vetoed yet, a control can't be injected and the play is a normal pick.
     """
-    from .scoring import score_pool
-
-    scored = score_pool(conn)
-    if not scored:
+    playable, vetoed = set(playable_ids(conn)), set(vetoed_ids(conn))
+    if not playable and not vetoed:
         return None
     draw = db.get_setting(conn, "next_draw")
-    if draw is None or (draw["control"] and draw["track_id"] not in {r["track_id"] for r in scored}):
-        control = next_is_control(conn, rng)
-        draw = {"control": control, "track_id": rng.choice(scored)["track_id"] if control else None}
+    if draw is None or draw.get("track_id") not in (vetoed if draw.get("control") else playable):
+        control = draw["control"] if draw is not None else next_is_control(conn, rng)
+        if control and not vetoed:
+            control = False
+        choices = sorted(vetoed if control else playable)
+        if not choices:
+            return None
+        draw = {"control": control, "track_id": rng.choice(choices)}
         db.set_setting(conn, "next_draw", draw, log=False)
-    return draw["track_id"] if draw["control"] else scored[0]["track_id"]
+    return draw["track_id"]
 
 
 def show_next(conn: sqlite3.Connection, rng=random) -> int:
     """Start the next play, as drawn by `upcoming`. Returns the play ID."""
-    upcoming(conn, rng)
+    if upcoming(conn, rng) is None:
+        raise RuntimeError("The pool has no playable tracks")
     draw = db.get_setting(conn, "next_draw")
     db.set_setting(conn, "next_draw", None, log=False)
-    return show(conn, track_id=draw["track_id"], control=True) if draw["control"] else show(conn)
+    return show(conn, track_id=draw["track_id"], control=draw["control"])
 
 
 # --- showing and rating --------------------------------------------------------------------
 
 def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = False, rng=random) -> int:
-    """Log a track as shown, with its score breakdown at this moment. Returns the play ID.
+    """Log a track as shown, with every score component and its veto details at this moment. Returns the play ID.
 
-    Without track_id: a learning play shows the top-scored track, a control play a random
-    unplayed pool track (SPEC.md §15.4).
+    Without track_id: a random playable track (a control: a random vetoed track, or a playable one if none is
+    vetoed). The logged score and rank are kept as data only; v4 doesn't pick by them.
     """
     from .scoring import score_pool
+    from .veto import settings_version
 
     t0 = time.monotonic()
     scored = score_pool(conn)
     score_ms = (time.monotonic() - t0) * 1000
     if not scored:
         raise RuntimeError("The pool has no unplayed tracks")
-    if track_id:
-        row = next(r for r in scored if r["track_id"] == track_id)
-    else:
-        row = rng.choice(scored) if control else scored[0]
+    if track_id is None:
+        choices = (vetoed_ids(conn) if control else []) or playable_ids(conn) or [r["track_id"] for r in scored]
+        track_id = rng.choice(choices)
+    row = next(r for r in scored if r["track_id"] == track_id)
     play_number = conn.execute("SELECT count(*) FROM plays").fetchone()[0] + 1
     components = {c: {"raw": row["raw"][c], "norm": row["norm"][c]} for c in row["raw"]}
+    veto_json = conn.execute("SELECT veto FROM tracks WHERE id = ?", (track_id,)).fetchone()[0]
     with conn:
         play_id = conn.execute(
             "INSERT INTO plays (track_id, generation, play_number, is_control, weight_set_id, components,"
-            " score, rank, pool_size, provenance, target_bpm, scored_for_seed, shown_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))",
+            " score, rank, pool_size, provenance, target_bpm, scored_for_seed, veto, settings_version, shown_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))",
             (row["track_id"], current_generation(conn), play_number, int(control), row["weight_set_id"],
              json.dumps(components), row["score"], row["rank"], len(scored),
-             json.dumps(row["provenance"]), row.get("target_bpm"), row.get("scored_for_seed"))).lastrowid
+             json.dumps(row["provenance"]), row.get("target_bpm"), row.get("scored_for_seed"), veto_json,
+             settings_version(conn))).lastrowid
     # Control status and rank stay out of the event log (and its text file): they're in the plays table, and
     # seeing them during the run would reveal which plays are controls (SPEC.md §16.6).
     db.log_event(conn, "shown", play_id, pool_size=len(scored), score_ms=round(score_ms, 1))
@@ -278,6 +304,9 @@ def _place(conn: sqlite3.Connection, play, rating: int) -> None:
     """Move the play's audio to where its rating puts it (see module docstring)."""
     track = conn.execute("SELECT * FROM tracks WHERE id = ?", (play["track_id"],)).fetchone()
     play = conn.execute("SELECT * FROM plays WHERE id = ?", (play["id"],)).fetchone()  # fresh undo_path
+    if not (track["file_path"] or play["undo_path"]):          # no audio on disk (e.g. a fetch failed): nothing to move
+        db.log_event(conn, "no_audio_to_place", play["id"], rating=rating)
+        return
     src = resolve(track["file_path"] or play["undo_path"])
     if rating == ADD:
         dest = _unique(path("collection") / f"{_safe(track['artist'])} - {_safe(track['title'])}{src.suffix}", src)

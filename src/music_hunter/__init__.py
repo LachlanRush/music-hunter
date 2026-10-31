@@ -51,6 +51,44 @@ def analyse_bpm(seeds: bool) -> None:
     print(f"{len(rows)} tracks measured")
 
 
+def show_veto(top: int) -> None:
+    """v4: what the veto currently allows and blocks, and why (SPEC.md §17.4)."""
+    import json
+
+    from . import veto
+
+    conn = db.connect()
+    counts = veto.update(conn)
+    cfg = CONFIG["veto"]
+    print(f"Analysed {counts['analysed']} · playable {counts['playable']} · vetoed {counts['vetoed']} (unplayed)"
+          f" · veto {'active' if counts['active'] else f'not active until {cfg["min_analysed"]} analysed'}")
+    print(f"Rule: vetoed below {cfg['cut_sd']} robust SDs (back above {cfg['return_sd']}), backstop {cfg['backstop_sd']} SDs"
+          f" on seed closeness; weights {dict(cfg['weights'])}")
+    rows = conn.execute("SELECT artist, title, veto_state, veto FROM tracks WHERE origin = 'pool' AND veto IS NOT NULL"
+                        " AND id NOT IN (SELECT track_id FROM plays)").fetchall()
+    rows = sorted(rows, key=lambda r: json.loads(r["veto"])["z"])
+    print(f"\nLowest {top}:")
+    for r in rows[:top]:
+        v = json.loads(r["veto"])
+        comps = " ".join(f"{c[:5]} {z:+.1f}" for c, z in v["z_components"].items())
+        print(f"  {r['veto_state']:8s} z {v['z']:+.2f}  [{comps}]  {r['artist'][:28]} – {r['title'][:36]}")
+    agree = {k: sum(json.loads(r["veto"])["rules"][k] for r in rows if r["veto_state"] == "vetoed")
+             for k in json.loads(rows[0]["veto"])["rules"]} if rows else {}
+    print(f"\nOther rules agreeing with the {counts['vetoed']} vetoes: " + ", ".join(f"{k} {n}" for k, n in agree.items()))
+
+
+def end_run() -> None:
+    """v4: end the run now — the player stops, and the results page and report unseal."""
+    from .ratings import run_complete
+
+    conn = db.connect()
+    if run_complete(conn):
+        print("The run has already ended.")
+        return
+    db.set_setting(conn, "run_ended", True)
+    print("Run ended: results unsealed at /results; the player shows 'Run complete'.")
+
+
 def reembed() -> None:
     """Re-analyse tracks whose stored embedding came from another model or layer (audio still on disk)."""
     from .config import resolve
@@ -365,6 +403,11 @@ def main() -> None:
 
     sub.add_parser("reembed", help="Re-analyse tracks embedded with another audio model (audio still on disk)")
 
+    p = sub.add_parser("veto", help="What the veto allows and blocks, and why")
+    p.add_argument("--top", type=int, default=25, help="How many of the lowest-scored tracks to list")
+
+    sub.add_parser("end-run", help="End the run now and unseal the results")
+
     sub.add_parser("serve", help="Start the localhost player")
 
     sub.add_parser("report", help="Operational report: sessions, delays, pipeline timings, errors")
@@ -392,6 +435,10 @@ def main() -> None:
         averages()
     elif args.command == "analyse-bpm":
         analyse_bpm(args.seeds)
+    elif args.command == "veto":
+        show_veto(args.top)
+    elif args.command == "end-run":
+        end_run()
     elif args.command == "reembed":
         reembed()
     elif args.command == "serve":

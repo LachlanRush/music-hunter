@@ -18,7 +18,8 @@ def add_play(c, track_id, n, comps, rating):
                    f"+{n} seconds"))
 
 
-def test_reweighting_v2(conn):
+def test_reweighting_v2(conn, monkeypatch):
+    monkeypatch.setitem(CFG, "enabled", True)          # off in v4 (random picks); the mechanism is still tested
     c = conn
     rng = np.random.default_rng(0)
     track = c.execute("SELECT id FROM tracks WHERE origin = 'pool' LIMIT 1").fetchone()[0]
