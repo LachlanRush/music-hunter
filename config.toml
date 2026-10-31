@@ -98,9 +98,9 @@ unrated_counts_as = 2                         # Close
 [ratings.tags]
 # SPEC.md §17.7 (v4) — optional reason tags, offered after rating (under the last-rated track); several allowed,
 # changeable with the most recent rating. Logged only: no effect on the veto or picks. Keyed by rating.
-# v5 (2026-10-31): five bad, five good, not overlapping; Close gets both (what was right and what wasn't).
+# v5 (2026-10-31): five bad, five good, not overlapping; Close gets the bad ones (what kept it from being an Add).
 "1" = ["vocals", "lyrics", "boring", "wrong energy", "harsh sound"]
-"2" = ["great vocals", "groove", "melody", "energy", "the drop", "vocals", "lyrics", "boring", "wrong energy", "harsh sound"]
+"2" = ["vocals", "lyrics", "boring", "wrong energy", "harsh sound"]
 "3" = ["great vocals", "groove", "melody", "energy", "the drop"]
 
 [find]
