@@ -42,24 +42,20 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 .rate button.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 .rate button.on span { color: inherit; }
 .rate button:disabled:not(.on) { opacity: 0.45; cursor: default; }
-.rate button.add { border-color: var(--accent); }
-.rate button.add b { color: var(--accent); }
-.rate button.add.on b { color: inherit; }
 .now-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: end; }
 .art { width: 104px; height: 104px; border-radius: 6px; background: var(--line); object-fit: cover; display: grid;
   place-items: center; color: var(--muted); font: 800 34px/1 var(--display); }
-.below { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 18px; }
-.volume { display: flex; align-items: center; gap: 8px; }
-.volume input { width: 120px; }
 .tempo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 14px; }
 .tempo label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .tempo input[type=number] { width: 76px; font: 500 14px var(--mono); padding: 4px 6px; border: 1px solid var(--line);
   border-radius: 4px; background: var(--surface); color: var(--fg); }
 .tempo-note { font: 400 12px var(--mono); color: var(--muted); }
 .hint { font: 400 12px/1.5 var(--mono); color: var(--muted); }
+.hint:empty { display: none; }
 
 /* Preparing the pool */
 .gate { display: grid; gap: 14px; padding-block: 40px; }
+.gate .label:empty, .gate p:empty { display: none; }
 .gate h1 { font: 800 clamp(28px, 5vw, 40px)/1.05 var(--display); font-stretch: 112%; margin: 0; text-wrap: balance; }
 .gate p { margin: 0; color: var(--muted); max-width: 60ch; }
 .meter { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; max-width: 420px; }
@@ -71,7 +67,6 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 .reveal-text { min-width: 0; flex: 1 1 220px; }
 .reveal h2 { font: 700 18px/1.2 var(--display); margin: 4px 0 0; overflow-wrap: anywhere; }
 .reveal .by { color: var(--muted); font-size: 14px; }
-.chip { font: 500 12px/1 var(--mono); padding: 6px 8px; border-radius: 4px; border: 1px solid var(--line); white-space: nowrap; }
 .change { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .change button { border: 1px solid var(--line); background: var(--surface); border-radius: 4px; padding: 6px 10px; font: 500 13px var(--body); }
 .change button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
@@ -91,14 +86,14 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 <body>
 <main>
   <header>
-    <nav><span class="brand">MUSIC HUNTER</span><a href="/">Playlists</a><a id="nav-playlist" href="/">Playlist</a><a href="" aria-current="page">Find music</a></nav>
+    <nav><a class="backlink" id="nav-back" href="/" aria-label="Back">←</a><a class="brand" href="/">MUSIC HUNTER</a><span class="crumb" id="crumb"></span></nav>
     <div class="status" id="status">Connecting…</div>
   </header>
 
   <section class="gate" id="gate">
-    <div class="label" id="gate-label">Preparing the pool</div>
-    <h1 id="gate-title">Getting tracks ready</h1>
-    <p id="gate-text">Checking the pool…</p>
+    <div class="label" id="gate-label"></div>
+    <h1 id="gate-title"></h1>
+    <p id="gate-text"></p>
     <div class="meter" id="gate-meter" hidden><i id="gate-fill"></i></div>
   </section>
 
@@ -106,7 +101,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
     <div class="now-head">
       <div class="art" id="art-box" aria-hidden="true">?</div>
       <div>
-        <div class="label" id="now-label">Now playing</div>
+        <div class="label" id="now-label"></div>
         <div class="artist" id="artist"></div>
         <h1 class="title" id="title"></h1>
       </div>
@@ -127,11 +122,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
       </button>
     </div>
     <div class="rate" id="rate" role="group" aria-label="Rate this track"></div>
-    <div class="below">
-      <div class="hint" id="hint">Keys: space play/pause · N skip (counts as Close) · B back</div>
-      <div class="volume"><label class="label" for="volume">Volume</label>
-        <input type="range" id="volume" min="0" max="100" value="100"></div>
-    </div>
+    <div class="hint" id="hint"></div>
     <div class="tempo">
       <label><input type="checkbox" id="match-tempo"> Match tempo</label>
       <label>Target <input type="number" id="target-bpm" min="40" max="220" step="0.5" aria-label="Target BPM"> BPM</label>
@@ -148,7 +139,14 @@ const $ = (id) => document.getElementById(id);
 // v5: this page belongs to one playlist's Find music session; its API lives under /find/<id>/…
 const BASE = (location.pathname.match(/^\/find\/\d+/) || [""])[0];
 const PLAYLIST = BASE ? Number(BASE.split("/").pop()) : null;
-if (PLAYLIST) $("nav-playlist").href = `/playlist/${PLAYLIST}`; else $("nav-playlist").hidden = true;
+if (PLAYLIST) {
+  $("nav-back").href = `/playlist/${PLAYLIST}`;
+  $("nav-back").setAttribute("aria-label", "Back to the playlist");
+  fetch(`/api/playlists/${PLAYLIST}`).then((r) => r.json()).then((p) => {
+    $("crumb").textContent = `Finding music for ${p.name}`;
+    document.title = `Find music · ${p.name} · Music Hunter`;
+  }).catch(() => {});
+}
 let LABELS = {};                        // rating -> button label, from config via /api/state
 let PLAY_TO_END = new Set();            // updated from the server's settings
 let PRELOAD = false, STALL_MS = 250;    // [ui] preload_next, stall_log_ms
@@ -179,7 +177,7 @@ function buildButtons(labels, hints, add) {
   el.style.setProperty("--buttons", labels.length);
   LABELS = Object.fromEntries(labels.map((l, i) => [i + 1, l]));
   el.innerHTML = labels.map((l, i) =>
-    `<button data-r="${i + 1}"${i + 1 === add ? ' class="add"' : ""}><b>${l}</b><span>${hints[i] ?? ""}</span></button>`
+    `<button data-r="${i + 1}"><b>${l}</b></button>`
   ).join("");
   el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => rate(Number(b.dataset.r))));
 }
@@ -261,7 +259,7 @@ function renderGate(s) {
     $("gate-text").textContent = "New candidates are fetched in the background; check back in a few minutes.";
     $("gate-meter").hidden = true;
   } else {
-    $("gate-label").textContent = "Preparing the pool";
+    $("gate-label").textContent = "";
     $("gate-title").textContent = `${s.unplayed} of ${s.early_start} tracks ready`;
     $("gate-text").textContent = `${s.worker.message || "Working…"} Playback can start once ${s.early_start} tracks are analysed; the rest join as they finish.`;
     $("gate-meter").hidden = false;
@@ -270,21 +268,12 @@ function renderGate(s) {
 }
 
 // --- playback ----------------------------------------------------------------------
-let volumeNode = null;
 function ensureAudioGraph() {
   if (ctx) return;
   ctx = new AudioContext();
   gainNode = ctx.createGain();                   // per-track loudness normalisation
-  volumeNode = ctx.createGain();                 // the volume slider, applied after it
-  volumeNode.gain.value = Number($("volume").value) / 100;
-  ctx.createMediaElementSource(audio).connect(gainNode).connect(volumeNode).connect(ctx.destination);
+  ctx.createMediaElementSource(audio).connect(gainNode).connect(ctx.destination);
 }
-try { const v = localStorage.getItem("volume"); if (v !== null) $("volume").value = v; } catch (e) {}
-$("volume").addEventListener("input", () => {
-  const v = Number($("volume").value);
-  if (volumeNode) volumeNode.gain.value = v / 100;
-  try { localStorage.setItem("volume", String(v)); } catch (e) {}
-});
 
 async function loadNext({autoplay = true} = {}) {
   showError("");
@@ -384,7 +373,7 @@ function tempoReport() {
 // Artist and title arrive only once a track is rated (server setting hide_names_until_rated).
 function showNames(track) {
   const hidden = track.title == null;
-  $("artist").textContent = hidden ? "Artist, title and artwork appear once you rate" : track.artist;
+  $("artist").textContent = hidden ? "" : track.artist;
   $("title").textContent = hidden ? "Hidden until rated" : track.title;
   $("title").classList.toggle("hidden-name", hidden);
   $("art-box").innerHTML = track.art ? `<img class="art" src="${track.art}" alt="">` : "?";
@@ -426,7 +415,7 @@ function renderRating() {
     b.disabled = onPrev ? !prev.can_change : ratedCurrent !== null;
   });
   $("now").classList.toggle("previous", onPrev);
-  $("now-label").textContent = onPrev ? "Previous track" : "Now playing";
+  $("now-label").textContent = onPrev ? "Previous track" : "";
   $("back").disabled = onPrev;
   $("skip").setAttribute("aria-label", onPrev ? "Return to the current track" : "Skip to next track");
   if (onPrev) {
@@ -436,9 +425,7 @@ function renderRating() {
       : prev.rating === null ? `You skipped this one · rate it now with the buttons · ${back}`
       : `${LABELS[prev.rating]} · press another button to change it · ${back}`;
   } else {
-    $("hint").textContent = ratedCurrent === null
-      ? "Keys: space play/pause · N skip (counts as Close) · B back"
-      : `${LABELS[ratedCurrent]} · plays to the end, then the next track starts · N skips ahead · B back`;
+    $("hint").textContent = "";
   }
 }
 
@@ -587,13 +574,11 @@ function renderReveal(rev) {
   el.innerHTML = `
     ${rev.art ? `<img class="art" src="${rev.art}" alt="">` : `<div class="art" aria-hidden="true">♪</div>`}
     <div class="reveal-text">
-      <div class="label">Last rated</div>
       <h2>${esc(rev.title)}</h2>
       <div class="by">${esc(rev.artist)}</div>
     </div>
-    <span class="chip">${LABELS[rev.rating]}</span>
-    <div class="change"><span class="label">Change</span>${change}</div>
-    ${(rev.tag_options || []).length ? `<div class="tags" role="group" aria-label="Why? (optional)"><span class="label">Why? (optional)</span>${
+    <div class="change" role="group" aria-label="Change the rating">${change}</div>
+    ${(rev.tag_options || []).length ? `<div class="tags" role="group" aria-label="Why? (optional)">${
       rev.tag_options.map((t) => `<button class="${(rev.tags || []).includes(t) ? "on" : ""}" data-tag="${esc(t)}"
         aria-pressed="${(rev.tags || []).includes(t)}">${esc(t)}</button>`).join("")}</div>` : ""}`;
   el.hidden = false;

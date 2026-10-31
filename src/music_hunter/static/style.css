@@ -39,7 +39,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 }
 
 header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 16px; }
-.brand { font: 700 15px/1 var(--display); font-stretch: 125%; letter-spacing: 0.02em; }
+.brand { font: 700 15px/1 var(--display); font-stretch: 125%; letter-spacing: 0.02em; color: inherit; text-decoration: none; }
+.backlink { display: inline-grid; place-items: center; width: 32px; height: 32px; margin: -8px 2px -8px -8px;
+  border-radius: 50%; color: inherit; text-decoration: none; font: 500 20px/1 var(--body); }
+.backlink:hover { background: var(--surface); }
+.crumb { font: 500 13px/1 var(--body); color: var(--muted); }
 .status { font: 400 12px/1.4 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
 .status .busy { color: var(--accent); }
 
