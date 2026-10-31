@@ -605,6 +605,10 @@ Three buttons (Off · Close · Add), Close as a mild like, unrated/skipped count
 - `music-hunter veto` shows what's playable, what's vetoed and why; `music-hunter end-run` ends a run and unseals the results.
 - **Checked on real data** (copy of the v3 database): of 251 analysed tracks, 34 vetoed (14%) — the worst clearly outside the area (Lethian Dreams ×4, seed closeness 0.49–0.58; a Nia Archives edit; Makina Time). Replaying the 74 v3 ratings: 56 ratings moved nothing across the line, 13 moved 1–2, the most was 6 (20 vetoed, 16 returned over the run). Only 2 of v3's played tracks would have been vetoed — v3's ranking had already kept away from that region. A real top-up of 8: 10 downloaded in one round, 2 of them vetoed (audio deleted), playable pool exactly at target.
 
+### 17.13 As built — milestone 4 (2026-10-31)
+- **Injected vetoed tracks** (built with 17.12): random vetoed track at a secret rate between 1 in 10 and 1 in 6 (`[controls]`), audio fetched just in time (in the background while the previous track plays, or on the spot if needed); no automatic end (`target = 0`) — `music-hunter end-run` ends the run and unseals.
+- **Reason tags** (`[ratings.tags]`): optional chips in the "Last rated" panel (not under the rating buttons: an Off skips straight to the next track, which would hide them), labelled "Why? (optional)"; tap to add or remove, several allowed, only on the most recent rating; changing the rating keeps only the tags that still fit. Stored with the play (`plays.tags`); no effect on the veto or picks.
+
 ### 17.11 Milestones (build in order, stop after each for my check)
 1. **Fresh run setup** — archive v3 to `runs/v3/`, seeds (to decide: the same 10 or new), v4 config.
 2. **Analysed vs playable pool** — fingerprints kept for good, audio dropped for vetoed tracks, top-ups from the source lists, merging into any analysed track, re-download on return. Check: a real pull rotates correctly.

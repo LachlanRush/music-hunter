@@ -5,6 +5,7 @@ saved to collection/). Audio of tracks not Added is held in data/undo/ until the
 deleted. Runs on a temporary copy of a pool.
 """
 
+import json
 import random
 
 import pytest
@@ -280,3 +281,24 @@ def test_refill_for_new_seeds(conn, monkeypatch):
     assert unpulled_seeds(conn) and web.Worker.job_needed(conn) == "pull"  # …and 2 plays since the pull
     mark_pulled(conn, [s.track_id for s in seeds(conn)])                  # the pull queried it (even with no results)
     assert not unpulled_seeds(conn) and web.Worker.job_needed(conn) is None
+
+
+def test_reason_tags(conn):
+    """SPEC.md §17.7: optional tags on the most recent rating, from that rating's list; a changed rating keeps only
+    the tags that still fit; earlier ratings can't be tagged."""
+    from music_hunter.ratings import set_tags, tag_options
+
+    p1 = show(conn)
+    rate(conn, p1, OFF)
+    assert set_tags(conn, p1, ["lyrics", "vocals", "lyrics"]) == ["vocals", "lyrics"]          # config order, no repeats
+    with pytest.raises(ValueError):
+        set_tags(conn, p1, ["groove"])                                                          # an Add tag on an Off
+    change_last_rating(conn, CLOSE)                                                             # Close shares Off's tags
+    assert json.loads(conn.execute("SELECT tags FROM plays WHERE id = ?", (p1,)).fetchone()[0]) == ["vocals", "lyrics"]
+    change_last_rating(conn, ADD)                                                               # none fit Add
+    assert conn.execute("SELECT tags FROM plays WHERE id = ?", (p1,)).fetchone()[0] is None
+    assert "groove" in tag_options(ADD)
+    p2 = show(conn)
+    rate(conn, p2, OFF)
+    with pytest.raises(ValueError):
+        set_tags(conn, p1, [])                                                                  # no longer the latest

@@ -175,6 +175,11 @@ class ChangeBody(BaseModel):
     rating: int
 
 
+class TagsBody(BaseModel):
+    play_id: int
+    tags: list[str] = []
+
+
 class ClientEvent(BaseModel):
     kind: str
     play_id: int | None = None
@@ -197,6 +202,8 @@ def track_info(conn, play) -> dict:
             "art": None if hidden or not t["art_path"] else f"/art/{t['id']}",
             "rating": play["rating"], "duration_s": t["duration_s"], "gain_db": t["gain_db"] or 0.0,
             "bpm": t["bpm"],
+            "tags": json.loads(play["tags"] or "[]") if play["rating"] is not None else [],
+            "tag_options": ratings.tag_options(play["rating"]),
             "audio": f"/audio/{t['id']}"}
 
 
@@ -347,6 +354,17 @@ def change(body: ChangeBody) -> dict:
     veto.update(conn)
     worker.start_if_needed()
     return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone())
+
+
+@app.post("/api/tags")
+def set_tags(body: TagsBody) -> dict:
+    """Optional reason tags for the most recent rating (logged only)."""
+    conn = db.connect()
+    try:
+        ratings.set_tags(conn, body.play_id, body.tags)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone())
 
 
 @app.get("/api/settings")

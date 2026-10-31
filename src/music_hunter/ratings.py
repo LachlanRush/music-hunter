@@ -288,11 +288,33 @@ def change_last_rating(conn: sqlite3.Connection, rating: int) -> int:
     if play is None:
         raise ValueError("Nothing has been rated yet")
     db.log_event(conn, "rating_changed", play["id"], old=play["rating"], new=rating)
+    keep = [t for t in json.loads(play["tags"] or "[]") if t in tag_options(rating)]   # tags that still fit
     with conn:
         _place(conn, play, rating)
-        conn.execute("UPDATE plays SET rating = ?, auto_rated = 0 WHERE id = ?", (rating, play["id"]))
+        conn.execute("UPDATE plays SET rating = ?, auto_rated = 0, tags = ? WHERE id = ?",
+                     (rating, json.dumps(keep) if keep else None, play["id"]))
         conn.execute("UPDATE tracks SET rating = ? WHERE id = ?", (rating, play["track_id"]))
     return play["id"]
+
+
+def tag_options(rating: int | None) -> list[str]:
+    """The reason tags offered for a rating ([ratings.tags])."""
+    return list(CONFIG["ratings"].get("tags", {}).get(str(rating), [])) if rating else []
+
+
+def set_tags(conn: sqlite3.Connection, play_id: int, tags: list[str]) -> list[str]:
+    """Optional reason tags for the most recent rating (SPEC.md §17.7). Unknown tags are refused. Returns them."""
+    play = last_rated(conn)
+    if play is None or play["id"] != play_id:
+        raise ValueError("Tags can only be set on the most recent rating")
+    allowed = tag_options(play["rating"])
+    bad = [t for t in tags if t not in allowed]
+    if bad:
+        raise ValueError(f"Not a tag for this rating: {', '.join(bad)}")
+    clean = [t for t in allowed if t in set(tags)]               # config order, no repeats
+    with conn:
+        conn.execute("UPDATE plays SET tags = ? WHERE id = ?", (json.dumps(clean) if clean else None, play_id))
+    return clean
 
 
 def _check(rating: int) -> None:

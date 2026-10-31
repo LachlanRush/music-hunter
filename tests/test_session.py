@@ -170,6 +170,9 @@ def test_session(conn, monkeypatch):
                                                  "played_seconds": 60 + i, **stretched}).json()
             assert not {"score", "rank", "control", "components", "provenance"} & set(rev)  # still blind
             assert rev["title"] is not None                                             # names revealed
+            if i % 7 == 3 and rev["tag_options"]:                 # optional reason tags on some ratings
+                tagged = client.post("/api/tags", json={"play_id": t["play_id"], "tags": rev["tag_options"][:2]}).json()
+                assert tagged["tags"] == rev["tag_options"][:2]
             if i == 40:                                            # mis-tap correction
                 client.post("/api/change", json={"rating": max(1, rev["rating"] - 1)})
             if i == 3:                                             # player-side events
@@ -187,6 +190,7 @@ def test_session(conn, monkeypatch):
 
     plays = c.execute("SELECT * FROM plays ORDER BY play_number").fetchall()
     assert len(plays) == PLAYS
+    assert sum(1 for p in plays if p["tags"]) >= 10                      # reason tags logged with their plays
     skipped = [i for i in range(PLAYS) if i % 23 == 11]          # skipped without a rating: counted as Close, marked
     auto = [p for p in plays if p["auto_rated"]]
     assert len(auto) == len(skipped) and all(p["rating"] == config.CONFIG["ratings"]["unrated_counts_as"] for p in auto)

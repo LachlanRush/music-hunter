@@ -75,6 +75,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 .change { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .change button { border: 1px solid var(--line); background: var(--surface); border-radius: 4px; padding: 6px 10px; font: 500 13px var(--body); }
 .change button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.tags { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.tags button { border: 1px dashed var(--line); background: transparent; border-radius: 999px; padding: 5px 10px;
+  font: 500 12px var(--body); color: var(--muted); }
+.tags button.on { border-style: solid; border-color: var(--accent); color: var(--fg); background: var(--surface); }
 .error { color: var(--bad); font-size: 14px; }
 
 @media (max-width: 480px) {
@@ -584,10 +588,20 @@ function renderReveal(rev) {
       <div class="by">${esc(rev.artist)}</div>
     </div>
     <span class="chip">${LABELS[rev.rating]}</span>
-    <div class="change"><span class="label">Change</span>${change}</div>`;
+    <div class="change"><span class="label">Change</span>${change}</div>
+    ${(rev.tag_options || []).length ? `<div class="tags" role="group" aria-label="Why? (optional)"><span class="label">Why? (optional)</span>${
+      rev.tag_options.map((t) => `<button class="${(rev.tags || []).includes(t) ? "on" : ""}" data-tag="${esc(t)}"
+        aria-pressed="${(rev.tags || []).includes(t)}">${esc(t)}</button>`).join("")}</div>` : ""}`;
   el.hidden = false;
   el.querySelectorAll("[data-change]").forEach((b) =>
     b.addEventListener("click", () => changeRating(Number(b.dataset.change))));
+  el.querySelectorAll("[data-tag]").forEach((b) => b.addEventListener("click", async () => {
+    // Optional reason tags for the most recent rating: tap to add or remove (logged only, never affect picks).
+    const t = b.dataset.tag, now = new Set(rev.tags || []);
+    now.has(t) ? now.delete(t) : now.add(t);
+    try { renderReveal(await api("/api/tags", {play_id: rev.play_id, tags: [...now]})); }
+    catch (e) { showError(`Couldn't save the tag: ${e.message}`); }
+  }));
 }
 
 poll();

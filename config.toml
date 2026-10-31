@@ -94,6 +94,13 @@ negative_weights = { "1" = 1.0 }              # Off only
 # (added 2026-10-30 at my request). 0 = the old rule: skipped tracks teach nothing and an unrated track waits.
 unrated_counts_as = 2                         # Close
 
+[ratings.tags]
+# SPEC.md §17.7 (v4) — optional reason tags, offered after rating (under the last-rated track); several allowed,
+# changeable with the most recent rating. Logged only: no effect on the veto or picks. Keyed by rating.
+"1" = ["vocals", "lyrics", "too repetitive", "wrong energy", "the drop", "bassline", "too long", "know it already"]
+"2" = ["vocals", "lyrics", "too repetitive", "wrong energy", "the drop", "bassline", "too long", "know it already"]
+"3" = ["great vocals", "groove", "energy"]
+
 [veto]
 # SPEC.md §17.2–17.4 (v4) — every analysed track is scored; the bottom is vetoed (audio dropped, fingerprint
 # kept) and picks are random from what passes. Statistics are anchored to all tracks analysed this run.
