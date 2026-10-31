@@ -136,7 +136,8 @@ class Remote:
                     if woken is None or time.monotonic() - woken > CFG["rewake_minutes"] * 60:
                         problem = wake()
                         woken = time.monotonic()
-                        db.log_event(lib, "pc_wake", work_id=wid, problem=problem)
+                        WAKE["problem"] = problem
+                        db.log_event(lib, "pc_wake", work_id=wid, entity=WAKE.get("entity"), problem=problem)
                     say("waiting for the PC to wake up")
                 elif w["state"] == "queued":
                     say("waiting for the PC")
@@ -178,23 +179,50 @@ def worker_connected(lib) -> bool:
 
 
 def wake() -> str | None:
-    """Ask Home Assistant to wake the PC ([worker.wake]). Returns what went wrong, or None."""
+    """Ask Home Assistant to wake the PC: turn on its Wake-on-LAN switch ([worker.wake]). Returns what went wrong,
+    or None. With no entity set, the switch is looked for among Home Assistant's switches (name or ID mentioning
+    wake / WoL / LAN); the one found is logged (`pc_wake`), so it can be set explicitly if the guess is wrong."""
     from .sources import load_env
 
     load_env()
     w = CFG["wake"]
     supervisor = os.environ.get("SUPERVISOR_TOKEN")          # inside a Home Assistant add-on
     token = os.environ.get("HA_TOKEN") or supervisor
-    url = w["url"] or ("http://supervisor/core" if supervisor else "")
-    if not (url and token and w["service"]):
-        return "Home Assistant not set up ([worker.wake] url/service, HA_TOKEN)"
+    url = (w["url"] or ("http://supervisor/core" if supervisor else "")).rstrip("/")
+    if not (url and token):
+        return "Home Assistant not set up ([worker.wake] url and HA_TOKEN)"
+    headers = {"Authorization": f"Bearer {token}"}
     try:
-        r = requests.post(f"{url.rstrip('/')}/api/services/{w['service']}", json=w.get("data", {}), timeout=15,
-                          headers={"Authorization": f"Bearer {token}"})
+        entity = w.get("entity_id") or find_wake_switch(url, headers)
+        if isinstance(entity, list):
+            return f"which switch wakes the PC? candidates: {', '.join(entity) or 'none found'}"
+        domain = entity.split(".")[0]
+        r = requests.post(f"{url}/api/services/{domain}/turn_on" if domain != "button" else f"{url}/api/services/button/press",
+                          json={"entity_id": entity}, timeout=15, headers=headers)
         r.raise_for_status()
     except requests.RequestException as e:
         return str(e)[:200]
+    WAKE["entity"] = entity
     return None
+
+
+WAKE: dict = {}
+
+
+def find_wake_switch(url: str, headers: dict) -> str | list[str]:
+    """The Wake-on-LAN switch (or button) among Home Assistant's entities: the entity ID, or the candidates if
+    there isn't exactly one."""
+    r = requests.get(f"{url}/api/states", headers=headers, timeout=15)
+    r.raise_for_status()
+    hits = []
+    for s in r.json():
+        eid = s["entity_id"]
+        if eid.split(".")[0] not in ("switch", "button"):
+            continue
+        text = f"{eid} {s.get('attributes', {}).get('friendly_name', '')}".lower()
+        if any(k in text for k in ("wake", "wol", "_lan", " lan", "magic")):
+            hits.append(eid)
+    return hits[0] if len(hits) == 1 else hits
 
 
 def worker_token() -> str:
@@ -238,7 +266,7 @@ class Inhibitor:
 
 def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
     """The PC side: ask the app for work, do it, send the results back. Never exits on its own unless `once` (then:
-    when the queue is empty). Returns the number of tracks done. `http` (a requests.Session-like object) and
+    when the queue has stayed empty for once_grace_seconds — jobs queue one track at a time). Returns the number of tracks done. `http` (a requests.Session-like object) and
     `local` are for tests."""
     token = worker_token()
     if not token:
@@ -260,7 +288,7 @@ def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
             if idle > CFG["idle_minutes"] * 60 and inhibitor.proc is not None:
                 inhibitor.release()
                 print("Queue empty: the PC may sleep again", flush=True)
-            if once:
+            if once and idle > CFG["once_grace_seconds"]:
                 return done
             if not announced:
                 print(f"Connected to {server}; waiting for work", flush=True)
@@ -390,4 +418,5 @@ def status(lib) -> dict:
     counts = dict(lib.execute("SELECT state, count(*) FROM work WHERE state IN ('queued', 'claimed')"
                               " GROUP BY state").fetchall())
     return {"mode": CFG["mode"], "connected": worker_connected(lib), "queued": counts.get("queued", 0),
-            "working": counts.get("claimed", 0)}
+            "working": counts.get("claimed", 0), "wake_entity": WAKE.get("entity"),
+            "wake_problem": WAKE.get("problem")}

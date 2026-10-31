@@ -770,4 +770,4 @@ def serve() -> None:
         sockets.append(sock)
         print(f"Player: http://{host}:{UI['port']}   Results: http://{host}:{UI['port']}/results")
     print("Log: data/music-hunter.log")
-    uvicorn.Server(uvicorn.Config(app, log_level="warning")).run(sockets=sockets)
+    uvicorn.Server(uvicorn.Config(app, log_level="warning", timeout_keep_alive=75)).run(sockets=sockets)

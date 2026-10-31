@@ -52,6 +52,7 @@ def remote(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ROOT", tmp_path)
     monkeypatch.setitem(CONFIG["worker"], "mode", "remote")
     monkeypatch.setitem(CONFIG["worker"], "wait_poll_seconds", 0.02)
+    monkeypatch.setitem(CONFIG["worker"], "once_grace_seconds", -1)
     monkeypatch.setenv("WORKER_TOKEN", "secret")
     wakes = []
     monkeypatch.setattr(analysis, "wake", lambda: wakes.append(time.time()))
@@ -125,3 +126,31 @@ def test_token_and_stale_items(remote):
     r = http.client.post(f"/api/worker/{wid}/file/audio", headers=auth, content=b"x")
     assert r.status_code == 409 and not (root / "cache" / "old").exists()
     assert http.client.get("/api/worker").json()["mode"] == "remote"
+
+
+def test_wake_finds_the_switch(monkeypatch):
+    calls = []
+
+    class R:
+        def __init__(self, body=None):
+            self.body = body
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.body
+    states = [{"entity_id": "switch.kitchen_light", "attributes": {"friendly_name": "Kitchen"}},
+              {"entity_id": "switch.lachlandesktop", "attributes": {"friendly_name": "Desktop Wake on LAN"}},
+              {"entity_id": "light.wake_up_light", "attributes": {}}]
+    monkeypatch.setattr(analysis.requests, "get", lambda url, **kw: R(states))
+    monkeypatch.setattr(analysis.requests, "post", lambda url, **kw: calls.append((url, kw["json"])) or R())
+    monkeypatch.setenv("HA_TOKEN", "t")
+    monkeypatch.setitem(CONFIG["worker"]["wake"], "url", "http://ha:8123")
+    monkeypatch.setitem(CONFIG["worker"]["wake"], "entity_id", "")
+    assert analysis.wake() is None
+    assert calls == [("http://ha:8123/api/services/switch/turn_on", {"entity_id": "switch.lachlandesktop"})]
+    states.append({"entity_id": "switch.wol_laptop", "attributes": {}})             # two candidates: ask
+    assert "candidates: switch.lachlandesktop, switch.wol_laptop" in analysis.wake()
+    monkeypatch.setitem(CONFIG["worker"]["wake"], "entity_id", "switch.wol_laptop")  # set explicitly
+    assert analysis.wake() is None and calls[-1][1] == {"entity_id": "switch.wol_laptop"}

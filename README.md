@@ -50,6 +50,10 @@ uv run music-hunter worker --server http://<pi>:8765 --once   # or by hand, unti
 
 Both sides need the same `WORKER_TOKEN` in `.env`. `MUSIC_HUNTER_ROOT` points the app at another data folder.
 
+**Home Assistant add-on** (`homeassistant/music_hunter/`): in Home Assistant, Settings → Add-ons → Add-on store →
+⋮ → Repositories → add `https://github.com/LachlanRush/music-hunter`, install Music Hunter, fill in its options
+(see its Documentation tab) and start it. A new version needs a matching `v<version>` tag on GitHub.
+
 ## v4: veto and random picks
 
 ```sh

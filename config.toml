@@ -284,19 +284,20 @@ pca_components = 16              # audio dimensions added to agreement/year/BPM 
 # Pulls, YouTube matching, the veto and scoring always run where the app runs.
 [worker]
 mode = "local"
-server = "http://127.0.0.1:8765"     # the PC worker's default --server: where the app runs (the Pi's Tailscale address)
+server = "http://100.90.89.29:8765"  # the PC worker's default --server: the app on the Pi (Home Assistant's Tailscale address)
 poll_seconds = 5                     # worker: how often to ask for work while busy (or just finished)
 idle_poll_seconds = 30               # … and once idle
 idle_minutes = 3                     # worker: release the PC (let it sleep) after this long without work
+once_grace_seconds = 20              # worker --once: stop after the queue has been empty this long
 connected_seconds = 90               # app: a worker that asked for work this recently counts as connected
 rewake_minutes = 10                  # app: wake the PC again if it still hasn't connected
 wait_poll_seconds = 1                # app: how often a queued track is checked while waiting
 item_timeout_minutes = 15            # app: a claimed track with no result after this long goes back to the queue
 
 [worker.wake]
-# Home Assistant service that wakes the PC. Inside the add-on, url can stay empty (the Supervisor's proxy is used);
-# elsewhere set url and put a long-lived access token in .env as HA_TOKEN. send_magic_packet needs `wake_on_lan:`
-# in Home Assistant's configuration.yaml; a Wake-on-LAN switch or button entity works too (e.g. button/press).
+# Home Assistant's Wake-on-LAN switch for the PC (turned on to wake it; a button entity is pressed instead). Empty
+# entity_id = find it among the switches whose name or ID mentions wake / WoL / LAN (logged as pc_wake). Inside the
+# add-on, url can stay empty (the Supervisor's proxy is used); elsewhere set url and put a long-lived access token
+# in .env as HA_TOKEN.
 url = ""
-service = "wake_on_lan/send_magic_packet"
-data = { mac = "9c:6b:00:98:16:83" }
+entity_id = ""

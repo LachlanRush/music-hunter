@@ -8,10 +8,24 @@ from pathlib import Path
 # Home Assistant add-on or a scratch copy; without it, everything lives in the project folder.
 PROJECT = Path(__file__).resolve().parents[2]
 ROOT = Path(os.environ.get("MUSIC_HUNTER_ROOT") or PROJECT)
-CONFIG_PATH = ROOT / "config.toml" if (ROOT / "config.toml").exists() else PROJECT / "config.toml"
+CONFIG_PATH = PROJECT / "config.toml"
+
+
+def _merge(base: dict, over: dict) -> dict:
+    for k, v in over.items():
+        base[k] = _merge(base[k], v) if isinstance(v, dict) and isinstance(base.get(k), dict) else v
+    return base
+
 
 with CONFIG_PATH.open("rb") as f:
     CONFIG = tomllib.load(f)
+# With a separate data root, its config.toml (written by the add-on from its options) and config.local.toml (my own
+# tweaks) override the project's settings key by key, so new settings in later versions still get their defaults.
+if ROOT != PROJECT:
+    for extra in ("config.toml", "config.local.toml"):
+        if (ROOT / extra).exists():
+            with (ROOT / extra).open("rb") as f:
+                _merge(CONFIG, tomllib.load(f))
 
 
 # ROOT is looked up at call time so tests can point the project at a temporary folder.
