@@ -300,6 +300,16 @@ def test_session(conn, monkeypatch):
     assert [g["name"] for g in groups] == ["1 source", "2 sources", "3+ sources"]
     assert sum(g["all"]["n"] for g in groups) == results["totals"]["rated"]
     assert all(g["all"]["n"] == g["ranked"]["n"] + g["control"]["n"] for g in groups)
+    v4 = results["v4"]                                    # v4 measures (SPEC.md §17.10)
+    assert v4["picks"]["n"] + v4["vetoed"]["n"] == results["totals"]["rated"]
+    assert v4["vetoed_share"] is not None and 0 < v4["vetoed_share"] < 1 and v4["baseline"] is not None
+    assert {"sd_1.25", "fixed_10pct", "backstop"} <= set(v4["rules"])
+    assert all(r["cut"]["n"] + r["kept"]["n"] <= results["totals"]["rated"] for r in v4["rules"].values())
+    assert len(v4["over_run"]) == v4["picks"]["n"] and sum(sum(c.values()) for c in v4["tags"].values()) >= 10
+    assert v4["pool"]["pulls"] >= 2 and v4["settings_versions"]
+    print(f"\nv4: picks Off {v4['picks']['off']:.0%} Add {v4['picks']['add']:.0%} · vetoed slipped in Off {v4['vetoed']['off']:.0%}"
+          f" Add {v4['vetoed']['add']:.0%} (n={v4['vetoed']['n']}) · sources alone Off {v4['baseline']['off']:.0%}"
+          f" · vetoed share {v4['vetoed_share']:.0%} · pool {v4['pool']}")
     by_seed = results["by_seed"]                          # ratings by the seed pool each track was scored in
     assert by_seed and sum(g["all"]["n"] for g in by_seed) == results["totals"]["rated"]
     assert 0.10 <= results["control_rate"] <= 0.25

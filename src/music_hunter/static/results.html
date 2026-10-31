@@ -94,7 +94,7 @@ td.name { white-space: normal; min-width: 180px; font-family: var(--body); }
   </section>
 
   <section class="verdict" aria-labelledby="h-test">
-    <div class="label" id="h-test">Ranked minus control · average rating</div>
+    <div class="label" id="h-test">Picks minus vetoed tracks · average rating</div>
     <div class="big"><b id="diff">–</b><span id="diff-ci"></span><span id="verdict"></span></div>
     <div class="progress" id="add-diff"></div>
     <div class="progress" id="progress"></div>
@@ -109,11 +109,29 @@ td.name { white-space: normal; min-width: 180px; font-family: var(--body); }
     <details><summary>Show data</summary><div class="table-wrap" id="trend-table"></div></details>
   </section>
 
-  <section aria-labelledby="h-rank">
-    <h2 id="h-rank">Does a higher score mean a better track?</h2>
-    <p class="sub">Controls are random pool tracks, so they land at every rank. Their average rating by where they ranked in the pool when shown.</p>
-    <div class="chart" id="rank-bars"></div>
-    <p class="sub" id="rank-note"></p>
+  <section aria-labelledby="h-veto">
+    <h2 id="h-veto">Does the veto remove worse tracks?</h2>
+    <p class="sub">Picks passed the veto; vetoed tracks were slipped in at random at a secret rate. "Sources alone" mixes the two in the proportion the pool was split at the time — what playing the sources' suggestions without a veto would have given.</p>
+    <div class="table-wrap" id="veto-check"></div>
+  </section>
+
+  <section aria-labelledby="h-rules">
+    <h2 id="h-rules">Every veto rule, after the fact</h2>
+    <p class="sub">Each rule's verdict was logged for every play. For each: the share of rated plays it would have cut, how many of those were Off, and how many Adds it would have lost.</p>
+    <div class="table-wrap" id="veto-rules"></div>
+  </section>
+
+  <section aria-labelledby="h-overrun">
+    <h2 id="h-overrun">Off and Add rates over the run</h2>
+    <p class="sub">Share of the most recent 25 picks rated Off and Add. The aim is a steady rate — no early burst then fade.</p>
+    <div class="legend" id="overrun-legend"></div>
+    <div class="chart" id="overrun"></div>
+  </section>
+
+  <section aria-labelledby="h-tags">
+    <h2 id="h-tags">Reason tags</h2>
+    <p class="sub">How often each optional tag was given, by rating.</p>
+    <div class="table-wrap" id="tags"></div>
   </section>
 
   <section aria-labelledby="h-nsrc">
@@ -276,26 +294,26 @@ function render(d) {
 
   const diff = d.difference;
   SCALE = d.scale_max; LABELS = d.labels; PRIOR = d.prior;
-  $("h-test").textContent = `Ranked minus control · average rating (1–${SCALE})`;
+  $("h-test").textContent = `Picks minus vetoed tracks slipped in · average rating (1–${SCALE})`;
   $("diff").textContent = diff.diff == null ? "–" : `${diff.diff >= 0 ? "+" : ""}${diff.diff.toFixed(2)}`;
   $("diff-ci").textContent = diff.diff == null ? "" : `95% range ${diff.lo >= 0 ? "+" : ""}${diff.lo.toFixed(2)} to ${diff.hi >= 0 ? "+" : ""}${diff.hi.toFixed(2)}`;
-  const v = {clearly_higher: ["meets", "Ranked clearly higher: the range is above zero"],
-             clearly_lower: ["below", "Ranked clearly lower: the range is below zero"],
+  const v = {clearly_higher: ["meets", "Picks clearly higher: the veto removes worse tracks"],
+             clearly_lower: ["below", "Picks clearly lower: the veto removes better tracks"],
              unclear: ["wait", "Unclear: the range includes no difference"],
-             not_enough_data: ["wait", "Needs at least 2 ranked and 2 control ratings"]}[d.reading];
+             not_enough_data: ["wait", "Needs at least 2 picks and 2 vetoed tracks rated"]}[d.reading];
   $("verdict").innerHTML = `<span class="pill ${v[0]}">${v[1]}</span>`;
   const ad = d.add_difference;
   $("add-diff").textContent = d.ranked.keep == null || d.control.keep == null ? "" :
-    `Add rate: ranked ${pct(d.ranked.keep)} vs control ${pct(d.control.keep)}` +
+    `Add rate: picks ${pct(d.ranked.keep)} vs vetoed ${pct(d.control.keep)}` +
     (ad.diff == null ? "" : ` (difference ${ad.diff >= 0 ? "+" : ""}${Math.round(ad.diff * 100)} points, 95% range ${Math.round(ad.lo * 100)} to ${Math.round(ad.hi * 100)})`);
-  $("progress").textContent = `${t.plays} of about ${d.target_plays} plays · ${t.learning} ranked, ${t.control} control rated` +
+  $("progress").textContent = `${t.plays} plays · ${t.learning} picks and ${t.control} vetoed tracks rated` +
     (t.plays < d.target_plays ? ` · no pass mark: read it from the data, ideally after about ${d.target_plays} plays` : "");
-  $("compare").innerHTML = groupCard("Ranked plays", "var(--ranked)", d.ranked, d.usual_keep_rate) +
-                           groupCard("Control plays", "var(--control)", d.control, d.usual_keep_rate);
+  $("compare").innerHTML = groupCard("Picks (passed the veto)", "var(--ranked)", d.ranked, d.usual_keep_rate) +
+                           groupCard("Vetoed tracks slipped in", "var(--control)", d.control, d.usual_keep_rate);
 
   const trend = [
-    {name: "Ranked", color: "var(--ranked)", points: d.rolling.ranked},
-    {name: "Control", color: "var(--control)", points: d.rolling.control},
+    {name: "Picks", color: "var(--ranked)", points: d.rolling.ranked},
+    {name: "Vetoed", color: "var(--control)", points: d.rolling.control},
   ];
   legend($("trend-legend"), trend);
   if (!lineChart($("trend"), trend, {ymin: 1, ymax: SCALE, yticks: [...Array(SCALE).keys()].map((i) => i + 1)}))
@@ -317,24 +335,36 @@ function render(d) {
     }).join("")}</tbody></table>`;
 
   const cell = (g) => g.n ? `${f2(g.mean)} · ${pct(g.keep)} Add <span class="label">n=${g.n}</span>` : "–";
-  $("nsrc").innerHTML = `<table><thead><tr><th>Suggested by</th><th class="num">All</th><th class="num">Ranked</th><th class="num">Control</th></tr></thead><tbody>${
+  $("nsrc").innerHTML = `<table><thead><tr><th>Suggested by</th><th class="num">All</th><th class="num">Picks</th><th class="num">Vetoed</th></tr></thead><tbody>${
     d.by_sources.map((g) => `<tr><td class="name">${g.name}</td><td class="num">${cell(g.all)}</td><td class="num">${cell(g.ranked)}</td><td class="num">${cell(g.control)}</td></tr>`).join("")
   }</tbody></table>`;
 
-  $("byseed").innerHTML = `<table><thead><tr><th>Seed pool</th><th class="num">All</th><th class="num">Ranked</th><th class="num">Control</th></tr></thead><tbody>${
+  $("byseed").innerHTML = `<table><thead><tr><th>Seed pool</th><th class="num">All</th><th class="num">Picks</th><th class="num">Vetoed</th></tr></thead><tbody>${
     d.by_seed.map((g) => `<tr><td class="name">${esc(g.seed)}</td><td class="num">${cell(g.all)}</td><td class="num">${cell(g.ranked)}</td><td class="num">${cell(g.control)}</td></tr>`).join("")
   }</tbody></table>`;
 
-  const cr = d.controls_by_rank;
-  $("rank-bars").innerHTML = cr.n ? `<div class="bars">${cr.bins.map((b) => {
-      const w = b.mean == null ? 0 : 100 * (b.mean - 1) / (SCALE - 1);
-      return `<div class="bar-row"><span>${b.name}</span>
-        <div class="bar-track" title="${b.mean == null ? "no controls here yet" : f2(b.mean)}"><div class="bar-fill" style="width:${w}%"></div></div>
-        <span class="n">${b.mean == null ? "–" : f2(b.mean)} · n=${b.n}</span></div>`;
-    }).join("")}</div>` : `<div class="empty">No control plays rated yet (about 1 in 5 plays is one).</div>`;
-  $("rank-note").textContent = cr.spearman == null ? "" :
-    `Rank vs rating across ${cr.n} controls: ${cr.spearman <= -0.2 ? "higher-ranked controls were rated higher"
-      : cr.spearman >= 0.2 ? "lower-ranked controls were rated higher" : "no clear link yet"} (correlation ${(-cr.spearman).toFixed(2)}; +1 would mean rank order matched your ratings exactly).`;
+  const v4 = d.v4;
+  if (v4) {
+    const row = (name, r) => `<tr><td class="name">${name}</td><td class="num">${r && r.n != null ? r.n : "–"}</td>
+      <td class="num">${pct(r && r.off)}</td><td class="num">${pct(r && r.add)}</td><td class="num">${f2(r && r.mean)}</td></tr>`;
+    $("veto-check").innerHTML = `<table><thead><tr><th></th><th class="num">Rated</th><th class="num">Off</th><th class="num">Add</th><th class="num">Average</th></tr></thead><tbody>
+      ${row("Picks (passed the veto)", v4.picks)}${row("Vetoed tracks slipped in", v4.vetoed)}
+      ${row(`Sources alone (reconstructed${v4.vetoed_share != null ? `, ${pct(v4.vetoed_share)} vetoed` : ""})`, v4.baseline ? {...v4.baseline, n: null} : null)}</tbody></table>`;
+    $("veto-rules").innerHTML = Object.keys(v4.rules).length ? `<table><thead><tr><th>Rule</th><th class="num">Would cut</th><th class="num">Off in the cut</th><th class="num">Adds lost</th><th class="num">Off in what's kept</th></tr></thead><tbody>${
+      Object.entries(v4.rules).map(([k, r]) => `<tr><td class="name">${esc(k)}</td><td class="num">${pct(r.share_cut)} (${r.cut.n})</td>
+        <td class="num">${pct(r.cut.off)}</td><td class="num">${r.adds_lost}</td><td class="num">${pct(r.kept.off)}</td></tr>`).join("")}</tbody></table>`
+      : `<div class="empty">No plays with veto details yet.</div>`;
+    const orun = [{name: "Off", color: "var(--control)", points: v4.over_run.map((p) => ({play: p.play, value: p.off}))},
+                  {name: "Add", color: "var(--ranked)", points: v4.over_run.map((p) => ({play: p.play, value: p.add}))}];
+    legend($("overrun-legend"), orun);
+    if (!lineChart($("overrun"), orun, {ymin: 0, ymax: 1, yticks: [0, 0.25, 0.5, 0.75, 1], fmt: pct}))
+      $("overrun").innerHTML = `<div class="empty">No picks rated yet.</div>`;
+    const tagNames = Object.keys(v4.tags);
+    $("tags").innerHTML = tagNames.length ? `<table><thead><tr><th>Tag</th>${LABELS.map((l) => `<th class="num">${l}</th>`).join("")}</tr></thead><tbody>${
+      tagNames.sort((a, b) => Object.values(v4.tags[b]).reduce((x, y) => x + y, 0) - Object.values(v4.tags[a]).reduce((x, y) => x + y, 0))
+        .map((t) => `<tr><td class="name">${esc(t)}</td>${LABELS.map((l) => `<td class="num">${v4.tags[t][l] || ""}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+      : `<div class="empty">No tags given yet.</div>`;
+  }
 
   const wh = d.weight_history;
   $("weight-history").innerHTML = `<table><thead><tr><th>Component</th><th>Over time</th><th class="num">Start</th><th class="num">Now</th></tr></thead><tbody>${
@@ -362,8 +392,11 @@ function render(d) {
     }).join("")}</tbody></table>` : `<div class="empty">The first update runs at 20 ratings (${t.rated} so far).</div>`;
 
   $("totals").innerHTML = [
-    ["Plays", t.plays], ["Rated", t.rated], ["Ranked", t.learning], ["Control", t.control], ["Skipped", t.skipped],
-    ["Secret control rate", d.control_rate == null ? "–" : `1 in ${(1 / d.control_rate).toFixed(1)}`],
+    ["Plays", t.plays], ["Rated", t.rated], ["Picks", t.learning], ["Vetoed slipped in", t.control], ["Skipped", t.skipped],
+    ["Secret slip-in rate", d.control_rate == null ? "–" : `1 in ${(1 / d.control_rate).toFixed(1)}`],
+    ...(d.v4 ? [["Vetoed / returned", `${d.v4.pool.vetoed_events} / ${d.v4.pool.returned}`],
+                ["Audio re-fetched", d.v4.pool.audio_restored], ["Pulls", d.v4.pool.pulls],
+                ["Adds pulled as seeds", d.v4.pool.add_seeds_pulled], ["Settings versions", d.v4.settings_versions.length]] : []),
     ["Generations", t.generations],
     ["Personal model", t.personal_model_active ? "active" : `from ${t.personal_model_at} ratings`],
     ["Target BPM", d.tempo.target_bpm ?? "from seeds"], ["Match tempo", d.tempo.match_tempo ? "on" : "off"],
@@ -383,9 +416,9 @@ async function load() {
     $("sealed").hidden = !sealed;
     document.querySelectorAll("main > section:not(#sealed)").forEach((s) => { s.hidden = sealed; });
     if (sealed) {
-      $("sealed-text").textContent = `${d.rated} tracks rated so far. Everything is revealed when the run completes`
-        + ` (after ${d.target_controls} control plays, at a rate kept secret so they can't be counted). Until then`
-        + " this page shows nothing that could hint at which plays were controls.";
+      $("sealed-text").textContent = `${d.rated} tracks rated so far. Everything is revealed when the run ends`
+        + (d.target_controls ? ` (after ${d.target_controls} vetoed tracks slipped in)` : " (`music-hunter end-run`)")
+        + ". Until then this page shows nothing that could hint at which plays were vetoed tracks slipped in.";
       $("updated").textContent = `Checked ${new Date().toLocaleTimeString()}`;
     } else render(d);
   } catch (e) {

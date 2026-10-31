@@ -609,9 +609,15 @@ Three buttons (Off · Close · Add), Close as a mild like, unrated/skipped count
 - **Injected vetoed tracks** (built with 17.12): random vetoed track at a secret rate between 1 in 10 and 1 in 6 (`[controls]`), audio fetched just in time (in the background while the previous track plays, or on the spot if needed); no automatic end (`target = 0`) — `music-hunter end-run` ends the run and unseals.
 - **Reason tags** (`[ratings.tags]`): optional chips in the "Last rated" panel (not under the rating buttons: an Off skips straight to the next track, which would hide them), labelled "Why? (optional)"; tap to add or remove, several allowed, only on the most recent rating; changing the rating keeps only the tags that still fit. Stored with the play (`plays.tags`); no effect on the veto or picks.
 
+### 17.14 As built — milestone 5 (2026-10-31)
+- **Results page** (after `end-run`): headline "picks minus vetoed tracks slipped in"; "Does the veto remove worse tracks?" — Off rate, Add rate and average for picks, for vetoed tracks slipped in, and for the reconstructed "sources alone" (the two mixed in the proportion the pool was split at each play — each play now logs that split); "Every veto rule, after the fact" — for each logged rule, the share of rated plays it would have cut, Off rate in the cut, Adds lost, Off rate in what's kept; Off and Add rates over the run (last 25 picks); reason tags by rating; pool rotation (vetoed / returned, audio re-fetched, pulls, Adds pulled as seeds) and settings versions. v3's "does a higher score mean a better track" is gone (picks aren't ranked). Ratings by number of sources and by seed pool stay.
+- **`report`**: a VETO section — analysed / playable / vetoed now, vetoed and returned over the run, audio re-fetched, settings versions, reason-tag counts.
+- **Simulated session** (pytest, 112 plays through the web API): veto active, picks random playable tracks, vetoed tracks slipped in at the secret rate, pool topped up and audio restored, refills for Adds, tags logged, results sealed until the run ends then unsealed with every v4 measure.
+
 ### 17.11 Milestones (build in order, stop after each for my check)
 1. **Fresh run setup** — archive v3 to `runs/v3/`, seeds (to decide: the same 10 or new), v4 config.
 2. **Analysed vs playable pool** — fingerprints kept for good, audio dropped for vetoed tracks, top-ups from the source lists, merging into any analysed track, re-download on return. Check: a real pull rotates correctly.
 3. **Scoring and veto** — all components logged with corrected directions, veto score, anchored robust SD cut with two lines, every rule logged, settings versions; random picking. Check: veto shares and what gets vetoed on a real pull.
 4. **Injected vetoed tracks and reason tags** — secret injection rate, just-in-time audio, tag chips in the player. Check: listen-and-rate loop with tags, nothing revealed.
 5. **Results and report** — v4 measures (17.10), simulated end-to-end session. Then the run.
+   **Milestones 2–5 built 2026-10-31.** Milestone 1 (archive v3, seeds) and the Add-seed rules (17.8) wait for my decision.

@@ -85,6 +85,19 @@ def report(conn: sqlite3.Connection) -> None:
     ended = events(conn, "player_ended")
     print(f"  tracks played to the end: {len(ended)}")
 
+    print("\nVETO (v4)")
+    from . import veto as veto_mod
+    counts = veto_mod.update(conn)
+    upd = [d for _, d in events(conn, "veto_update")]
+    print(f"  now: {counts['analysed']} analysed · {counts['playable']} playable · {counts['vetoed']} vetoed"
+          f" ({'active' if counts['active'] else 'not active yet'})")
+    print(f"  over the run: {sum(d['newly_vetoed'] for d in upd)} vetoed, {sum(d['returned'] for d in upd)} returned,"
+          f" audio re-fetched {len(events(conn, 'audio_restored'))} (failed {len(events(conn, 'audio_restore_failed'))})"
+          f" · settings versions {conn.execute('SELECT count(DISTINCT settings_version) FROM plays').fetchone()[0]}")
+    tags = Counter(t for p in rated for t in json.loads(p["tags"] or "[]"))
+    if tags:
+        print("  reason tags: " + ", ".join(f"{t} {n}" for t, n in tags.most_common()))
+
     print("\nPLAYER")
     print("  track start latency: " + spread([d["latency_ms"] for _, d in events(conn, "player_playing")], " ms", 0))
     stalls = [d["ms"] for _, d in events(conn, "player_stall")]

@@ -217,6 +217,10 @@ def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = 
     play_number = conn.execute("SELECT count(*) FROM plays").fetchone()[0] + 1
     components = {c: {"raw": row["raw"][c], "norm": row["norm"][c]} for c in row["raw"]}
     veto_json = conn.execute("SELECT veto FROM tracks WHERE id = ?", (track_id,)).fetchone()[0]
+    if veto_json:                                  # the pool's split at this moment, for the "sources alone" baseline
+        v = json.loads(veto_json)
+        v["pool"] = {"playable": len(playable_ids(conn)), "vetoed": len(vetoed_ids(conn))}
+        veto_json = json.dumps(v)
     with conn:
         play_id = conn.execute(
             "INSERT INTO plays (track_id, generation, play_number, is_control, weight_set_id, components,"

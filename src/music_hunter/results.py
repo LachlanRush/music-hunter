@@ -106,6 +106,63 @@ def by_seed(conn: sqlite3.Connection, rated: list) -> list[dict]:
     return sorted(out, key=lambda g: (-(g["all"]["mean"] or 0), g["seed"]))
 
 
+def v4_measures(conn: sqlite3.Connection, rated: list) -> dict:
+    """SPEC.md §17.10: the veto check, every logged veto rule scored after the fact, rates over the run, reason
+    tags, pool rotation and settings versions. Controls are injected vetoed tracks; picks passed the veto."""
+    picks = [p for p in rated if not p["is_control"]]
+    vetoed = [p for p in rated if p["is_control"]]
+
+    def rates(ps):
+        n = len(ps)
+        return {"n": n, "off": sum(p["rating"] == 1 for p in ps) / n if n else None,
+                "add": sum(p["rating"] == ADD for p in ps) / n if n else None,
+                "mean": sum(p["rating"] for p in ps) / n if n else None}
+
+    a, b = rates(picks), rates(vetoed)
+    shares = [v["pool"]["vetoed"] / max(1, v["pool"]["vetoed"] + v["pool"]["playable"])
+              for v in (json.loads(p["veto"]) for p in rated if p["veto"]) if "pool" in v]
+    f = sum(shares) / len(shares) if shares else None
+    baseline = {k: (1 - f) * a[k] + f * b[k] for k in ("off", "add", "mean")} \
+        if f is not None and a["n"] and b["n"] else None
+
+    rules: dict[str, dict] = {}
+    with_veto = [(p, json.loads(p["veto"])) for p in rated if p["veto"]]
+    for name in (with_veto[0][1]["rules"] if with_veto else {}):
+        cut = [p for p, v in with_veto if v["rules"].get(name)]
+        kept = [p for p, v in with_veto if not v["rules"].get(name)]
+        rules[name] = {"cut": rates(cut), "kept": rates(kept),
+                       "adds_lost": sum(p["rating"] == ADD for p in cut),
+                       "share_cut": len(cut) / len(with_veto) if with_veto else None}
+
+    window, over_run = CFG["rolling_window"], []
+    for k in range(len(picks)):
+        w = picks[max(0, k - window + 1):k + 1]
+        r = rates(w)
+        over_run.append({"play": picks[k]["play_number"], "off": r["off"], "add": r["add"], "n": len(w)})
+
+    tags: dict[str, dict[str, int]] = {}
+    for p in rated:
+        for t in json.loads(p["tags"] or "[]"):
+            tags.setdefault(t, {}).setdefault(LABELS[p["rating"] - 1], 0)
+            tags[t][LABELS[p["rating"] - 1]] += 1
+
+    ev = lambda kind: [json.loads(r[0]) for r in conn.execute("SELECT data FROM events WHERE kind = ?", (kind,))]
+    updates = ev("veto_update")
+    originals = {r[0] for r in conn.execute("SELECT id FROM tracks WHERE origin = 'original_reference'")}
+    pulled = set(db.get_setting(conn, "pulled_seeds", []))
+    return {
+        "picks": a, "vetoed": b, "vetoed_share": f, "baseline": baseline,
+        "pick_minus_vetoed": difference([p["rating"] for p in picks], [p["rating"] for p in vetoed]),
+        "rules": rules, "over_run": over_run, "tags": tags,
+        "pool": {"vetoed_events": sum(u["newly_vetoed"] for u in updates), "returned": sum(u["returned"] for u in updates),
+                 "audio_restored": len(ev("audio_restored")), "restore_failed": len(ev("audio_restore_failed")),
+                 "pulls": conn.execute("SELECT count(*) FROM generations").fetchone()[0],
+                 "add_seeds_pulled": len(pulled - originals)},
+        "settings_versions": [{"version": r[0], "plays": r[1]} for r in conn.execute(
+            "SELECT settings_version, count(*) FROM plays WHERE rating IS NOT NULL GROUP BY 1 ORDER BY 1")],
+    }
+
+
 def reading(diff: dict) -> str:
     """Plain reading of the ranked − control gap from its 95% range (not a pass/fail criterion)."""
     if diff["diff"] is None:
@@ -179,6 +236,7 @@ def results(conn: sqlite3.Connection) -> dict:
         "controls_by_rank": controls_by_rank(controls),
         "by_sources": by_sources(rated),
         "by_seed": by_seed(conn, rated),
+        "v4": v4_measures(conn, rated),
         "weight_history": weight_history,
         "tempo": {**tempo_settings(conn),
                   "stretched_plays": len(stretched),
