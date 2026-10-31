@@ -53,6 +53,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 .tempo-note { font: 400 12px var(--mono); color: var(--muted); }
 .hint { font: 400 12px/1.5 var(--mono); color: var(--muted); }
 .hint:empty { display: none; }
+.volume { display: none; }
+.volume input { width: 160px; }
+@media (hover: hover) and (pointer: fine) { .volume { display: block; } }
 
 /* Preparing the pool */
 .gate { display: grid; gap: 14px; padding-block: 40px; }
@@ -124,6 +127,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
     </div>
     <div class="rate" id="rate" role="group" aria-label="Rate this track"></div>
     <div class="hint" id="hint"></div>
+    <div class="volume"><input type="range" id="volume" min="0" max="100" value="100" aria-label="Volume"></div>
     <div class="tempo">
       <label><input type="checkbox" id="same-bpm"> Same BPM</label>
       <label>at <input type="number" id="bpm-target" min="60" max="200" step="0.5" inputmode="decimal" aria-label="Target BPM"> BPM</label>
@@ -277,8 +281,16 @@ function ensureAudioGraph() {
   if (ctx) return;
   ctx = new AudioContext();
   gainNode = ctx.createGain();                   // per-track loudness normalisation
-  ctx.createMediaElementSource(audio).connect(gainNode).connect(ctx.destination);
+  volumeNode = ctx.createGain();                 // the volume slider (computers only), after the levelling
+  volumeNode.gain.value = Number($("volume").value) / 100;
+  ctx.createMediaElementSource(audio).connect(gainNode).connect(volumeNode).connect(ctx.destination);
 }
+let volumeNode = null;
+try { const v = localStorage.getItem("volume"); if (v !== null) $("volume").value = v; } catch (e) {}
+$("volume").addEventListener("input", () => {
+  if (volumeNode) volumeNode.gain.value = Number($("volume").value) / 100;
+  try { localStorage.setItem("volume", $("volume").value); } catch (e) {}
+});
 
 async function loadNext({autoplay = true} = {}) {
   showError("");

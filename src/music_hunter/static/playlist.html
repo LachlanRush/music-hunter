@@ -61,10 +61,16 @@ li.playing .cover-btn { outline: 2px solid var(--accent); outline-offset: 1px; }
 .round svg { width: 15px; height: 15px; fill: currentColor; }
 .round.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .round.on { border-color: var(--accent); color: var(--accent); }
-.seek { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center;
+.seek { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; align-items: center;
   font: 400 11px var(--mono); color: var(--muted); }
 input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 .empty { color: var(--muted); }
+li { cursor: pointer; }
+li.unavailable { cursor: default; }
+.btn.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.round.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.volume { display: none; width: 90px; }
+@media (hover: hover) and (pointer: fine) { .volume { display: block; } }
 .tempo { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 14px; }
 .tempo label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
 .tempo input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
@@ -96,7 +102,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 
   <section class="actions">
     <button class="btn primary" id="play-all">Play</button>
-    <button class="btn" id="shuffle-all">Shuffle</button>
+    <button class="btn" id="shuffle-all" aria-pressed="false">Shuffle</button>
     <button class="btn" id="find" disabled>Find music</button>
     <div class="pl-menu"><button class="btn" id="pl-more" aria-label="More for this playlist" aria-expanded="false">⋯</button></div>
   </section>
@@ -108,7 +114,6 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
   </section>
 
   <section id="find-status" hidden></section>
-  <section id="job" hidden></section>
   <div class="error" id="error" hidden></div>
 
   <section id="added-section" hidden>
@@ -119,6 +124,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
     <h2 id="tracks-label">Tracks</h2>
     <ol id="tracks"></ol>
   </section>
+  <section id="job" hidden></section>
 </main>
 
 <div class="player" id="player" hidden>
@@ -131,7 +137,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
       <button class="round" id="next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg></button>
       <button class="round" id="shuffle" aria-label="Shuffle" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 7h3.5l7 10H18v-2l3 3-3 3v-2h-4.5l-7-10H4zm10.5 0H18V5l3 3-3 3V9h-3.5l-1.6 2.3-1.2-1.7zM4 17h3.5l1.6-2.3 1.2 1.7L8.5 19H4z"/></svg></button>
     </div>
-    <div class="seek"><span id="pos">0:00</span><input type="range" id="seek" min="0" max="1000" value="0" aria-label="Position"><span id="dur">0:00</span></div>
+    <div class="seek"><span id="pos">0:00</span><input type="range" id="seek" min="0" max="1000" value="0" aria-label="Position"><span id="dur">0:00</span>
+      <input type="range" class="volume" id="volume" min="0" max="100" value="100" aria-label="Volume"></div>
   </div>
 </div>
 
@@ -159,7 +166,7 @@ function stars(t) {
 }
 function row(t) {
   const playing = queue[pos] && queue[pos].id === t.id;
-  return `<li class="${playing ? "playing" : ""} ${t.audio ? "" : "unavailable"}">
+  return `<li data-row="${t.id}" class="${playing ? "playing" : ""} ${t.audio ? "" : "unavailable"}">
     <button class="cover-btn" data-play="${t.id}" aria-label="Play ${esc(t.title)}" ${t.audio ? "" : "disabled"}>
       ${t.art ? `<img src="${t.art}" alt="" loading="lazy">` : "♪"}</button>
     <div class="t"><b>${esc(t.title)}</b><span>${esc(t.artist)} · ${fmt(t.duration_s)}</span></div>
@@ -250,6 +257,13 @@ document.addEventListener("click", async (e) => {
   }
   const play = e.target.closest("[data-play]");
   if (play) { startQueue(Number(play.dataset.play)); return; }
+  const rowEl = e.target.closest("li[data-row]");
+  if (rowEl && !e.target.closest(".stars, .more, .menu")) {
+    document.querySelectorAll(".menu").forEach((m) => m.remove());
+    const t = data.tracks.find((x) => x.id === Number(rowEl.dataset.row));
+    if (t && t.audio) startQueue(t.id);
+    return;
+  }
   const plMore = e.target.closest("#pl-more");
   const more = e.target.closest("[data-more]");
   if (e.target.closest(".menu [data-pl-action]")) return;            // handled below
@@ -327,8 +341,9 @@ async function playAt(i) {
   const t = queue[i];
   if (!t) { audio.pause(); return; }
   if (!ctx) {
-    ctx = new AudioContext(); gainNode = ctx.createGain();
-    ctx.createMediaElementSource(audio).connect(gainNode).connect(ctx.destination);
+    ctx = new AudioContext(); gainNode = ctx.createGain(); volumeNode = ctx.createGain();
+    volumeNode.gain.value = Number($("volume").value) / 100;
+    ctx.createMediaElementSource(audio).connect(gainNode).connect(volumeNode).connect(ctx.destination);
   }
   if (ctx.state === "suspended") await ctx.resume();
   gainNode.gain.value = Math.pow(10, (t.gain_db || 0) / 20);       // loudness normalisation
@@ -362,16 +377,30 @@ $("play").addEventListener("click", () => {
 });
 $("next").addEventListener("click", () => { if (pos + 1 < queue.length) playAt(pos + 1); });
 $("prev").addEventListener("click", () => { audio.currentTime > 3 || pos === 0 ? (audio.currentTime = 0) : playAt(pos - 1); });
-$("shuffle").addEventListener("click", () => {
-  shuffle = !shuffle;
-  $("shuffle").classList.toggle("on", shuffle); $("shuffle").setAttribute("aria-pressed", String(shuffle));
+function setShuffle(on) {
+  shuffle = on;
+  for (const id of ["shuffle", "shuffle-all"]) {
+    $(id).classList.toggle("on", on); $(id).setAttribute("aria-pressed", String(on));
+  }
   if (pos >= 0) {                                      // keep the current track, reshuffle (or restore) the rest
     const cur = queue[pos], rest = playable().filter((t) => t.id !== cur.id);
     queue = [cur, ...(shuffle ? shuffled(rest) : rest)]; pos = 0;
   }
+}
+$("shuffle").addEventListener("click", () => setShuffle(!shuffle));
+$("shuffle-all").addEventListener("click", () => {     // just the mode; starts playing only if nothing is on yet
+  setShuffle(!shuffle);
+  if (pos < 0) startQueue(null);
 });
-$("play-all").addEventListener("click", () => { shuffle = false; $("shuffle").classList.remove("on"); startQueue(null); });
-$("shuffle-all").addEventListener("click", () => { shuffle = true; $("shuffle").classList.add("on"); startQueue(null); });
+$("play-all").addEventListener("click", () => startQueue(null));
+
+// Volume (computers only; phones use their own buttons), after the loudness levelling.
+let volumeNode = null;
+try { const v = localStorage.getItem("volume"); if (v !== null) $("volume").value = v; } catch (e) {}
+$("volume").addEventListener("input", () => {
+  if (volumeNode) volumeNode.gain.value = Number($("volume").value) / 100;
+  try { localStorage.setItem("volume", $("volume").value); } catch (e) {}
+});
 // --- Same BPM (static/tempo.js): stretched copies rendered on the server, shared with this playlist's Find music ---
 let tempo = SameBpm.settings(PID);
 const tempoPlayer = SameBpm.player(audio, "", () => showTempoNote());
