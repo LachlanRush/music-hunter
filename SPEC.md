@@ -540,55 +540,65 @@ Decided 2026-10-29: no artist-preference factor (evidence weak: v1 +0.14, v2 −
 
 ---
 
-## 17. Version 4 plan (draft, 2026-10-31 — not built)
+## 17. Version 4 plan (draft, revised 2026-10-31 — not built)
 
-Based on the deep dive (§16.7). Where v4 differs from earlier sections, this section wins.
+Based on the deep dive (§16.7) and my review on 2026-10-31. Where v4 differs from earlier sections, this section wins.
 
 ### 17.0 Idea in one line
-Gather many candidates from the seeds, **veto the bottom** (wrong sound, little support), **pick at random from the rest**, refill from my Adds, and measure it honestly over one long run. Telling the right sound area from the wrong one is learnable; telling good from great within it isn't (with these signals and ratings), so v4 stops trying to rank the top.
+Score every analysed track as before, **veto the bottom** (clearly wrong sound, little support), **pick at random from what passes**, keep the playable pool topped up, and test the veto by slipping in vetoed tracks now and then. Telling the right sound area from the wrong one is learnable; telling good from great within it isn't (with these signals and ratings), so v4 stops trying to rank the top.
 
-### 17.1 Candidates (as v3)
-- Same five sources (Last.fm, YouTube radio and "You might also like", Deezer, TIDAL), ~100 suggestions per source per seed, same-artist seeds counted once per source, YouTube matching when picked.
-- **All candidates are analysed, not only 250**: each candidate's **30 s Deezer preview** (found by ISRC or name + length when it didn't come from Deezer) is embedded with MAEST — one chunk, about the cost of a search. Candidates with no preview are analysed from the full track instead. (A single chunk tracks full-track seed closeness at ρ 0.66–0.74; enough for a pass/fail veto.)
-- Full audio is downloaded and analysed **just in time**, for the next few picks only (the full-track fingerprint then replaces the preview's).
+### 17.1 Candidates and analysis (as v3)
+- Same five sources (Last.fm, YouTube radio and "You might also like", Deezer, TIDAL), ~100 suggestions per source per seed, same-artist seeds counted once per source, YouTube matching when picked, per-seed shares when filling.
+- **Full-track analysis, no previews** (decided 2026-10-31): a 30 s preview agreed with the full track only ρ 0.66–0.74 (half of the top 50 matched), and with a veto of ~10% the usual supply is enough. Previews only come back if a much harder cut ever needs a bigger supply.
 
-### 17.2 Veto
-- **Veto score** = equal-weight mean of three within-candidate percentiles (nothing fitted):
-  1. closeness to the 3 nearest seeds (original seeds and Adds),
-  2. closeness to tracks liked earlier in the run (Close 0.5, Add 2; left out until there are likes),
-  3. number of distinct sources that suggested it.
-- The **bottom 20%** is vetoed (config). Recomputed after every rating, since likes change it.
-- Closeness to Offs is **not** used (it predicts higher ratings — Offs sit in the same sound area as likes).
+### 17.2 Analysed vs playable — a rotating pool
+- **Analysed** = every candidate downloaded and analysed this run. Its fingerprint, metadata, provenance and scores are kept for good (small).
+- **Playable pool** = analysed tracks currently passing the veto, with their audio kept. Target size: **250 playable** (config). When tracks are vetoed or played, the pool is **topped up** with the next candidates from the seeds' source lists (each pull gives ~1,700; plenty of supply).
+- **Vetoed tracks lose their audio, not their fingerprint.** If one comes back — suggested again by a later pull (its provenance and agreement grow) or because its score rises past the line — it is re-scored instantly from the stored fingerprint; audio is downloaded again only if it becomes playable or is chosen as an injected control (rare; ~8 s per track).
+- New suggestions merge into any analysed track (playable, vetoed or played), not only the playable pool.
 
-### 17.3 Picking
-- Each pick: a seed by share (equal shares; per-seed ownership as in v3), then a **random** unvetoed, unplayed candidate owned by that seed. No ranking, so nothing is used up early (no burst-then-fade).
-- Removed: all v3 score components and weights (audio match, dislike, diversity, personal model, BPM, year, seed and source averages, seed match), re-weighting, seed-average pool shares, the multi-source refill rule.
+### 17.3 Scoring — all components kept and logged
+- Every analysed track is re-scored after every rating (milliseconds; fingerprints are stored): all v3 components (closeness to seeds, closeness to likes, closeness to Offs, closeness to recent plays, agreement / number of sources, release year, BPM, seed and source averages, personal model) are **computed and logged** for every play, so the run collects data on all of them.
+- **Directions fixed by the data**: closeness to Offs and to recent plays measure "in the right area" — a *low* value warns of an Off — so they count positively (they ran backwards as penalties). Spotting Offs (AUC): v3 likes-closeness 0.68, recent-plays closeness 0.66, seed closeness 0.64, Offs closeness 0.60, year 0.57; v2 year 0.65, agreement 0.61, BPM 0.60.
+- **Veto score**: starts as the equal-weight mean of the strongest three — closeness to the 3 nearest seeds (original seeds and Adds), closeness to earlier likes (Close 0.5, Add 2; left out until there are likes), number of sources — each standardised. Weights can be adjusted during the run towards whatever spots Offs best (a steadier target than "find the best"); every change is recorded (17.6).
 
-### 17.4 Refill from Adds
-- Every Add becomes a seed. A pull runs when 5 seeds haven't been pulled for yet, or 15 plays after the last pull if at least one has. New candidates merge in and are previewed and vetoed like the rest.
+### 17.4 Veto rule
+- **Score-based, not a fixed share** (decided 2026-10-31): veto a track when its veto score is more than **1.25 SD below the average** (measured robustly: median and a spread that ignores the long low tail), plus a backstop for tracks clearly out of the seeds' sound area (seed closeness far below the run's typical range). Checked on v1–v3: the 1.25 SD cut removed 8–12% depending on the run, 81% of them Offs, 3 of 74 likes lost — as clean as a fixed 10%, and it adapts to how big each pool's bad tail is.
+- **Anchored statistics**: average and spread are taken over **all tracks analysed this run** (played, vetoed and playable), so the line moves only when new candidates arrive — not downwards as the best tracks are played out of the pool.
+- **Two lines, no flip-flopping**: vetoed below 1.25 SD; a vetoed track becomes playable again only above 1.0 SD.
+- **Every rule is logged for every play**: fixed 10% / 20%, SD cuts at 1.0 / 1.25 / 1.5, seed closeness under the absolute 0.75, and whether the track was playable or vetoed at that moment — so the run shows which rule would have worked best.
+- Closeness to Offs is never used to *veto* (it predicts higher ratings).
 
-### 17.5 Controls and run length
-- A control is a **random candidate from all candidates, vetoed ones included** ("what the sources give"), so picks vs controls measures exactly what the veto adds. Each control also logs whether it would have been vetoed, so vetoed vs kept can be compared directly within the controls.
-- Secret control rate drawn per run between **1 in 3 and 1 in 2** (v3: 1 in 4 to 1 in 10), each play independently; never shown.
-- **One long run, no system changes during it.** It ends by itself at **100 rated controls** (about 200–300 plays); results sealed until then, as in v3. (Confirming a 0.2 SD difference needs ~390 ratings per group, 0.3 SD ~175, 0.5 SD ~63 — so v4 is judged on its expected effects: Off rate of picks vs controls, and vetoed vs kept controls, both large enough to show at this size.)
-- Control ratings count for learning (likes for the veto), but controls never become seeds — as in v3.
+### 17.5 Picking and checking the veto
+- **Pick**: a random playable track. No ranking, so nothing is used up early (no burst-then-fade); the pool's per-seed shares keep seeds balanced (the seeds themselves are never played).
+- **Injected vetoed tracks** (replace v3's controls): at a secret rate drawn per run (between 1 in 6 and 1 in 10), the next play is a random **vetoed** track instead. Compared with the normal picks, this tests the veto directly (expected gap ~66% vs ~38% Off; about 30 injected plays show it); "what the sources alone give" is reconstructed as the playable and vetoed shares mixed in proportion. The decision is drawn ahead (preloading); the audio is fetched just in time. Injected tracks' ratings count for learning like any other; they never become seeds.
+- Blind as before: nothing shows whether a play was injected.
 
-### 17.6 Reason tags (optional, under the rating)
+### 17.6 One long run, not fixed
+- One long run; settings may change along the way if the data says so. Each play records the **settings version** it ran under (veto rule, weights, cut), so changes can be separated in the analysis.
+- Results stay sealed while the run is going (injection counts would hint at the rate); unsealing ends the run, as in v3.
+
+### 17.7 Reason tags (optional, under the rating)
 - After rating, a row of optional chips under the buttons; tap any that fit, or none:
   - Off / Close: `vocals` · `lyrics` · `too repetitive` · `wrong energy` · `the drop` · `bassline` · `too long` · `know it already`
   - Add: `great vocals` · `groove` · `energy`
-- Several allowed; changeable with the most recent rating. **Logged only** in v4 — no effect on the veto or picks. After the run: which reasons dominate, and whether Offs for non-sound reasons (lyrics, know it already) should stay out of the sound-based learning.
+- Several allowed; changeable with the most recent rating. **Logged only** — no effect on the veto or picks. After the run: which reasons dominate, and whether Offs for non-sound reasons (lyrics, know it already) should stay out of the sound-based learning.
 
-### 17.7 Kept from v3
-Three buttons (Off · Close · Add), Close as a mild like, unrated/skipped counts as Close, Close and Add play to the end, MAEST fingerprints, blind listening (names and artwork after rating), preloading the next track, tempo locked for the run, volume, phone access over Tailscale, sealed results.
+### 17.8 Refill from Adds — open
+Every Add still becomes a seed (as v3). How and when Add-seeds are pulled for, and how they're weighted, is **to be discussed** (I have more ideas). Until then: a pull runs when 5 seeds haven't been pulled for yet, or 15 plays after the last pull if at least one has.
 
-### 17.8 Results
+### 17.9 Kept from v3
+Three buttons (Off · Close · Add), Close as a mild like, unrated/skipped counts as Close, Close and Add play to the end, MAEST fingerprints, blind listening (names and artwork after rating), preloading the next track, tempo locked unless changed in config, volume, phone access over Tailscale, sealed results. Removed: re-weighting towards "rank the best" (replaced by veto-weight adjustment, 17.3), top-first picking.
+
+### 17.10 Results
 - Off / Close / Add rates **over the whole run** (all plays) — the aim is a steady rate, no fade.
-- Picks vs controls (Off rate, Add rate, average); controls vetoed vs kept; ratings by number of sources and by seed; reason tags by rating; refills and how many Adds became seeds.
+- Normal picks vs injected vetoed tracks (Off rate, Add rate, average), and the reconstructed "sources alone" baseline.
+- Every logged veto rule scored after the fact: which would have removed the most Offs for the fewest likes.
+- Ratings by number of sources and by seed; reason tags by rating; pool rotation (vetoed, returned, re-downloaded); refills and Add-seeds; settings versions.
 
-### 17.9 Milestones (build in order, stop after each for my check)
+### 17.11 Milestones (build in order, stop after each for my check)
 1. **Fresh run setup** — archive v3 to `runs/v3/`, seeds (to decide: the same 10 or new), v4 config.
-2. **Previews for all candidates** — Deezer preview lookup, MAEST on previews, full-track analysis only when picked. Check: preview coverage of a real pull, and preview vs full-track agreement.
-3. **Veto, random picking, refill from Adds** — old scoring and re-weighting removed. Check: veto shares on a real pull; a simulated session shows a steady pick quality and refills from Adds.
-4. **Controls and reason tags** — controls from all candidates at the new rate, run end at 100 controls; optional tag chips in the player. Check: listen-and-rate loop with tags, nothing revealed.
-5. **Results and report** — v4 measures (17.8), simulated end-to-end session. Then the long run.
+2. **Analysed vs playable pool** — fingerprints kept for good, audio dropped for vetoed tracks, top-ups from the source lists, merging into any analysed track, re-download on return. Check: a real pull rotates correctly.
+3. **Scoring and veto** — all components logged with corrected directions, veto score, anchored robust SD cut with two lines, every rule logged, settings versions; random picking. Check: veto shares and what gets vetoed on a real pull.
+4. **Injected vetoed tracks and reason tags** — secret injection rate, just-in-time audio, tag chips in the player. Check: listen-and-rate loop with tags, nothing revealed.
+5. **Results and report** — v4 measures (17.10), simulated end-to-end session. Then the run.
