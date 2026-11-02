@@ -211,7 +211,7 @@ def test_session(conn, monkeypatch):
     assert len({p["rank"] for p in plays if not p["is_control"]}) > 5          # random picks: all over the ranking
     assert all(p["settings_version"] for p in plays)
     v = json.loads(plays[-1]["veto"])
-    assert {"fixed_10pct", "fixed_20pct", "sd_1.0", "sd_1.25", "sd_1.5", "seed_closeness_below_0.75", "backstop"} \
+    assert {"fixed_10pct", "fixed_20pct", "sd_1.0", "sd_1.25", "sd_1.5", "seed_closeness_below_0.75", "backstop", "tempo_band"} \
         == set(v["rules"]) and v["analysed"] >= config.CONFIG["veto"]["min_analysed"]
     vetoed = c.execute("SELECT count(*), count(file_path) FROM tracks WHERE veto_state = 'vetoed'"
                        " AND id NOT IN (SELECT track_id FROM plays)").fetchone()

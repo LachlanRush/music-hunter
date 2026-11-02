@@ -118,11 +118,18 @@ min_analysed = 40                # no vetoes until this many tracks are analysed
 seed_top_k = 3                   # closeness to the k nearest seeds (original seeds and Adds)
 like_top_k = 3                   # closeness to the k nearest likes (Close / Add weights from [ratings])
 rescore_every = 10               # while filling, re-run the veto after this many new tracks
+# v5 (2026-11-02): tempo. A filter first — vetoed when a track's tempo is more than tempo_below slower or tempo_above
+# faster than the seeds' typical tempo (the reading nearest it, so half / double / 2:3 misreads aren't cut; no BPM
+# = not filtered) — then closeness to that tempo as a fourth part of the veto score. In pump's first 77 ratings,
+# tracks more than 8% slower were 9 of 12 Off and none Added; +12% is as far as Same BPM stretches.
+tempo_below = 0.08
+tempo_above = 0.12
 
 [veto.weights]                   # veto score = weighted mean of the robust z-scores of these components
 seed_closeness = 1.0
 like_closeness = 1.0             # left out until there are likes
 sources = 1.0                    # number of distinct sources that suggested the track
+tempo = 1.0                      # closeness to the seeds' typical tempo (log ratio; no BPM = typical)
 
 [controls]
 # SPEC.md §17.5 (v4) — a control is a random *vetoed* track slipped in to test the veto, at a rate the run draws

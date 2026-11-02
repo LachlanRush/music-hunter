@@ -24,14 +24,15 @@ def test_veto_rotates_the_pool(conn):
                for r in vetoed)                                        # …fingerprint kept
     for r in vetoed:
         v = json.loads(r["veto"])
-        assert v["z"] < -config.CONFIG["veto"]["cut_sd"] or v["rules"]["backstop"]
+        assert v["z"] < -config.CONFIG["veto"]["cut_sd"] or v["rules"]["backstop"] or v["rules"]["tempo_band"]
     assert set(ratings.playable_ids(conn)).isdisjoint({r["id"] for r in vetoed})
     assert counts["playable"] == pool.unrated_pool_size(conn)
 
 
 def test_two_lines_and_return(conn, monkeypatch):
     veto.update(conn)
-    tid = conn.execute("SELECT id FROM tracks WHERE veto_state = 'vetoed' LIMIT 1").fetchone()[0]
+    tid = next(r[0] for r in conn.execute("SELECT id, veto FROM tracks WHERE veto_state = 'vetoed'")
+               if not json.loads(r[1])["rules"]["tempo_band"])                # not held by the tempo band
     z = json.loads(conn.execute("SELECT veto FROM tracks WHERE id = ?", (tid,)).fetchone()[0])["z"]
     # Between the lines a vetoed track stays vetoed (no flip-flopping)…
     monkeypatch.setitem(config.CONFIG["veto"], "return_sd", -z - 0.01)       # return line just above the track
@@ -65,3 +66,23 @@ def test_settings_version_is_stable(conn, monkeypatch):
     assert veto.settings_version(conn) == a
     monkeypatch.setitem(config.CONFIG["veto"], "cut_sd", 1.5)
     assert veto.settings_version(conn) != a
+
+
+def test_tempo_band(conn):
+    """A track far below or above the seeds' tempo is vetoed whatever its score; a half/double/2:3 reading of the
+    right tempo isn't; closeness to the tempo is part of the score."""
+    veto.update(conn)
+    rows = {r["id"]: json.loads(r["veto"]) for r in conn.execute("SELECT id, veto FROM tracks WHERE veto IS NOT NULL")}
+    target = next(iter(rows.values()))["tempo"]["target"]
+    assert 120 < target < 160 and abs(veto.nearest_reading(target * 2 / 3, target) - target) < 1e-9
+    tid = max(rows, key=lambda t: rows[t]["z"])                                   # the best-scored track…
+    with conn:
+        conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", (target * 0.85, tid))   # …made 15% slower
+    veto.update(conn)
+    v = json.loads(conn.execute("SELECT veto, veto_state FROM tracks WHERE id = ?", (tid,)).fetchone()[0])
+    assert v["rules"]["tempo_band"] and v["tempo"]["off_pct"] == -15.0
+    played = tid in {r[0] for r in conn.execute("SELECT track_id FROM plays")}
+    assert played or conn.execute("SELECT veto_state FROM tracks WHERE id = ?", (tid,)).fetchone()[0] == "vetoed"
+    with conn:
+        conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", (target / 2, tid))       # a half-tempo misread: fine
+    assert not veto.compute(conn)[tid]["rules"]["tempo_band"]

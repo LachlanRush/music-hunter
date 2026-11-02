@@ -4,7 +4,9 @@ Every analysed pool track (played, playable or vetoed) is scored on three compon
 against all tracks analysed this run (median and MAD, so a long low tail doesn't stretch the scale):
   seed closeness — mean cosine to the k nearest seeds (original seeds and learning Adds), MAEST;
   like closeness — weighted mean cosine to the k nearest liked plays (Close / Add weights), once there are likes;
-  sources        — number of distinct sources that suggested the track.
+  sources        — number of distinct sources that suggested the track;
+  tempo          — closeness to the seeds' typical tempo (v5), plus a tempo band: a track more than tempo_below
+                   slower or tempo_above faster than it is vetoed whatever its score.
 The veto score is their weighted mean, standardised the same way. An unplayed track is vetoed when its score
 falls more than cut_sd below the median (or its seed closeness is more than backstop_sd below — clearly out of
 the area), and becomes playable again only above return_sd (two lines, so it doesn't flip-flop).
@@ -23,7 +25,21 @@ from . import db
 from .config import CONFIG, resolve
 
 CFG = CONFIG["veto"]
-COMPONENTS = ("seed_closeness", "like_closeness", "sources")
+COMPONENTS = ("seed_closeness", "like_closeness", "sources", "tempo")
+FOLDS = (1, 2, 0.5, 1.5, 2 / 3)           # a measured BPM can be a half, double or 2:3 reading of the real tempo
+
+
+def nearest_reading(bpm: float, target: float) -> float:
+    return min((bpm * f for f in FOLDS), key=lambda r: abs(np.log(r / target)))
+
+
+def seeds_tempo(bpms) -> float | None:
+    """The seeds' typical tempo: their median, after reading each seed at the tempo nearest the plain median."""
+    b = [x for x in bpms if x]
+    if not b:
+        return None
+    first = float(np.median(b))
+    return float(np.median([nearest_reading(x, first) for x in b]))
 
 
 def robust_z(x: np.ndarray) -> np.ndarray:
@@ -43,7 +59,7 @@ def _topk_mean(sims: np.ndarray, weights: np.ndarray, k: int) -> np.ndarray:
 
 def analysed_tracks(conn: sqlite3.Connection):
     return conn.execute(
-        "SELECT t.id, t.candidate_id, t.file_path, t.veto_state, e.embedding,"
+        "SELECT t.id, t.candidate_id, t.file_path, t.veto_state, t.bpm, e.embedding,"
         " t.id IN (SELECT track_id FROM plays) AS played"
         " FROM tracks t JOIN track_embeddings e ON e.track_id = t.id WHERE t.origin = 'pool' ORDER BY t.id").fetchall()
 
@@ -95,7 +111,16 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
         n_src[cid] = n_src.get(cid, 0) + 1
     sources = np.array([n_src.get(r["candidate_id"], 0) for r in rows], float)
 
+    # Tempo: the seeds' typical tempo, each track read at its tempo nearest it; no BPM counts as typical.
+    seed_bpm = dict(conn.execute(f"SELECT id, bpm FROM tracks WHERE id IN ({','.join('?' * len(seed_ids))})",
+                                 [int(x) for x in seed_ids]).fetchall())
+    target = seeds_tempo(seed_bpm.values())
+    rel = np.array([nearest_reading(r["bpm"], target) / target - 1 if (target and r["bpm"]) else 0.0 for r in rows])
+    out_of_band = (rel < -CFG["tempo_below"]) | (rel > CFG["tempo_above"])
+
     raw = {"seed_closeness": seed_close, "sources": sources}
+    if target:
+        raw["tempo"] = -np.abs(np.log1p(rel))
     if like_close is not None:
         raw["like_closeness"] = like_close
     z = {c: robust_z(v) for c, v in raw.items()}
@@ -111,7 +136,9 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
             "rules": {"fixed_10pct": bool(pct[i] < 0.10), "fixed_20pct": bool(pct[i] < 0.20),
                       "sd_1.0": bool(zs[i] < -1.0), "sd_1.25": bool(zs[i] < -1.25), "sd_1.5": bool(zs[i] < -1.5),
                       "seed_closeness_below_0.75": bool(seed_close[i] < 0.75),
-                      "backstop": bool(z["seed_closeness"][i] < -CFG["backstop_sd"])},
+                      "backstop": bool(z["seed_closeness"][i] < -CFG["backstop_sd"]),
+                      "tempo_band": bool(out_of_band[i])},
+            "tempo": {"target": target, "off_pct": round(float(rel[i]) * 100, 1)} if target else None,
             "analysed": len(rows),
         }
     return out
@@ -135,10 +162,11 @@ def update(conn: sqlite3.Connection) -> dict:
             if state == "dropped":                    # v5: its seeds left the playlist (find.drop_orphans)
                 pass
             elif active and not r["played"]:
-                if state != "vetoed" and (d["z"] < -CFG["cut_sd"] or d["rules"]["backstop"]):
+                hard = d["rules"]["backstop"] or d["rules"].get("tempo_band", False)
+                if state != "vetoed" and (d["z"] < -CFG["cut_sd"] or hard):
                     state = "vetoed"
                     vetoed_now.append(tid)
-                elif state == "vetoed" and d["z"] > -CFG["return_sd"] and not d["rules"]["backstop"]:
+                elif state == "vetoed" and d["z"] > -CFG["return_sd"] and not hard:
                     state = "playable"
                     returned.append(tid)
             elif not active and state == "vetoed" and not r["played"]:
