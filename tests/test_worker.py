@@ -154,3 +154,28 @@ def test_wake_finds_the_switch(monkeypatch):
     assert "candidates: switch.lachlandesktop, switch.wol_laptop" in analysis.wake()
     monkeypatch.setitem(CONFIG["worker"]["wake"], "entity_id", "switch.wol_laptop")  # set explicitly
     assert analysis.wake() is None and calls[-1][1] == {"entity_id": "switch.wol_laptop"}
+
+
+def test_youtube_refusal_hands_back_and_pauses(remote, monkeypatch):
+    """YouTube refusing downloads ("not a bot"): the worker hands the track back and pauses instead of failing it;
+    the app doesn't wake the PC meanwhile, and the track is done once downloads work again."""
+    http, wakes, root = remote
+    monkeypatch.setitem(analysis.CFG, "blocked_pause_minutes", [0])
+    pc = FakePC(root / "pc")
+    real, n = pc.analyse, {"calls": 0}
+
+    def flaky(video_id, bpm_prior=None, status=None):
+        n["calls"] += 1
+        if n["calls"] <= 2:
+            raise analysis.DownloadFailed("ERROR: [youtube] x: Sign in to confirm you\u2019re not a bot.")
+        return real(video_id, bpm_prior, status)
+    pc.analyse = flaky
+    t, box = queue("vidC")
+    assert analysis.run_worker("http://testserver", once=True, http=http, local=pc) == 1
+    t.join(5)
+    assert "result" in box and n["calls"] == 3                       # refused twice, then done; never failed
+    lib = db.connect_library()
+    assert lib.execute("SELECT count(*) FROM events WHERE kind = 'work_released'").fetchone()[0] == 2
+    db.set_setting(lib, "worker_paused_until", time.time() + 60, log=False)
+    assert analysis.worker_connected(lib)                            # pausing on purpose: no need to wake
+    assert analysis.refusal("HTTP Error 403: Forbidden") == "temporary" and analysis.refusal("Video unavailable") is None

@@ -298,6 +298,11 @@ connected_seconds = 90               # app: a worker that asked for work this re
 rewake_minutes = 10                  # app: wake the PC again if it still hasn't connected
 wait_poll_seconds = 1                # app: how often a queued track is checked while waiting
 item_timeout_minutes = 15            # app: a claimed track with no result after this long goes back to the queue
+# YouTube sometimes refuses downloads for a while ("Sign in to confirm you're not a bot", 2026-11-02: ~5 hours).
+# The worker then hands the track back and pauses, longer each time, instead of failing it; the import or pool
+# fill simply waits. Other temporary refusals (HTTP 403/429) are retried a few times before the track fails.
+blocked_pause_minutes = [5, 10, 20, 40, 60]
+retry_attempts = 3                   # HTTP 403/429 on one track: hand it back this many times, then fail it
 
 [worker.wake]
 # Home Assistant's Wake-on-LAN switch for the PC (turned on to wake it; a button entity is pressed instead). Empty

@@ -30,6 +30,7 @@ h1 { font: 800 clamp(26px, 5vw, 40px)/1.05 var(--display); font-stretch: 112%; m
 .bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
 .failures { font-size: 13px; color: var(--muted); }
 .failures summary { cursor: pointer; }
+#job { display: grid; gap: 10px; justify-items: start; }
 h2 { font: 700 13px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
 ol { list-style: none; margin: 0; padding: 0; display: grid; }
 li { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto auto; gap: 10px; align-items: center;
@@ -200,11 +201,19 @@ function render() {
     $("importing").innerHTML = `<div class="label">${job.state === "queued" ? "Waiting to import" : `Importing ${p.done} of ${p.total || "?"}`}</div>
         <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>`;
   }
+  // Downloads that failed (e.g. YouTube refusing for a while) can be tried again; tracks already imported are kept.
+  const retryable = job && job.kind === "import" && !active
+    && (job.state === "failed" || fails.some((f) => /^(download|analysis) failed/.test(f.reason)));
   $("job").hidden = !(fails.length || (job && job.state === "failed"));
   if (!$("job").hidden) {
     $("job").innerHTML = (job.state === "failed" ? `<div class="error">Import stopped: ${esc(job.error)}</div>` : "")
       + (fails.length ? `<details class="failures"><summary>${fails.length} track${fails.length > 1 ? "s" : ""} couldn't be imported</summary>
-          <ul>${fails.map((f) => `<li style="display:block;border:0;padding:2px 0;cursor:default">${esc(f.artist)} – ${esc(f.title)}: ${esc(f.reason)}</li>`).join("")}</ul></details>` : "");
+          <ul>${fails.map((f) => `<li style="display:block;border:0;padding:2px 0;cursor:default">${esc(f.artist)} – ${esc(f.title)}: ${esc(f.reason)}</li>`).join("")}</ul></details>` : "")
+      + (retryable ? `<button class="btn" id="retry-import">Try again</button>` : "");
+    if (retryable) $("retry-import").onclick = async () => {
+      try { await api(`/api/playlists/${PID}/import`, {}); } catch (e) { showError(`Couldn't start the import: ${e.message}`); }
+      load();
+    };
   }
   clearTimeout(timer);
   if (active) timer = setTimeout(load, 3000);

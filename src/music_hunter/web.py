@@ -380,6 +380,21 @@ def new_playlist(body: NewPlaylist) -> dict:
     return {"playlist_id": library.create_playlist(conn, body.name or ""), "job_id": None}
 
 
+@app.post("/api/playlists/{playlist_id}/import")
+def retry_import(playlist_id: int) -> dict:
+    """Run the playlist's Spotify import again: tracks already in the library are reused, the rest are tried again."""
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    last = jobs.latest_for(conn, playlist_id, "import")
+    if last is None or not last["payload"].get("link"):
+        raise HTTPException(400, "This playlist wasn't imported from Spotify")
+    if last["state"] in ("queued", "running"):
+        return {"job_id": last["id"]}
+    job_id = jobs.enqueue(conn, "import", playlist_id, link=last["payload"]["link"])
+    job_runner.kick()
+    return {"job_id": job_id}
+
+
 @app.get("/api/playlists/{playlist_id}")
 def get_playlist(playlist_id: int) -> dict:
     conn = db.connect()
@@ -548,6 +563,13 @@ class WorkFailed(BaseModel):
 @app.post("/api/worker/{work_id}/failed", dependencies=[Depends(worker_auth)])
 def worker_failed(work_id: int, body: WorkFailed):
     if not analysis.finish(db.connect_library(), work_id, {"stage": body.stage, "timings": body.timings}, body.error):
+        raise HTTPException(409, "Not wanted any more")
+    return {"ok": True}
+
+
+@app.post("/api/worker/{work_id}/release", dependencies=[Depends(worker_auth)])
+def worker_release(work_id: int, pause_s: float = 0):
+    if not analysis.release(db.connect_library(), work_id, pause_s):
         raise HTTPException(409, "Not wanted any more")
     return {"ok": True}
 

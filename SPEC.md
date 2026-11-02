@@ -732,3 +732,8 @@ From my notes on 2026-10-31. v5 turns the test rig into an everyday app: a playl
 - **Removing a track from a playlist takes the Find music tracks it found with it** (unplayed, still in the pool): marked dropped (audio deleted, fingerprint and history kept) unless another seed still in the playlist found them too; unstarring doesn't count (the track is still in the playlist); if it's added back, or a later pull from a remaining seed suggests them, they return. The pool tops up from the remaining seeds.
 - **Order within the same stars**: the most recently starred first (then the most recently added).
 - Playlist rows: the whole row highlights softly on hover; more space between the title and the stars and between the stars; the pointer cursor shows only on the stars (and ⋯); clicking anywhere else on the row still plays it.
+
+### 18.16 YouTube refusing downloads (2026-11-02)
+- On 2026-11-02 YouTube refused every download from the PC for about five hours ("Sign in to confirm you're not a bot"): the import of "Interesting d&b" failed all 12 tracks at 08:55; downloads worked again by 13:51.
+- **Now**: when YouTube refuses, the worker hands the track back to the queue and pauses (5, 10, 20, 40, then 60 min between attempts; `[worker] blocked_pause_minutes`) instead of failing it, so imports and pool fills just wait; the app knows the worker is pausing on purpose and doesn't try to wake the PC meanwhile. A one-off refusal (HTTP 403/429) is retried up to 3 times (`retry_attempts`). No YouTube sign-in or cookies are used.
+- **Try again** under a playlist's "couldn't be imported" list re-runs its Spotify import: tracks already imported are kept, the rest are tried again.

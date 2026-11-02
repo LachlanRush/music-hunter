@@ -141,7 +141,9 @@ class Remote:
                         db.log_event(lib, "pc_wake", work_id=wid, entity=WAKE.get("entity"), problem=problem)
                     say("waiting for the PC to wake up")
                 elif w["state"] == "queued":
-                    say("waiting for the PC")
+                    paused = db.get_setting(lib, "worker_paused_until") or 0
+                    say(f"YouTube is refusing downloads for now; trying again in {max(1, round((paused - time.time()) / 60))} min"
+                        if paused > time.time() else "waiting for the PC")
                 time.sleep(CFG["wait_poll_seconds"])
         except BaseException:
             # Not collected (stopped, or failed above): the worker's upload is refused, the item dropped.
@@ -175,8 +177,23 @@ def backend():
 
 
 def worker_connected(lib) -> bool:
+    """A worker asked for work lately, or is pausing on purpose (YouTube blocking downloads): no need to wake the PC."""
     seen = db.get_setting(lib, "worker_seen")
-    return seen is not None and time.time() - seen < CFG["connected_seconds"]
+    paused = db.get_setting(lib, "worker_paused_until") or 0
+    return (seen is not None and time.time() - seen < CFG["connected_seconds"]) or time.time() < paused
+
+
+BLOCKED = ("confirm you’re not a bot", "confirm you're not a bot", "Sign in to confirm")
+TEMPORARY = ("HTTP Error 403", "HTTP Error 429")
+
+
+def refusal(error: str) -> str | None:
+    """'blocked' (YouTube refusing every download for now), 'temporary' (one refused download), or None."""
+    if any(k in error for k in BLOCKED):
+        return "blocked"
+    if any(k in error for k in TEMPORARY):
+        return "temporary"
+    return None
 
 
 def wake() -> str | None:
@@ -277,6 +294,7 @@ def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
     local = local or Local(path("cache") / "worker")
     base = server.rstrip("/") + "/api/worker"
     inhibitor, done, last_work, announced = Inhibitor(), 0, time.monotonic(), False
+    blocked_streak, attempts = 0, {}
     while True:
         try:
             r = http.post(f"{base}/claim", timeout=60)
@@ -304,10 +322,23 @@ def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
             res = local.analyse(item["video_id"], item.get("bpm_prior"))
         except DownloadFailed as e:
             stage = "analysis" if isinstance(e, AnalysisFailed) else "download"
+            kind = None if stage == "analysis" else refusal(str(e))
+            attempts[wid] = attempts.get(wid, 0) + 1
+            if kind == "blocked" or (kind == "temporary" and attempts[wid] <= CFG["retry_attempts"]):
+                pauses = CFG["blocked_pause_minutes"]
+                pause = pauses[min(blocked_streak, len(pauses) - 1)] * 60 if kind == "blocked" else 30
+                if _release(http, base, wid, pause):           # back in the queue; nothing fails
+                    blocked_streak += kind == "blocked"
+                    print(f"  {item['video_id']}: YouTube refused ({kind}); handed back, pausing {pause // 60 or 0.5} min",
+                          flush=True)
+                    last_work = time.monotonic()
+                    time.sleep(pause)
+                    continue
             print(f"  {item['video_id']}: {stage} failed: {str(e)[:120]}", flush=True)
             _post(http, f"{base}/{wid}/failed", json={"stage": stage, "error": str(e)[:500], "timings": e.timings})
             last_work = time.monotonic()
             continue
+        blocked_streak = 0
         try:
             _send(http, base, wid, res)
             done += 1
@@ -319,6 +350,15 @@ def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
                 if f is not None:
                     Path(f).unlink(missing_ok=True)       # the app keeps the copies
         last_work = time.monotonic()
+
+
+def _release(http, base: str, wid: int, pause_s: int) -> bool:
+    """Hand an item back to the queue and tell the app the worker is pausing. False if the app can't (older app)."""
+    try:
+        r = http.post(f"{base}/{wid}/release", params={"pause_s": pause_s}, timeout=60)
+    except requests.RequestException:
+        return False
+    return r.status_code == 200
 
 
 def _post(http, url, **kw):
@@ -362,6 +402,17 @@ def claim(lib) -> dict | None:
         lib.execute("UPDATE work SET state = 'claimed', claimed_at = datetime('now'), updated_at = datetime('now')"
                     " WHERE id = ?", (w["id"],))
     return {"id": w["id"], "video_id": w["video_id"], "bpm_prior": w["bpm_prior"]}
+
+
+def release(lib, wid: int, pause_s: float) -> bool:
+    """The worker hands a claimed item back (YouTube refused it for now) and pauses; nothing is failed."""
+    with lib:
+        n = lib.execute("UPDATE work SET state = 'queued', claimed_at = NULL, updated_at = datetime('now')"
+                        " WHERE id = ? AND state = 'claimed'", (wid,)).rowcount
+    if n:
+        db.set_setting(lib, "worker_paused_until", time.time() + max(0.0, pause_s), log=False)
+        db.log_event(lib, "work_released", work_id=wid, pause_s=pause_s)
+    return bool(n)
 
 
 def receive_file(lib, wid: int, kind: str, body: bytes, ext: str = "") -> bool:
