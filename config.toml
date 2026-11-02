@@ -124,7 +124,7 @@ rescore_every = 10               # while filling, re-run the veto after this man
 # the slowest or above the fastest of them (read at the tempo nearest the playlist's typical tempo, so half / double
 # / 2:3 misreads aren't cut; no BPM = not filtered) — then closeness to the range as a fourth part of the veto
 # score. The typical tempo (their median) and the range only move when they change by tempo_hysteresis_bpm or more.
-tempo_margin_bpm = 10.0
+tempo_margin_bpm = 6.0
 tempo_core_stars = 4
 tempo_core_min = 3
 tempo_hysteresis_bpm = 2.0
