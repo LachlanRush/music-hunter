@@ -76,18 +76,19 @@ def test_tempo_band(conn):
     t = next(iter(rows.values()))["tempo"]
     assert t["lo"] <= t["center"] <= t["hi"] and 120 < t["center"] < 160
     assert abs(veto.nearest_reading(t["center"] * 2 / 3, t["center"]) - t["center"]) < 1e-9
+    margin = config.CONFIG["veto"]["tempo_margin_bpm"]
     tid = max(rows, key=lambda k: rows[k]["z"])                                      # the best-scored track…
     with conn:
-        conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", (t["lo"] - 12, tid))   # …made 12 BPM too slow
+        conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", (t["lo"] - margin - 2, tid))   # …made too slow
     veto.update(conn)
     v = json.loads(conn.execute("SELECT veto FROM tracks WHERE id = ?", (tid,)).fetchone()[0])
-    assert v["rules"]["tempo_band"] and v["tempo"]["outside_bpm"] == 12.0
+    assert v["rules"]["tempo_band"] and v["tempo"]["outside_bpm"] == margin + 2
     played = tid in {r[0] for r in conn.execute("SELECT track_id FROM plays")}
     assert played or conn.execute("SELECT veto_state FROM tracks WHERE id = ?", (tid,)).fetchone()[0] == "vetoed"
     with conn:
-        conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", ((t["lo"] - 8), tid))    # 8 BPM out: allowed, scored down
+        conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", (t["lo"] - margin + 2, tid))   # inside: scored down
     v = veto.compute(conn)[tid]
-    assert not v["rules"]["tempo_band"] and v["raw"]["tempo"] == -8.0
+    assert not v["rules"]["tempo_band"] and v["raw"]["tempo"] == -(margin - 2)
     with conn:
         conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", (t["center"] / 2, tid))   # a half-tempo misread: fine
     assert veto.compute(conn)[tid]["raw"]["tempo"] == 0.0
