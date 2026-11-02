@@ -5,8 +5,8 @@ against all tracks analysed this run (median and MAD, so a long low tail doesn't
   seed closeness — mean cosine to the k nearest seeds (original seeds and learning Adds), MAEST;
   like closeness — weighted mean cosine to the k nearest liked plays (Close / Add weights), once there are likes;
   sources        — number of distinct sources that suggested the track;
-  tempo          — closeness to the seeds' typical tempo (v5), plus a tempo band: a track more than tempo_below
-                   slower or tempo_above faster than it is vetoed whatever its score.
+  tempo          — distance from the playlist's tempo range (its 4–5 star tracks, tempo.playlist_tempo; v5), plus
+                   a band: a track more than tempo_margin_bpm outside the range is vetoed whatever its score.
 The veto score is their weighted mean, standardised the same way. An unplayed track is vetoed when its score
 falls more than cut_sd below the median (or its seed closeness is more than backstop_sd below — clearly out of
 the area), and becomes playable again only above return_sd (two lines, so it doesn't flip-flop).
@@ -31,15 +31,6 @@ FOLDS = (1, 2, 0.5, 1.5, 2 / 3)           # a measured BPM can be a half, double
 
 def nearest_reading(bpm: float, target: float) -> float:
     return min((bpm * f for f in FOLDS), key=lambda r: abs(np.log(r / target)))
-
-
-def seeds_tempo(bpms) -> float | None:
-    """The seeds' typical tempo: their median, after reading each seed at the tempo nearest the plain median."""
-    b = [x for x in bpms if x]
-    if not b:
-        return None
-    first = float(np.median(b))
-    return float(np.median([nearest_reading(x, first) for x in b]))
 
 
 def robust_z(x: np.ndarray) -> np.ndarray:
@@ -111,16 +102,26 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
         n_src[cid] = n_src.get(cid, 0) + 1
     sources = np.array([n_src.get(r["candidate_id"], 0) for r in rows], float)
 
-    # Tempo: the seeds' typical tempo, each track read at its tempo nearest it; no BPM counts as typical.
-    seed_bpm = dict(conn.execute(f"SELECT id, bpm FROM tracks WHERE id IN ({','.join('?' * len(seed_ids))})",
-                                 [int(x) for x in seed_ids]).fetchall())
-    target = seeds_tempo(seed_bpm.values())
-    rel = np.array([nearest_reading(r["bpm"], target) / target - 1 if (target and r["bpm"]) else 0.0 for r in rows])
-    out_of_band = (rel < -CFG["tempo_below"]) | (rel > CFG["tempo_above"])
+    # Tempo: the playlist's range (its 4–5 star tracks; in an older single-session database, the seeds), each track
+    # read at its tempo nearest the typical tempo; BPM outside the range is the distance; no BPM counts as inside.
+    from . import tempo as tempo_mod
+
+    if db.SESSION.get() is not None:
+        core = tempo_mod.playlist_tempo(db.connect_library(), db.SESSION.get())
+    else:
+        core = tempo_mod.core_from(conn.execute(
+            f"SELECT bpm, coalesce(stars, 5) FROM tracks WHERE id IN ({','.join('?' * len(seed_ids))})",
+            [int(x) for x in seed_ids]).fetchall())
+    if core:
+        read = np.array([nearest_reading(r["bpm"], core["center"]) if r["bpm"] else core["center"] for r in rows])
+        outside = np.maximum(0.0, np.maximum(core["lo"] - read, read - core["hi"]))
+        out_of_band = outside > CFG["tempo_margin_bpm"]
+    else:
+        read, outside, out_of_band = np.zeros(len(rows)), np.zeros(len(rows)), np.zeros(len(rows), bool)
 
     raw = {"seed_closeness": seed_close, "sources": sources}
-    if target:
-        raw["tempo"] = -np.abs(np.log1p(rel))
+    if core:
+        raw["tempo"] = -outside
     if like_close is not None:
         raw["like_closeness"] = like_close
     z = {c: robust_z(v) for c, v in raw.items()}
@@ -138,7 +139,8 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
                       "seed_closeness_below_0.75": bool(seed_close[i] < 0.75),
                       "backstop": bool(z["seed_closeness"][i] < -CFG["backstop_sd"]),
                       "tempo_band": bool(out_of_band[i])},
-            "tempo": {"target": target, "off_pct": round(float(rel[i]) * 100, 1)} if target else None,
+            "tempo": {**core, "read": round(float(read[i]), 1), "outside_bpm": round(float(outside[i]), 1)}
+                     if core else None,
             "analysed": len(rows),
         }
     return out

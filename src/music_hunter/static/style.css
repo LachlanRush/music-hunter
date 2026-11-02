@@ -53,12 +53,11 @@ nav a { color: var(--muted); text-decoration: none; font: 500 13px/1 var(--body)
 nav a:hover { color: var(--fg); }
 nav a[aria-current="page"] { color: var(--fg); border-bottom-color: var(--accent); }
 
-/* Feedback box at the bottom of every page */
-.feedback { border-top: 1px solid var(--line); padding-top: 14px; font-size: 13px; color: var(--muted); }
-.feedback summary { cursor: pointer; width: max-content; }
+/* Fold-outs: "couldn't be imported" and the feedback box at the bottom of every page share one look */
+.failures, .feedback { font-size: 13px; color: var(--muted); }
+.failures summary, .feedback summary { cursor: pointer; width: max-content; }
 .feedback[open] { display: grid; gap: 8px; }
-.feedback textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px;
-  background: var(--surface); color: var(--fg); font: 400 14px/1.4 var(--body); resize: vertical; }
-.feedback-row { display: flex; gap: 10px; align-items: center; }
-.feedback-send { padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface);
-  font: 600 13px var(--body); }
+.feedback textarea { width: 100%; min-height: 9em; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface); color: var(--fg); font: 400 15px/1.45 var(--body); resize: vertical; }
+.feedback-send { justify-self: start; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--surface); font: 600 13px var(--body); }

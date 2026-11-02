@@ -28,8 +28,6 @@ h1 { font: 800 clamp(26px, 5vw, 40px)/1.05 var(--display); font-stretch: 112%; m
 .btn.danger { color: var(--bad); }
 .bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
-.failures { font-size: 13px; color: var(--muted); }
-.failures summary { cursor: pointer; }
 #job { display: grid; gap: 10px; justify-items: start; }
 h2 { font: 700 13px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
 ol { list-style: none; margin: 0; padding: 0; display: grid; }
@@ -46,6 +44,7 @@ li.playing .cover-btn { outline: 2px solid var(--accent); outline-offset: 1px; }
 .t { min-width: 0; }
 .t b { display: block; font: 600 14px/1.3 var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .t span { display: block; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t span.sub { font: 400 12px/1.3 var(--mono); }
 .stars { display: flex; gap: 6px; margin-left: 16px; }
 .stars button { border: 0; background: none; padding: 4px 2px; font-size: 26px; line-height: 1; color: var(--line); }
 .stars button.on { color: var(--accent); }
@@ -177,7 +176,8 @@ function row(t) {
   return `<li data-row="${t.id}" class="${playing ? "playing" : ""} ${t.audio ? "" : "unavailable"}">
     <button class="cover-btn" data-play="${t.id}" aria-label="Play ${esc(t.title)}" ${t.audio ? "" : "disabled"}>
       ${t.art ? `<img src="${t.art}" alt="" loading="lazy">` : "♪"}</button>
-    <div class="t"><b>${esc(t.title)}</b><span>${esc(t.artist)} · ${fmt(t.duration_s)}${t.bpm_shown ? ` · ${t.bpm_shown}` : ""}</span></div>
+    <div class="t"><b>${esc(t.title)}</b><span>${esc(t.artist)}</span>
+      <span class="sub">${fmt(t.duration_s)}${t.bpm_shown ? ` • ${t.bpm_shown}` : ""}${t.bpm_override ? ` → ${t.bpm_override}` : ""}</span></div>
     ${stars(t)}
     <div class="more"><button data-more="${t.id}" aria-label="More for ${esc(t.title)}" aria-expanded="false">⋯</button></div>
   </li>`;
@@ -273,12 +273,12 @@ document.addEventListener("click", async (e) => {
     return;
   }
   const play = e.target.closest("[data-play]");
-  if (play) { startQueue(Number(play.dataset.play)); return; }
+  if (play) { playTrack(Number(play.dataset.play)); return; }
   const rowEl = e.target.closest("li[data-row]");
   if (rowEl && !e.target.closest(".stars, .more, .menu")) {
     document.querySelectorAll(".menu").forEach((m) => m.remove());
     const t = data.tracks.find((x) => x.id === Number(rowEl.dataset.row));
-    if (t && t.audio) startQueue(t.id);
+    if (t && t.audio) playTrack(t.id);
     return;
   }
   const plMore = e.target.closest("#pl-more");
@@ -299,6 +299,7 @@ document.addEventListener("click", async (e) => {
     menu.className = "menu";
     menu.innerHTML = (data.others.length ? `<div class="label">Add to</div>` + data.others.map((o) =>
         `<button data-addto="${o.id}" data-track="${tid}">${esc(o.name)}</button>`).join("") : "")
+      + `<button data-own-bpm="${tid}">Play at … BPM</button>`
       + `<button data-remove="${tid}" style="color:var(--bad)">Remove from this playlist</button>`;
     more.parentElement.appendChild(menu);
     return;
@@ -309,6 +310,16 @@ document.addEventListener("click", async (e) => {
       const r = await api(`/api/playlists/${addto.dataset.addto}/tracks`, {track_id: Number(addto.dataset.track)});
       $("status").textContent = r.added ? "Added." : "Already in that playlist.";
     } catch (err) { showError(`Couldn't add it: ${err.message}`); }
+    return;
+  }
+  const own = e.target.closest("[data-own-bpm]");
+  if (own) {
+    const t = data.tracks.find((x) => x.id === Number(own.dataset.ownBpm));
+    const v = prompt(`Play "${t.title}" at how many BPM in this playlist? (used instead of Set to BPM while it's on)`,
+                     t.bpm_override || t.bpm_shown || "");
+    if (v === null || v.trim() === "") return;
+    try { await api(`/api/playlists/${PID}/tracks/${t.id}/bpm`, {bpm: Number(v)}, "PUT"); await load(); retuneCurrent(); }
+    catch (err) { showError(err.message); }
     return;
   }
   const remove = e.target.closest("[data-remove]");
@@ -342,6 +353,10 @@ function shuffled(list) {
   const a = list.slice();
   for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
   return a;
+}
+function playTrack(id) {                               // the track already playing isn't restarted
+  if (queue[pos] && queue[pos].id === id) { if (audio.paused) audio.play().catch(() => {}); return; }
+  startQueue(id);
 }
 function startQueue(firstId) {
   let list = playable();
@@ -445,6 +460,9 @@ async function saveTempo(on, bpm) {
   try { await api(`/api/playlists/${PID}/tempo`, {on, bpm}, "PUT"); } catch (e) { showError(`Couldn't save: ${e.message}`); }
   await load();
   renderTempo();
+  retuneCurrent();
+}
+function retuneCurrent() {                              // the playing track follows a new tempo setting
   const t = queue[pos];
   if (t) tempoPlayer.retune(t.id, t.audio, fresh(t).rate);
   showTempoNote();

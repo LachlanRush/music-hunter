@@ -418,7 +418,7 @@ function renderRating() {
   const shown = onPrev ? prev.rating : ratedCurrent;
   document.querySelectorAll("#rate button").forEach((b) => {
     b.classList.toggle("on", Number(b.dataset.r) === shown);
-    b.disabled = onPrev ? !prev.can_change : ratedCurrent !== null;
+    b.disabled = onPrev ? !prev.can_change : false;      // a rated track's rating can be changed from here too
   });
   $("now").classList.toggle("previous", onPrev);
   $("now-label").textContent = onPrev ? "Previous track" : "";
@@ -445,7 +445,8 @@ async function ratePrevious(r) {
 
 async function rate(r) {
   if (viewing === "previous") return ratePrevious(r);
-  if (!current || ratedCurrent !== null) return;
+  if (!current) return;
+  if (ratedCurrent !== null) { if (r !== ratedCurrent) changeRating(r); return; }   // change it, as below
   try {
     const rev = await api("/api/rate", {play_id: current.play_id, rating: r, played_seconds: Math.round(played),
                                         ...tempoReport()});

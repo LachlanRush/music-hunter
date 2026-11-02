@@ -42,6 +42,38 @@ def shown_bpm(bpm: float | None, around: float) -> int | None:
     return round(min((bpm * f for f in FOLDS), key=lambda r: abs(around / r - 1)))
 
 
+def nearest(bpm: float, around: float) -> float:
+    return min((bpm * f for f in FOLDS), key=lambda r: abs(around / r - 1))
+
+
+def core_from(items) -> dict | None:
+    """The tempo range of a set of (bpm, stars) — 4–5 star tracks (all starred if too few have 4–5; all given if
+    none is starred): {'center' (median), 'lo', 'hi'}, each read at the tempo nearest the plain median."""
+    v = CONFIG["veto"]
+    items = [(b, s) for b, s in items if b]
+    pick = [b for b, s in items if s and s >= v["tempo_core_stars"]]
+    if len(pick) < v["tempo_core_min"]:
+        pick = [b for b, s in items if s] or [b for b, _ in items]
+    if not pick:
+        return None
+    first = float(sorted(pick)[len(pick) // 2])
+    folded = sorted(nearest(b, first) for b in pick)
+    return {"center": round(folded[len(folded) // 2], 1), "lo": round(folded[0], 1), "hi": round(folded[-1], 1)}
+
+
+def playlist_tempo(lib, pid: int) -> dict | None:
+    """The playlist's tempo (typical tempo and range of its 4–5 star tracks), shared by the playlist page, its Find
+    music and the veto. Kept steady: it only moves when the centre or an end changes by tempo_hysteresis_bpm."""
+    fresh = core_from(lib.execute("SELECT t.bpm, pt.stars FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id"
+                                  " WHERE pt.playlist_id = ? AND pt.stars IS NOT NULL", (pid,)).fetchall())
+    key, step = f"tempo_core:{pid}", CONFIG["veto"]["tempo_hysteresis_bpm"]
+    kept = db.get_setting(lib, key)
+    if fresh and (not kept or any(abs(fresh[k] - kept[k]) >= step for k in ("center", "lo", "hi"))):
+        db.set_setting(lib, key, fresh)
+        return fresh
+    return kept or fresh
+
+
 def settings(conn, key: str, default_target: float) -> dict:
     saved = db.get_setting(conn, key, {})
     # Settings saved before `engaged` existed (0.5.4) came from someone using the switch: count them as engaged.
@@ -69,15 +101,29 @@ def playlist_key(pid: int) -> str:
 
 
 def playlist_settings(lib, pid: int) -> dict:
-    bpms = [r[0] for r in lib.execute("SELECT t.bpm FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id"
-                                      " WHERE pt.playlist_id = ?", (pid,))]
-    return settings(lib, playlist_key(pid), median_bpm(bpms))
+    """The playlist's Set to BPM; its default target is the playlist's typical tempo."""
+    core = playlist_tempo(lib, pid)
+    if core is None:
+        bpms = [r[0] for r in lib.execute("SELECT t.bpm FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id"
+                                          " WHERE pt.playlist_id = ?", (pid,))]
+    return settings(lib, playlist_key(pid), core["center"] if core else median_bpm(bpms))
 
 
-def session_settings(sess) -> dict:
-    """Find music: its own setting; the default target is the playlist's (its seeds') median BPM."""
-    bpms = [r[0] for r in sess.execute("SELECT bpm FROM tracks WHERE library_id IS NOT NULL")]
-    return settings(sess, "same_bpm", median_bpm(bpms))
+def session_settings(sess, session: int | None = None) -> dict:
+    """Find music: its own setting; the default target is its playlist's typical tempo."""
+    pid = db.SESSION.get() if session is None else session
+    core = playlist_tempo(db.connect_library(), pid) if pid is not None else None
+    if core is None:
+        bpms = [r[0] for r in sess.execute("SELECT bpm FROM tracks WHERE library_id IS NOT NULL")]
+    return settings(sess, "same_bpm", core["center"] if core else median_bpm(bpms))
+
+
+def override_rate(bpm: float | None, override: float | None, around: float | None = None) -> float | None:
+    """The rate for a track's own "Play at … BPM" in a playlist, or None. The track is read at the tempo shown for
+    it (its reading nearest the playlist's typical tempo, `around`), so a 2:3 misread doesn't change the meaning."""
+    if not bpm or not override:
+        return None
+    return round(override / nearest(bpm, around or override), 3)
 
 
 # --- the copies -----------------------------------------------------------------------------------------------------
@@ -214,12 +260,18 @@ def sync_playlist(lib, pid: int) -> dict:
     """A playlist's copies: every track with audio at the current target (queued in the background); anything else
     in its scope deleted. Called when the setting changes, tracks are added or removed, and at start-up."""
     s = playlist_settings(lib, pid)
+    core = playlist_tempo(lib, pid)
     scope = scope_for(None, pid)
     wanted: set[tuple[int, float]] = set()
-    for t in lib.execute("SELECT t.id, t.bpm, t.file_path FROM playlist_tracks pt JOIN tracks t"
+    for t in lib.execute("SELECT t.id, t.bpm, t.file_path, pt.bpm_override FROM playlist_tracks pt JOIN tracks t"
                          " ON t.id = pt.track_id WHERE pt.playlist_id = ? AND t.file_path IS NOT NULL", (pid,)):
-        rate, _ = rate_for(t["bpm"], s, ignore_off=True)
-        if rate != 1 and resolve(t["file_path"]).exists():
+        if not resolve(t["file_path"]).exists():
+            continue
+        # At most two copies per track: the playlist's Set to BPM and the track's own override (kept once set).
+        rates = {rate_for(t["bpm"], s, ignore_off=True)[0]} if s.get("engaged") or s["on"] else set()
+        if t["bpm_override"]:
+            rates.add(override_rate(t["bpm"], t["bpm_override"], core and core["center"]) or 1.0)
+        for rate in rates - {1.0}:
             wanted.add((t["id"], rate))
             status(scope, t["id"], t["file_path"], rate, urgent=False)
     _prune(scope, wanted)
@@ -228,7 +280,7 @@ def sync_playlist(lib, pid: int) -> dict:
 
 def sync_session(sess, session: int) -> None:
     """Find music's copies: only at the current target, and only for tracks not played yet or among the last few."""
-    s = session_settings(sess)
+    s = session_settings(sess, session)
     scope = scope_for(session, None)
     recent = {r[0] for r in sess.execute("SELECT track_id FROM plays ORDER BY id DESC LIMIT ?", (KEEP_PLAYED,))}
     played = {r[0] for r in sess.execute("SELECT DISTINCT track_id FROM plays")} | \

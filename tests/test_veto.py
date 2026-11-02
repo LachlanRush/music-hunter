@@ -69,20 +69,50 @@ def test_settings_version_is_stable(conn, monkeypatch):
 
 
 def test_tempo_band(conn):
-    """A track far below or above the seeds' tempo is vetoed whatever its score; a half/double/2:3 reading of the
-    right tempo isn't; closeness to the tempo is part of the score."""
+    """A track more than tempo_margin_bpm outside the seeds' tempo range is vetoed whatever its score; a half / double /
+    2:3 reading of a tempo inside it isn't; distance from the range is part of the score."""
     veto.update(conn)
     rows = {r["id"]: json.loads(r["veto"]) for r in conn.execute("SELECT id, veto FROM tracks WHERE veto IS NOT NULL")}
-    target = next(iter(rows.values()))["tempo"]["target"]
-    assert 120 < target < 160 and abs(veto.nearest_reading(target * 2 / 3, target) - target) < 1e-9
-    tid = max(rows, key=lambda t: rows[t]["z"])                                   # the best-scored track…
+    t = next(iter(rows.values()))["tempo"]
+    assert t["lo"] <= t["center"] <= t["hi"] and 120 < t["center"] < 160
+    assert abs(veto.nearest_reading(t["center"] * 2 / 3, t["center"]) - t["center"]) < 1e-9
+    tid = max(rows, key=lambda k: rows[k]["z"])                                      # the best-scored track…
     with conn:
-        conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", (target * 0.85, tid))   # …made 15% slower
+        conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", (t["lo"] - 12, tid))   # …made 12 BPM too slow
     veto.update(conn)
-    v = json.loads(conn.execute("SELECT veto, veto_state FROM tracks WHERE id = ?", (tid,)).fetchone()[0])
-    assert v["rules"]["tempo_band"] and v["tempo"]["off_pct"] == -15.0
+    v = json.loads(conn.execute("SELECT veto FROM tracks WHERE id = ?", (tid,)).fetchone()[0])
+    assert v["rules"]["tempo_band"] and v["tempo"]["outside_bpm"] == 12.0
     played = tid in {r[0] for r in conn.execute("SELECT track_id FROM plays")}
     assert played or conn.execute("SELECT veto_state FROM tracks WHERE id = ?", (tid,)).fetchone()[0] == "vetoed"
     with conn:
-        conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", (target / 2, tid))       # a half-tempo misread: fine
-    assert not veto.compute(conn)[tid]["rules"]["tempo_band"]
+        conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", ((t["lo"] - 8), tid))    # 8 BPM out: allowed, scored down
+    v = veto.compute(conn)[tid]
+    assert not v["rules"]["tempo_band"] and v["raw"]["tempo"] == -8.0
+    with conn:
+        conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", (t["center"] / 2, tid))   # a half-tempo misread: fine
+    assert veto.compute(conn)[tid]["raw"]["tempo"] == 0.0
+
+
+def test_playlist_tempo_from_four_and_five_stars(tmp_path, monkeypatch):
+    from music_hunter import db, library, tempo
+
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    lib = db.connect()
+    pid = library.create_playlist(lib, "p")
+
+    def add(bpm, stars):
+        with lib:
+            tid = lib.execute("INSERT INTO tracks (artist, title, duration_s, origin, bpm) VALUES ('a', 't', 200,"
+                              " 'library', ?)", (bpm,)).lastrowid
+        library.add_to_playlist(lib, pid, tid)
+        library.set_stars(lib, pid, tid, stars)
+        return tid
+    for b in (138, 141, 142, 145):
+        add(b, 5)
+    add(120, 2)                                      # a 2-star track doesn't widen the range
+    add(70.5, 4)                                     # a half-tempo reading of 141 counts as 141
+    assert tempo.playlist_tempo(lib, pid) == {"center": 141.0, "lo": 138.0, "hi": 145.0}
+    add(146.5, 4)                                    # the top end moves 1.5 BPM: kept steady
+    assert tempo.playlist_tempo(lib, pid)["hi"] == 145.0
+    add(148, 4)                                      # 3 BPM: updated
+    assert tempo.playlist_tempo(lib, pid)["hi"] == 148.0

@@ -59,7 +59,8 @@ def playlist_tracks(conn: sqlite3.Connection, playlist_id: int) -> list[dict]:
     stars, the most recently starred first (then the most recently added)."""
     return [dict(r) for r in conn.execute(
         "SELECT t.id, t.artist, t.title, t.duration_s, t.gain_db, t.bpm, t.release_date,"
-        " t.art_path IS NOT NULL AS has_art, t.file_path IS NOT NULL AS has_audio, pt.stars, pt.status, pt.added_at"
+        " t.art_path IS NOT NULL AS has_art, t.file_path IS NOT NULL AS has_audio, pt.stars, pt.status, pt.added_at,"
+        " pt.bpm_override"
         " FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id WHERE pt.playlist_id = ?"
         " ORDER BY pt.status = 'added' DESC, CASE WHEN pt.status = 'added' THEN pt.added_at END DESC,"
         " pt.stars IS NULL, pt.stars DESC, coalesce(pt.starred_at, pt.added_at) DESC, pt.added_at DESC, t.id DESC",

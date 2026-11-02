@@ -290,11 +290,11 @@ def test_reason_tags(conn):
 
     p1 = show(conn)
     rate(conn, p1, OFF)
-    assert set_tags(conn, p1, ["lyrics", "vocals", "lyrics"]) == ["vocals", "lyrics"]          # config order, no repeats
+    assert set_tags(conn, p1, ["boring", "vocals", "boring"]) == ["vocals", "boring"]          # config order, no repeats
     with pytest.raises(ValueError):
         set_tags(conn, p1, ["groove"])                                                          # an Add tag on an Off
     change_last_rating(conn, CLOSE)                                                             # Close shares Off's tags
-    assert json.loads(conn.execute("SELECT tags FROM plays WHERE id = ?", (p1,)).fetchone()[0]) == ["vocals", "lyrics"]
+    assert json.loads(conn.execute("SELECT tags FROM plays WHERE id = ?", (p1,)).fetchone()[0]) == ["vocals", "boring"]
     change_last_rating(conn, ADD)                                                               # none fit Add
     assert conn.execute("SELECT tags FROM plays WHERE id = ?", (p1,)).fetchone()[0] is None
     assert "groove" in tag_options(ADD)

@@ -180,3 +180,28 @@ def test_no_tempo_copies_until_first_engaged(lib):
     tempo.save(conn, tempo.playlist_key(pid), True, 140)
     tempo.save(conn, tempo.playlist_key(pid), False, 140)                   # off again: copies kept ready
     assert tempo.rate_for(130.0, tempo.playlist_settings(conn, pid), ignore_off=True)[0] == round(140 / 130, 3)
+
+
+def test_track_bpm_override(lib):
+    """A track's own "Play at … BPM" in a playlist: used instead of Set to BPM while it's on, kept once set, its copy
+    made alongside the Set to copy (at most those two), and replaced by a new value."""
+    from fastapi.testclient import TestClient
+    from music_hunter import web
+
+    conn, track, root = lib
+    t = track("Tone")
+    with conn:
+        conn.execute("UPDATE tracks SET bpm = 140 WHERE id = ?", (t,))
+    pid = library.create_playlist(conn, "p")
+    library.add_to_playlist(conn, pid, t)
+    client = TestClient(web.app)
+    url = f"/api/playlists/{pid}/tracks/{t}/bpm"
+    assert client.put(url, json={"bpm": 200}).status_code == 400                    # too far from its own tempo
+    assert client.put(url, json={"bpm": 145}).json()["bpm_override"] == 145
+    client.put(f"/api/playlists/{pid}/tempo", json={"on": True, "bpm": 142})
+    tr = client.get(f"/api/playlists/{pid}").json()["tracks"][0]
+    assert tr["rate"] == round(145 / 140, 3) and tr["tempo_note"] == "Set to 145 BPM" and tr["bpm_override"] == 145
+    client.put(f"/api/playlists/{pid}/tempo", json={"on": False})                   # off: plays at its own tempo
+    assert client.get(f"/api/playlists/{pid}").json()["tracks"][0]["rate"] == 1
+    client.put(url, json={"bpm": 150})                                              # a new value replaces it
+    assert conn.execute("SELECT bpm_override FROM playlist_tracks").fetchone()[0] == 150

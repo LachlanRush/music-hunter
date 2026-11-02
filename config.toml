@@ -99,8 +99,9 @@ unrated_counts_as = 2                         # Close
 # SPEC.md §17.7 (v4) — optional reason tags, offered after rating (under the last-rated track); several allowed,
 # changeable with the most recent rating. Logged only: no effect on the veto or picks. Keyed by rating.
 # v5 (2026-10-31): five bad, five good, not overlapping; Close gets the bad ones (what kept it from being an Add).
-"1" = ["vocals", "lyrics", "boring", "wrong energy", "harsh sound"]
-"2" = ["vocals", "lyrics", "boring", "wrong energy", "harsh sound"]
+# 2026-11-02: "lyrics" folded into "vocals"; "wrong genre" for a track that's completely off (rock among EDM).
+"1" = ["vocals", "wrong genre", "boring", "wrong energy", "harsh sound"]
+"2" = ["vocals", "wrong genre", "boring", "wrong energy", "harsh sound"]
 "3" = ["great vocals", "groove", "melody", "energy", "the drop"]
 
 [find]
@@ -118,12 +119,15 @@ min_analysed = 40                # no vetoes until this many tracks are analysed
 seed_top_k = 3                   # closeness to the k nearest seeds (original seeds and Adds)
 like_top_k = 3                   # closeness to the k nearest likes (Close / Add weights from [ratings])
 rescore_every = 10               # while filling, re-run the veto after this many new tracks
-# v5 (2026-11-02): tempo. A filter first — vetoed when a track's tempo is more than tempo_below slower or tempo_above
-# faster than the seeds' typical tempo (the reading nearest it, so half / double / 2:3 misreads aren't cut; no BPM
-# = not filtered) — then closeness to that tempo as a fourth part of the veto score. In pump's first 77 ratings,
-# tracks more than 8% slower were 9 of 12 Off and none Added; +12% is as far as Same BPM stretches.
-tempo_below = 0.08
-tempo_above = 0.12
+# v5 (2026-11-02): tempo. The playlist's tempo range = its 4–5 star tracks' tempos (all starred tracks if fewer than
+# tempo_core_min have 4–5 stars). A filter first — vetoed when a track's tempo is more than tempo_margin_bpm below
+# the slowest or above the fastest of them (read at the tempo nearest the playlist's typical tempo, so half / double
+# / 2:3 misreads aren't cut; no BPM = not filtered) — then closeness to the range as a fourth part of the veto
+# score. The typical tempo (their median) and the range only move when they change by tempo_hysteresis_bpm or more.
+tempo_margin_bpm = 10.0
+tempo_core_stars = 4
+tempo_core_min = 3
+tempo_hysteresis_bpm = 2.0
 
 [veto.weights]                   # veto score = weighted mean of the robust z-scores of these components
 seed_closeness = 1.0
@@ -259,6 +263,7 @@ target_bpm = 0.0                 # 0 = no target set: bpm_match uses the median 
 match_tempo = false              # play tracks time-stretched to the target (pitch kept), within [bpm] max_stretch
 bitrate_kbps = 160               # v5 Same BPM: stretched copies (Rubber Band, rendered on the server) as Opus
 cache_mb = 2000                  # … kept in cache/tempo/, oldest removed beyond this
+max_override_stretch = 0.25      # a track's own "Play at … BPM" in a playlist: at most ±25% from its own tempo
 
 [versions]
 # Bracket or " - " suffix labels that mark a length/edit version of the SAME song.

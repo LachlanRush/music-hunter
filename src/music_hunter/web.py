@@ -423,13 +423,17 @@ def get_playlist(playlist_id: int) -> dict:
 
     tracks = library.playlist_tracks(conn, playlist_id)
     s = tempo.playlist_settings(conn, playlist_id)
-    median = tempo.median_bpm(t["bpm"] for t in tracks)
+    core = tempo.playlist_tempo(conn, playlist_id)
+    around = core["center"] if core else tempo.median_bpm(t["bpm"] for t in tracks)
 
     def view(t):
         rate, note = tempo.rate_for(t["bpm"], s)
+        if s["on"] and t["bpm_override"]:                       # this track's own tempo in this playlist wins
+            rate = tempo.override_rate(t["bpm"], t["bpm_override"], around) or 1.0
+            note = f"Set to {t['bpm_override']:g} BPM"
         return {**t, "audio": f"/audio/{t['id']}" if t["has_audio"] else None,
                 "art": f"/art/{t['id']}" if t["has_art"] else None,
-                "bpm_shown": tempo.shown_bpm(t["bpm"], median), "rate": rate, "tempo_note": note}
+                "bpm_shown": tempo.shown_bpm(t["bpm"], around), "rate": rate, "tempo_note": note}
     return {"id": p["id"], "name": p["name"], "description": p["description"],
             "image": f"/cover/{p['id']}" if p["image_path"] else None,
             "job": _job_view(jobs.latest_for(conn, playlist_id)),
@@ -451,6 +455,37 @@ def set_playlist_tempo(playlist_id: int, body: TempoBody) -> dict:
     bpm = body.bpm if "bpm" in body.model_fields_set else tempo.playlist_settings(conn, playlist_id)["bpm"]
     tempo.save(conn, tempo.playlist_key(playlist_id), body.on, bpm)      # bpm left out: keep the target
     return _tempo_view(tempo.sync_playlist(conn, playlist_id))
+
+
+class OverrideBody(BaseModel):
+    bpm: float
+
+
+@app.put("/api/playlists/{playlist_id}/tracks/{track_id}/bpm")
+def set_track_bpm(playlist_id: int, track_id: int, body: OverrideBody) -> dict:
+    """A track's own "Play at … BPM" in this playlist: used instead of the playlist's Set to BPM (while it's on).
+    Kept once set; a new value replaces it (its old copy goes), it's never cleared."""
+    from . import tempo
+
+    conn = db.connect()
+    t = conn.execute("SELECT t.bpm FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id"
+                     " WHERE pt.playlist_id = ? AND pt.track_id = ?", (playlist_id, track_id)).fetchone()
+    if t is None:
+        raise HTTPException(404, "That track isn't in this playlist")
+    if not t["bpm"]:
+        raise HTTPException(400, "This track has no measured tempo")
+    core = tempo.playlist_tempo(conn, playlist_id)
+    around = core["center"] if core else t["bpm"]
+    rate = tempo.override_rate(t["bpm"], body.bpm, around)
+    limit = CONFIG["tempo"]["max_override_stretch"]
+    if not 60 <= body.bpm <= 200 or abs(rate - 1) > limit:
+        raise HTTPException(400, f"Pick a tempo within ±{round(limit * 100)}% of the track's own "
+                                 f"({tempo.nearest(t['bpm'], around):.0f} BPM)")
+    with conn:
+        conn.execute("UPDATE playlist_tracks SET bpm_override = ? WHERE playlist_id = ? AND track_id = ?",
+                     (round(body.bpm, 1), playlist_id, track_id))
+    tempo.sync_playlist(conn, playlist_id)
+    return {"ok": True, "bpm_override": round(body.bpm, 1)}
 
 
 @app.patch("/api/playlists/{playlist_id}")
