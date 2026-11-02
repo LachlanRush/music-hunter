@@ -366,6 +366,22 @@ def mean_offdiag(sim: np.ndarray) -> float:
     return float(sim[~np.eye(n, dtype=bool)].mean()) if n > 1 else 1.0
 
 
+def show_feedback(everything: bool, mark_seen: bool) -> None:
+    import json
+
+    conn = db.connect()
+    rows = conn.execute("SELECT * FROM feedback" + ("" if everything else " WHERE status = 'new'") + " ORDER BY id")
+    rows = rows.fetchall()
+    for r in rows:
+        ctx = json.loads(r["context"] or "{}")
+        where = " ".join(f"{k}={v}" for k, v in ctx.items() if v is not None)
+        print(f"#{r['id']} {r['at']} {r['page'] or ''} {where}\n  {r['text']}\n")
+    print(f"{len(rows)} note(s)")
+    if mark_seen and rows:
+        with conn:
+            conn.executemany("UPDATE feedback SET status = 'seen' WHERE id = ?", [(r["id"],) for r in rows])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="music-hunter")
     parser.add_argument("--playlist", type=int, metavar="ID",
@@ -412,6 +428,10 @@ def main() -> None:
 
     sub.add_parser("serve", help="Start the localhost player")
 
+    p = sub.add_parser("feedback", help="Notes sent from the feedback box (use with MUSIC_HUNTER_ROOT on a snapshot)")
+    p.add_argument("--all", action="store_true", help="Include notes already marked as seen")
+    p.add_argument("--mark-seen", action="store_true", help="Mark the listed notes as seen")
+
     p = sub.add_parser("migrate", help="Send this machine's playlists, sessions and audio to the Pi (v5)")
     p.add_argument("--server", help="The app on the Pi (default: [worker] server)")
     p.add_argument("--force", action="store_true", help="Replace the Pi's data even if it already has playlists")
@@ -420,7 +440,7 @@ def main() -> None:
     p.add_argument("--server", help="The app on the Pi (default: [worker] server)")
 
     p = sub.add_parser("pi", help="The app on the Pi: show its log, restart it, or install an update")
-    p.add_argument("action", choices=["log", "restart", "update"])
+    p.add_argument("action", choices=["log", "restart", "update", "feedback"])
     p.add_argument("--server", help="The app on the Pi (default: [worker] server)")
     p.add_argument("--lines", type=int, default=200)
 
@@ -437,7 +457,7 @@ def main() -> None:
     db.setup_logging()
     if args.playlist is not None:
         from . import find
-        if args.command in ("add-seeds", "embed-seeds", "serve", "worker", "migrate", "snapshot", "pi"):
+        if args.command in ("add-seeds", "embed-seeds", "serve", "worker", "migrate", "snapshot", "pi", "feedback"):
             sys.exit(f"{args.command} doesn't take --playlist (seeds come from the playlist's stars)")
         if not find.started(args.playlist):
             sys.exit(f"Playlist {args.playlist} has no Find music session yet (start it from the playlist page)")
@@ -471,6 +491,8 @@ def main() -> None:
     elif args.command == "serve":
         from .web import serve
         serve()
+    elif args.command == "feedback":
+        show_feedback(args.all, args.mark_seen)
     elif args.command == "migrate":
         from .transfer import migrate
         migrate(args.server, args.force)

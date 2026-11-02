@@ -133,6 +133,12 @@ def pi(action: str, server: str | None, lines: int = 200) -> None:
         print("Restarting.")
     elif action == "update":
         print(ha_update())
+    elif action == "feedback":
+        r = requests.get(f"{base}/api/admin/feedback", headers=headers, timeout=60)
+        r.raise_for_status()
+        for f in r.json():
+            where = " ".join(f"{k}={v}" for k, v in f["context"].items() if v is not None)
+            print(f"#{f['id']} {f['at']} [{f['status']}] {f['page'] or ''} {where}\n  {f['text']}\n")
 
 
 def ha_update() -> str:

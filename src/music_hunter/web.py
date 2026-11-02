@@ -355,6 +355,26 @@ def _job_view(job: dict | None) -> dict | None:
                                      "progress": job["progress"], "error": job["error"]}
 
 
+class FeedbackBody(BaseModel):
+    text: str
+    page: str | None = None
+    context: dict = {}
+
+
+@app.post("/api/feedback")
+def send_feedback(body: FeedbackBody) -> dict:
+    """A note from the feedback box (every page), kept in the library database for later review."""
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "Nothing to send")
+    lib = db.connect_library()
+    with lib:
+        fid = lib.execute("INSERT INTO feedback (page, context, text) VALUES (?, ?, ?)",
+                          (body.page, json.dumps(body.context), text[:5000])).lastrowid
+    db.log_event(lib, "feedback", feedback_id=fid, page=body.page, text=text[:500])
+    return {"ok": True, "id": fid}
+
+
 @app.get("/api/playlists")
 def get_playlists() -> list[dict]:
     conn = db.connect()
@@ -619,6 +639,12 @@ async def admin_restore(request: Request, force: int = 0):
     part.rename(incoming)
     _restart_soon()
     return {"ok": True, "bytes": incoming.stat().st_size}
+
+
+@app.get("/api/admin/feedback", dependencies=[Depends(worker_auth)])
+def admin_feedback() -> list[dict]:
+    rows = db.connect_library().execute("SELECT * FROM feedback ORDER BY id").fetchall()
+    return [{**dict(r), "context": json.loads(r["context"] or "{}")} for r in rows]
 
 
 @app.post("/api/admin/restart", dependencies=[Depends(worker_auth)])

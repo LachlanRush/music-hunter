@@ -65,7 +65,8 @@ const SameBpm = (() => {
   // The note under the track: what it plays at, and whether its copy is still being made.
   function note(track, loadedRate) {
     if (!track || !track.tempo_note) return "";
-    return track.rate !== 1 && loadedRate !== track.rate ? `${track.tempo_note} · getting it ready…` : track.tempo_note;
+    return track.rate !== 1 && loadedRate !== track.rate ? track.tempo_note.replace("Set to", "Switching to") + "…"
+                                                         : track.tempo_note;
   }
 
   return {player, note};

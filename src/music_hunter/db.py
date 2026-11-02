@@ -197,6 +197,16 @@ CREATE TABLE IF NOT EXISTS jobs (
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- v5: notes sent from the feedback box at the bottom of every page, for later review.
+CREATE TABLE IF NOT EXISTS feedback (
+    id      INTEGER PRIMARY KEY,
+    at      TEXT NOT NULL DEFAULT (datetime('now')),
+    page    TEXT,
+    context TEXT NOT NULL DEFAULT '{}',   -- JSON: playlist, track / play on air, position
+    text    TEXT NOT NULL,
+    status  TEXT NOT NULL DEFAULT 'new'   -- new | seen
+);
+
 -- v5 (SPEC.md §18.4): tracks waiting to be downloaded and analysed by the PC worker ([worker] mode = remote).
 CREATE TABLE IF NOT EXISTS work (
     id             INTEGER PRIMARY KEY,

@@ -5,7 +5,8 @@ Band filter and kept in cache/tempo/. Each playlist and each Find music session 
 target BPM; default: the playlist's median BPM), stored on the server:
 - a playlist with Same BPM on gets a copy of every track at its target, rendered in the background (new tracks too);
 - Find music gets copies on demand: the track playing first, the next one ahead;
-- copies are made at the target even while Same BPM is off, so turning it on is instant;
+- copies are made only once Same BPM has been turned on at least once (never before); after that they're kept
+  ready at the target even while it's off, so turning it back on is instant;
 - only one target per playlist / session is kept: changing it deletes the old copies (turning it off doesn't), and
   Find music keeps copies only for tracks not yet played or among the last few plays. [tempo] cache_mb caps the
   folder as a backstop.
@@ -42,25 +43,25 @@ def shown_bpm(bpm: float | None, around: float) -> int | None:
 
 
 def settings(conn, key: str, default_target: float) -> dict:
-    s = {"on": False, "bpm": None, **db.get_setting(conn, key, {})}
+    saved = db.get_setting(conn, key, {})
+    # Settings saved before `engaged` existed (0.5.4) came from someone using the switch: count them as engaged.
+    s = {"on": False, "bpm": None, "engaged": bool(saved), **saved}
     return {**s, "target": s["bpm"] or default_target}
 
 
 def rate_for(bpm: float | None, s: dict, ignore_off: bool = False) -> tuple[float, str]:
     """(playback rate, note) for a track: the reading of its BPM closest to the target; 1 if off or too far.
     `ignore_off`: the rate its copy is made at (copies are kept ready even while Same BPM is off)."""
-    if not s["on"] and not ignore_off:
-        return 1.0, ""
+    if not s["on"] and not (ignore_off and s.get("engaged")):
+        return 1.0, ""                                   # never turned on: no copies at all
     target, max_stretch = s["target"], CONFIG["bpm"]["max_stretch"]
     if not bpm or not target:
-        return 1.0, "tempo unknown: original speed"
+        return 1.0, "Own tempo (unknown BPM)"
     reading = min((bpm * f for f in FOLDS), key=lambda r: abs(target / r - 1))
     r = target / reading
     if abs(r - 1) > max_stretch:
-        return 1.0, f"original tempo ({round(reading)} BPM is beyond ±{round(max_stretch * 100)}%)"
-    rate = round(r, 3)
-    pct = round((rate - 1) * 100, 1)
-    return rate, f"{target:g} BPM ({'+' if pct >= 0 else ''}{pct:g}%)"
+        return 1.0, f"Own tempo ({round(reading)} BPM, too far from {target:g})"
+    return round(r, 3), f"Set to {target:g} BPM"
 
 
 def playlist_key(pid: int) -> str:
@@ -259,5 +260,7 @@ def sync_all() -> None:
 
 
 def save(conn, key: str, on: bool, bpm: float | None) -> None:
-    db.set_setting(conn, key, {"on": bool(on), "bpm": bpm}, log=True)
+    """`engaged` remembers that it has been turned on at least once: from then on copies are kept ready."""
+    engaged = bool(on) or bool(db.get_setting(conn, key, {}).get("engaged"))
+    db.set_setting(conn, key, {"on": bool(on), "bpm": bpm, "engaged": engaged}, log=True)
 

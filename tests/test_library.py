@@ -123,7 +123,7 @@ def test_same_bpm_render(lib):
     assert d["tempo"]["on"] is False and d["tracks"][0]["rate"] == 1 and d["tracks"][0]["bpm_shown"] == 94
     assert client.put(f"/api/playlists/{pid}/tempo", json={"on": True, "bpm": 145}).json()["target"] == 145
     tr = client.get(f"/api/playlists/{pid}").json()["tracks"][0]
-    assert tr["rate"] == round(145 / 140.4, 3) and tr["tempo_note"].startswith("145 BPM")
+    assert tr["rate"] == round(145 / 140.4, 3) and tr["tempo_note"] == "Set to 145 BPM"
 
     def wait(rate):
         for _ in range(100):
@@ -148,3 +148,35 @@ def test_same_bpm_render(lib):
         if not tempo.RENDERER.queue and tempo.RENDERER.current is None:
             break
         time.sleep(0.05)
+
+
+def test_feedback(lib, monkeypatch):
+    from fastapi.testclient import TestClient
+    from music_hunter import web
+
+    conn, _, _ = lib
+    monkeypatch.setenv("WORKER_TOKEN", "secret")
+    client = TestClient(web.app)
+    assert client.post("/api/feedback", json={"text": "  "}).status_code == 400
+    r = client.post("/api/feedback", json={"text": "Stars too small", "page": "/find/1",
+                                           "context": {"playlist_id": 1, "play_id": 7}})
+    assert r.status_code == 200
+    row = conn.execute("SELECT page, context, text, status FROM feedback").fetchone()
+    assert tuple(row) == ("/find/1", '{"playlist_id": 1, "play_id": 7}', "Stars too small", "new")
+    assert client.get("/api/admin/feedback").status_code == 401
+    got = client.get("/api/admin/feedback", headers={"Authorization": "Bearer secret"}).json()
+    assert got[0]["context"]["play_id"] == 7 and "feedback.js" in client.get("/").text
+
+
+def test_no_tempo_copies_until_first_engaged(lib):
+    from music_hunter import tempo
+
+    conn, track, _ = lib
+    pid = library.create_playlist(conn, "p")
+    s = tempo.playlist_settings(conn, pid)
+    assert tempo.rate_for(130.0, s, ignore_off=True)[0] == 1                 # never turned on: no copy
+    tempo.save(conn, tempo.playlist_key(pid), False, 140)
+    assert tempo.rate_for(130.0, tempo.playlist_settings(conn, pid), ignore_off=True)[0] == 1
+    tempo.save(conn, tempo.playlist_key(pid), True, 140)
+    tempo.save(conn, tempo.playlist_key(pid), False, 140)                   # off again: copies kept ready
+    assert tempo.rate_for(130.0, tempo.playlist_settings(conn, pid), ignore_off=True)[0] == round(140 / 130, 3)
