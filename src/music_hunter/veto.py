@@ -70,7 +70,7 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
     seed_set = {s.track_id for s in current_seeds(conn)} | \
         {r[0] for r in conn.execute(f"SELECT track_id FROM plays WHERE is_control = 0 AND rating = {ADD}")}
     seeds = conn.execute(
-        "SELECT t.id, e.embedding FROM tracks t JOIN track_embeddings e ON e.track_id = t.id"
+        "SELECT t.id, t.stars, e.embedding FROM tracks t JOIN track_embeddings e ON e.track_id = t.id"
         f" WHERE t.id IN ({','.join('?' * len(seed_set))})", sorted(seed_set)).fetchall() if seed_set else []
     if not seeds:
         return {}
@@ -78,7 +78,15 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
     seed_ids = np.array([r["id"] for r in seeds])
     sims = P @ S.T
     sims[ids[:, None] == seed_ids[None, :]] = -np.inf          # an Added track isn't its own seed
-    seed_close = _topk_mean(sims, np.ones(len(seed_ids)), CFG["seed_top_k"])
+    # Stars (v5): closeness to a seed counts less the fewer stars it has — as if the track were star_handicap_sd ×
+    # (5 − stars) / 4 robust SDs further from it (1 star: the full handicap; 5 stars: none). Adds not starred yet count
+    # as [find] add_seed_stars; seeds of older runs without stars count as 5.
+    plain = _topk_mean(sims, np.ones(len(seed_ids)), CFG["seed_top_k"])
+    spread = 1.4826 * np.median(np.abs(plain - np.median(plain))) or plain.std() or 1.0
+    default = CONFIG["find"]["add_seed_stars"] if any(r["stars"] is not None for r in seeds) else 5
+    stars = np.array([r["stars"] if r["stars"] is not None else default for r in seeds], float)
+    handicap = CFG["star_handicap_sd"] * spread * (5 - np.clip(stars, 1, 5)) / 4
+    seed_close = _topk_mean(sims - handicap[None, :], np.ones(len(seed_ids)), CFG["seed_top_k"])
 
     likes = conn.execute(
         "SELECT p.track_id, p.rating, e.embedding FROM plays p JOIN track_embeddings e ON e.track_id = p.track_id"

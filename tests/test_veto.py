@@ -151,3 +151,18 @@ def test_no_more_slipped_in_tracks(conn):
 
     db.set_setting(conn, "control_rate", 0.5, log=False)          # a rate drawn by the run earlier…
     assert not any(ratings.next_is_control(conn) for _ in range(50))  # …no longer used: controls are off
+
+
+def test_closeness_follows_seed_stars(conn, monkeypatch):
+    """Being close to a low-star seed counts less than being as close to a 5-star one."""
+    veto.update(conn)
+    seeds = [r[0] for r in conn.execute("SELECT id FROM tracks WHERE origin = 'original_reference'")]
+    monkeypatch.setitem(config.CONFIG["veto"], "star_handicap_sd", 1.0)
+    with conn:
+        conn.execute(f"UPDATE tracks SET stars = 5 WHERE id IN ({','.join('?' * len(seeds))})", seeds)
+    before = {t: v["raw"]["seed_closeness"] for t, v in veto.compute(conn).items()}
+    with conn:
+        conn.execute("UPDATE tracks SET stars = 1 WHERE id = ?", (seeds[0],))         # one seed drops to 1 star
+    after = {t: v["raw"]["seed_closeness"] for t, v in veto.compute(conn).items()}
+    assert all(after[t] <= before[t] + 1e-12 for t in before)                       # nobody gains…
+    assert sum(after[t] < before[t] - 1e-9 for t in before) > 0                      # …tracks near it lose

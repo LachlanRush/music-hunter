@@ -123,6 +123,8 @@ redownload_exempt_sd = 1.25      # …unless it rises into the top band
 backstop_sd = 2.5                # also vetoed: closeness to seeds this far below the median (clearly out of the area)
 min_analysed = 40                # no vetoes until this many tracks are analysed (statistics need a base)
 seed_top_k = 3                   # closeness to the k nearest seeds (original seeds and Adds)
+star_handicap_sd = 1.0           # v5: closeness to a 1-star seed counts as 1 robust SD less close (2 stars 0.75, 3 stars
+                                 # 0.5, 4 stars 0.25, 5 stars 0), so the "sounds like your seeds" part follows the stars
 like_top_k = 3                   # closeness to the k nearest likes (Close / Add weights from [ratings])
 rescore_every = 10               # while filling, re-run the veto after this many new tracks
 # v5 (2026-11-02): tempo. The playlist's tempo range = its 4–5 star tracks' tempos (all starred tracks if fewer than
