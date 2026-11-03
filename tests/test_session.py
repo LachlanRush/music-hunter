@@ -111,6 +111,8 @@ class InlineThread:
 
 
 def test_session(conn, monkeypatch):
+    monkeypatch.setitem(config.CONFIG["controls"], "rate_max", 0.1667)   # the v4 check keeps its controls
+    monkeypatch.setitem(config.CONFIG["controls"], "rate_min", 0.10)
     from fastapi.testclient import TestClient
 
     c = conn
@@ -213,9 +215,13 @@ def test_session(conn, monkeypatch):
     v = json.loads(plays[-1]["veto"])
     assert {"fixed_10pct", "fixed_20pct", "sd_1.0", "sd_1.25", "sd_1.5", "seed_closeness_below_0.75", "backstop", "tempo_band"} \
         == set(v["rules"]) and v["analysed"] >= config.CONFIG["veto"]["min_analysed"]
-    vetoed = c.execute("SELECT count(*), count(file_path) FROM tracks WHERE veto_state = 'vetoed'"
-                       " AND id NOT IN (SELECT track_id FROM plays)").fetchone()
-    assert vetoed[0] > 0 and vetoed[1] == 0                                  # vetoed tracks keep no audio
+    vetoed = c.execute("SELECT count(*) FROM tracks WHERE veto_state = 'vetoed'"
+                       " AND id NOT IN (SELECT track_id FROM plays)").fetchone()[0]
+    n_rated = c.execute("SELECT count(*) FROM plays WHERE rating IS NOT NULL").fetchone()[0]
+    kept = c.execute("SELECT gate_since FROM tracks WHERE veto_state = 'vetoed' AND file_path IS NOT NULL"
+                     " AND id NOT IN (SELECT track_id FROM plays)").fetchall()
+    assert vetoed > 0                           # below the gate: audio only while a once-playable track is in grace
+    assert all(g[0] is not None and n_rated - g[0] < config.CONFIG["veto"]["grace_ratings"] for g in kept)
 
     if not RW.get("enabled", True):                                          # v4: re-weighting is off
         assert not c.execute("SELECT count(*) FROM reweightings").fetchone()[0]

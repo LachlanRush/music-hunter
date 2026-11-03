@@ -130,7 +130,10 @@ def control_rate(conn: sqlite3.Connection, rng=random) -> float:
 
 
 def next_is_control(conn: sqlite3.Connection, rng=random) -> bool:
-    """Each play is a control independently, at this run's secret rate (SPEC.md §16.6)."""
+    """Each play is a control independently, at this run's secret rate (SPEC.md §16.6). Off altogether when
+    [controls] rate_max is 0 (v5, 2026-11-03), whatever rate a run drew earlier."""
+    if CONFIG["controls"]["rate_max"] <= 0:
+        return False
     return rng.random() < control_rate(conn, rng)
 
 
@@ -161,6 +164,44 @@ def vetoed_ids(conn: sqlite3.Connection) -> list[int]:
     return _ids(conn, "t.origin = 'pool' AND t.veto_state = 'vetoed' AND t.id NOT IN (SELECT track_id FROM plays)")
 
 
+def band_of(z: float | None) -> int:
+    """A playable track's score band (v5): 0 = just above the gate, … bands-1 = the open-ended top band."""
+    from .config import CONFIG as C
+
+    p, gate = C["picking"], -C["veto"]["cut_sd"]
+    if z is None:
+        return 0
+    return max(0, min(p["bands"] - 1, int((z - gate) // p["band_width_sd"])))
+
+
+def bands(conn: sqlite3.Connection, ids) -> dict[int, list[int]]:
+    """Playable tracks by band, each band in waiting order (analysed first goes first)."""
+    out: dict[int, list[int]] = {}
+    marks = ",".join("?" * len(ids))
+    for r in conn.execute(f"SELECT id, veto FROM tracks WHERE id IN ({marks}) ORDER BY id", list(ids)) if ids else []:
+        z = json.loads(r["veto"]).get("z") if r["veto"] else None
+        out.setdefault(band_of(z), []).append(r["id"])
+    return out
+
+
+def pick_by_band(conn: sqlite3.Connection, ids) -> int | None:
+    """The next track, not at random (SPEC.md §18.20): plays are spread over the score bands in proportion to how many
+    playable tracks each holds — each play goes to the band furthest behind its share over the last `window` plays —
+    and within a band the track waiting longest goes first."""
+    by = bands(conn, ids)
+    if not by:
+        return None
+    total = sum(len(v) for v in by.values())
+    recent = [json.loads(r[0]).get("band") for r in conn.execute(
+        "SELECT veto FROM plays WHERE veto IS NOT NULL AND is_control = 0 ORDER BY id DESC LIMIT ?",
+        (CONFIG["picking"]["window"],))]
+    recent = [b for b in recent if b is not None]
+    n = len(recent) + 1
+    deficit = {b: len(v) / total * n - recent.count(b) for b, v in by.items()}
+    best = max(by, key=lambda b: (round(deficit[b], 9), len(by[b])))
+    return by[best][0]
+
+
 def upcoming(conn: sqlite3.Connection, rng=random) -> int | None:
     """The track the next play will show, drawn ahead so the player can fetch its audio early.
 
@@ -180,7 +221,8 @@ def upcoming(conn: sqlite3.Connection, rng=random) -> int | None:
         choices = sorted(vetoed if control else playable)
         if not choices:
             return None
-        draw = {"control": control, "track_id": rng.choice(choices)}
+        pick = rng.choice(choices) if control or not CONFIG.get("picking") else pick_by_band(conn, choices)
+        draw = {"control": control, "track_id": pick}
         db.set_setting(conn, "next_draw", draw, log=False)
     return draw["track_id"]
 
@@ -220,6 +262,9 @@ def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = 
     if veto_json:                                  # the pool's split at this moment, for the "sources alone" baseline
         v = json.loads(veto_json)
         v["pool"] = {"playable": len(playable_ids(conn)), "vetoed": len(vetoed_ids(conn))}
+        if CONFIG.get("picking"):                  # v5: the band it came from and every band's size at that moment
+            v["band"] = band_of(v.get("z"))
+            v["band_sizes"] = {str(b): len(t) for b, t in sorted(bands(conn, playable_ids(conn)).items())}
         veto_json = json.dumps(v)
     with conn:
         play_id = conn.execute(

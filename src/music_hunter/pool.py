@@ -275,7 +275,8 @@ def restore_audio(conn: sqlite3.Connection, track_id: int) -> bool:
         db.log_event(conn, "audio_restore_failed", track_id=track_id, reason=re.sub(r"\x1b\[[0-9;]*m", "", str(e))[:200])
         return False
     with conn:
-        conn.execute("UPDATE tracks SET file_path = ? WHERE id = ?", (relative(file), track_id))
+        conn.execute("UPDATE tracks SET file_path = ?, redownloads = coalesce(redownloads, 0) + 1 WHERE id = ?",
+                     (relative(file), track_id))
     db.log_event(conn, "audio_restored", track_id=track_id, seconds=round(time.monotonic() - t0, 2))
     return True
 

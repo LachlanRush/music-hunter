@@ -187,9 +187,11 @@ def test_scripted_ratings(conn):
     assert tuple(outcome) == ("dropped", "already_rated_or_shown")
 
 
-def test_controls_are_random(conn):
+def test_controls_are_random(conn, monkeypatch):
     """The run draws its own secret control rate once (1 in 4 to 1 in 10); each play is a control independently
     at that rate; a control is a random pool track."""
+    monkeypatch.setitem(config.CONFIG["controls"], "rate_max", 0.1667)       # controls are off in v5 config
+    monkeypatch.setitem(config.CONFIG["controls"], "rate_min", 0.10)
     from music_hunter import db
     from music_hunter.ratings import control_rate
 
@@ -209,9 +211,11 @@ def test_controls_are_random(conn):
     assert len(ranks) > 1                              # not always the same (e.g. median) position
 
 
-def test_upcoming_matches_next_play(conn):
+def test_upcoming_matches_next_play(conn, monkeypatch):
     """v4: the preloaded track is the one that plays next when nothing changes in between, controls included;
     a control is a random *vetoed* track, a normal pick a random playable one."""
+    monkeypatch.setitem(config.CONFIG["controls"], "rate_max", 0.1667)       # controls are off in v5 config
+    monkeypatch.setitem(config.CONFIG["controls"], "rate_min", 0.10)
     from music_hunter import veto
     from music_hunter.ratings import show_next, upcoming
 
@@ -240,7 +244,7 @@ def test_run_ends_and_results_unseal(conn, monkeypatch):
     from music_hunter.config import CONFIG
 
     monkeypatch.setattr(web.worker, "start_if_needed", lambda: None)
-    monkeypatch.setitem(CONFIG["controls"], "target", 2)
+    monkeypatch.setitem(config.CONFIG["controls"], "target", 2)
     from music_hunter.ratings import control_rate
     control_rate(conn)                                     # drawn at the run's first play
     with TestClient(web.app) as client:

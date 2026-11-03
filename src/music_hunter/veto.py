@@ -156,7 +156,9 @@ def update(conn: sqlite3.Connection) -> dict:
         return {"analysed": 0, "playable": 0, "vetoed": 0, "newly_vetoed": 0, "returned": 0, "active": False}
     active = CFG["enabled"] and len(details) >= CFG["min_analysed"]
     rows = {r["id"]: r for r in analysed_tracks(conn)}
-    vetoed_now, returned = [], []
+    meta = {r["id"]: r for r in conn.execute("SELECT id, gate_since, redownloads FROM tracks WHERE origin = 'pool'")}
+    n_rated = conn.execute("SELECT count(*) FROM plays WHERE rating IS NOT NULL").fetchone()[0]
+    vetoed_now, returned, drop_audio = [], [], []
     with conn:
         for tid, d in details.items():
             r = rows[tid]
@@ -168,15 +170,26 @@ def update(conn: sqlite3.Connection) -> dict:
                 if state != "vetoed" and (d["z"] < -CFG["cut_sd"] or hard):
                     state = "vetoed"
                     vetoed_now.append(tid)
+                    if r["veto_state"] is None:          # just analysed: its audio goes straight away
+                        drop_audio.append(tid)
+                    else:                                # was playable: audio kept for grace_ratings ratings
+                        conn.execute("UPDATE tracks SET gate_since = ? WHERE id = ?", (n_rated, tid))
                 elif state == "vetoed" and d["z"] > -CFG["return_sd"] and not hard:
-                    state = "playable"
-                    returned.append(tid)
+                    m = meta[tid]
+                    if (r["file_path"] or (m["redownloads"] or 0) < CFG["max_redownloads"]
+                            or d["z"] > CFG["redownload_exempt_sd"]):
+                        state = "playable"               # with its audio (kept, or downloaded again)
+                        returned.append(tid)
+                        conn.execute("UPDATE tracks SET gate_since = NULL WHERE id = ?", (tid,))
+                elif state == "vetoed" and r["file_path"] and meta[tid]["gate_since"] is not None \
+                        and n_rated - meta[tid]["gate_since"] >= CFG["grace_ratings"]:
+                    drop_audio.append(tid)               # stayed below too long: audio goes
             elif not active and state == "vetoed" and not r["played"]:
                 state = "playable"
                 returned.append(tid)
             d["state"] = state
             conn.execute("UPDATE tracks SET veto_state = ?, veto = ? WHERE id = ?", (state, json.dumps(d), tid))
-        for tid in vetoed_now:                        # vetoed: the fingerprint stays, the audio goes
+        for tid in drop_audio:                        # the fingerprint stays, the audio goes
             fp = rows[tid]["file_path"]
             if fp and fp.startswith(CONFIG["paths"]["cache"] + "/"):
                 resolve(fp).unlink(missing_ok=True)
@@ -203,7 +216,7 @@ def settings_version(conn: sqlite3.Connection) -> int:
     import hashlib
 
     settings = {"veto": CONFIG["veto"], "controls": CONFIG["controls"], "pool_target": CONFIG["pool"]["target_size"],
-                "ratings": CONFIG["ratings"]}
+                "ratings": CONFIG["ratings"], "picking": CONFIG.get("picking")}
     text = json.dumps(settings, sort_keys=True)
     h = hashlib.sha1(text.encode()).hexdigest()[:16]
     row = conn.execute("SELECT id FROM settings_versions WHERE hash = ?", (h,)).fetchone()

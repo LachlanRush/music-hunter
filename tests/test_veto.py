@@ -16,7 +16,7 @@ def test_robust_z_ignores_a_long_tail():
 
 def test_veto_rotates_the_pool(conn):
     counts = veto.update(conn)
-    assert counts["active"] and 0 < counts["vetoed"] < counts["analysed"] * 0.3
+    assert counts["active"] and 0 < counts["vetoed"] < counts["analysed"] * 0.75     # gate at the median
     rows = conn.execute("SELECT id, file_path, veto_state, veto FROM tracks WHERE origin = 'pool'").fetchall()
     vetoed = [r for r in rows if r["veto_state"] == "vetoed"]
     assert all(r["file_path"] is None for r in vetoed)                  # audio dropped…
@@ -117,3 +117,59 @@ def test_playlist_tempo_from_four_and_five_stars(tmp_path, monkeypatch):
     assert tempo.playlist_tempo(lib, pid)["hi"] == 145.0
     add(148, 4)                                      # 3 BPM: updated
     assert tempo.playlist_tempo(lib, pid)["hi"] == 148.0
+
+
+def test_picks_follow_the_band_sizes(monkeypatch):
+    """Pools of 100 / 50 / 25 / 12 tracks by band → over 15 plays, 8 / 4 / 2 / 1 from them, and never a streak from
+    the top band; within a band, the track waiting longest first."""
+    import sqlite3
+
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE plays (id INTEGER PRIMARY KEY, veto TEXT, is_control INTEGER)")
+    pools = {0: list(range(0, 100)), 1: list(range(100, 150)), 2: list(range(150, 175)), 3: list(range(175, 187))}
+    monkeypatch.setattr(ratings, "bands", lambda conn, ids: {b: [t for t in v if t in ids] for b, v in pools.items()
+                                                              if any(t in ids for t in v)})
+    monkeypatch.setitem(config.CONFIG["picking"], "window", 15)
+    left, got = set(range(187)), []
+    for _ in range(15):
+        t = ratings.pick_by_band(c, left)
+        b = next(b for b, v in pools.items() if t in v)
+        assert t == min(x for x in pools[b] if x in left)                       # longest waiting first
+        got.append(b)
+        left.discard(t)
+        c.execute("INSERT INTO plays (veto, is_control) VALUES (?, 0)", (json.dumps({"band": b}),))
+    assert [got.count(b) for b in range(4)] == [8, 4, 2, 1]
+
+
+def test_grace_and_redownload_limit(conn, monkeypatch):
+    """A playable track that falls below the gate keeps its audio for grace_ratings ratings, then loses it; a track
+    whose audio was downloaded again max_redownloads times isn't brought back (unless it reaches the top band)."""
+    veto.update(conn)
+    tid = conn.execute("SELECT id FROM tracks WHERE veto_state = 'playable' AND file_path IS NOT NULL"
+                       " AND id NOT IN (SELECT track_id FROM plays) LIMIT 1").fetchone()[0]
+    z = json.loads(conn.execute("SELECT veto FROM tracks WHERE id = ?", (tid,)).fetchone()[0])["z"]
+    monkeypatch.setitem(config.CONFIG["veto"], "cut_sd", -z - 0.01)            # gate just above it: it falls below
+    monkeypatch.setitem(config.CONFIG["veto"], "return_sd", -z - 0.5)
+    veto.update(conn)
+    row = lambda: conn.execute("SELECT veto_state, file_path, gate_since FROM tracks WHERE id = ?", (tid,)).fetchone()
+    assert row()[0] == "vetoed" and row()[1] is not None                         # in grace: audio kept
+    monkeypatch.setitem(config.CONFIG["veto"], "grace_ratings", 0)
+    veto.update(conn)
+    assert row()[1] is None                                                      # grace over: audio gone
+    with conn:
+        conn.execute("UPDATE tracks SET redownloads = 2 WHERE id = ?", (tid,))
+    monkeypatch.setitem(config.CONFIG["veto"], "cut_sd", -z + 0.5)             # it's well above the gate again…
+    monkeypatch.setitem(config.CONFIG["veto"], "return_sd", -z + 0.4)
+    monkeypatch.setitem(config.CONFIG["veto"], "redownload_exempt_sd", 99)
+    veto.update(conn)
+    assert row()[0] == "vetoed"                                                  # …but downloaded twice already
+    monkeypatch.setitem(config.CONFIG["veto"], "redownload_exempt_sd", -99)    # top band: comes back regardless
+    veto.update(conn)
+    assert row()[0] == "playable" and tid in pool.missing_audio(conn)
+
+
+def test_no_more_slipped_in_tracks(conn):
+    from music_hunter import db
+
+    db.set_setting(conn, "control_rate", 0.5, log=False)          # a rate drawn by the run earlier…
+    assert not any(ratings.next_is_control(conn) for _ in range(50))  # …no longer used: controls are off
