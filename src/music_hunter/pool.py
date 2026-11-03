@@ -265,14 +265,21 @@ def seed_pool_counts(conn: sqlite3.Connection) -> dict[int, int]:
 def restore_audio(conn: sqlite3.Connection, track_id: int) -> bool:
     """Download a track's audio again (a vetoed track that became playable, or an injected control). Its
     fingerprint and loudness are already stored, so nothing is re-analysed. True if the audio is there."""
+    from .analysis import refusal, youtube_paused
+
     t = conn.execute("SELECT video_id, file_path FROM tracks WHERE id = ?", (track_id,)).fetchone()
     if t["file_path"] and resolve(t["file_path"]).exists():
         return True
+    if youtube_paused():                       # YouTube is refusing this home connection: don't add to it
+        return False
     t0 = time.monotonic()
     try:
         file = download(t["video_id"])
     except Exception as e:
-        db.log_event(conn, "audio_restore_failed", track_id=track_id, reason=re.sub(r"\x1b\[[0-9;]*m", "", str(e))[:200])
+        reason = re.sub(r"\x1b\[[0-9;]*m", "", str(e))
+        db.log_event(conn, "audio_restore_failed", track_id=track_id, reason=reason[:200])
+        if refusal(reason) == "blocked":       # the Pi shares the PC's address: pause both
+            youtube_paused(pause_minutes=CONFIG["worker"]["blocked_pause_minutes"][1])
         return False
     with conn:
         conn.execute("UPDATE tracks SET file_path = ?, redownloads = coalesce(redownloads, 0) + 1 WHERE id = ?",

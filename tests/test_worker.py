@@ -179,3 +179,23 @@ def test_youtube_refusal_hands_back_and_pauses(remote, monkeypatch):
     db.set_setting(lib, "worker_paused_until", time.time() + 60, log=False)
     assert analysis.worker_connected(lib)                            # pausing on purpose: no need to wake
     assert analysis.refusal("HTTP Error 403: Forbidden") == "temporary" and analysis.refusal("Video unavailable") is None
+
+
+def test_app_downloads_pause_when_youtube_refuses(remote, monkeypatch):
+    """The Pi's own downloads (audio brought back for a track that rose above the gate) share the home address with
+    the PC: a "not a bot" refusal pauses them, and the PC's pause stops them too."""
+    from music_hunter import pool
+
+    http, _, root = remote
+    lib = db.connect_library()
+    with lib:
+        tid = lib.execute("INSERT INTO tracks (artist, title, duration_s, origin, video_id) VALUES ('a', 't', 200, 'pool',"
+                          " 'vidZ')").lastrowid
+    calls = []
+
+    def refuse(video_id, folder=None):
+        calls.append(video_id)
+        raise RuntimeError("ERROR: [youtube] vidZ: Sign in to confirm you’re not a bot.")
+    monkeypatch.setattr(pool, "download", refuse)
+    assert not pool.restore_audio(lib, tid) and analysis.youtube_paused()
+    assert not pool.restore_audio(lib, tid) and calls == ["vidZ"]              # paused: not tried again

@@ -183,6 +183,16 @@ def worker_connected(lib) -> bool:
     return (seen is not None and time.time() - seen < CFG["connected_seconds"]) or time.time() < paused
 
 
+def youtube_paused(pause_minutes: float | None = None) -> bool:
+    """Whether downloads are paused because YouTube refused this home connection (set by the PC worker's hand-backs
+    or by the app's own downloads); with pause_minutes, start such a pause now."""
+    lib = db.connect_library()
+    if pause_minutes:
+        db.set_setting(lib, "worker_paused_until", time.time() + pause_minutes * 60, log=False)
+        db.log_event(lib, "youtube_paused", minutes=pause_minutes)
+    return time.time() < (db.get_setting(lib, "worker_paused_until") or 0)
+
+
 BLOCKED = ("confirm you’re not a bot", "confirm you're not a bot", "Sign in to confirm")
 TEMPORARY = ("HTTP Error 403", "HTTP Error 429")
 

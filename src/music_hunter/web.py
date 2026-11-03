@@ -109,7 +109,8 @@ class Worker:
                                               # which are due after almost every rating and would starve it
         if left and playable < pool_cfg["target_size"]:
             return "fill"
-        if missing_audio(conn):
+        from .analysis import youtube_paused
+        if missing_audio(conn) and not youtube_paused():
             return "restore"
         if played_since and playable < pool_cfg["refill_below"]:
             return "pull"
