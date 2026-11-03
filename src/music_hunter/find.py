@@ -128,7 +128,9 @@ def sync_add(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: int
         with lib:
             n = lib.execute("DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ? AND status = 'added'"
                             " AND stars IS NULL", (playlist_id, p["library_id"])).rowcount
-            if n and not lib.execute("SELECT 1 FROM playlist_tracks WHERE track_id = ?", (p["library_id"],)).fetchone():
+            # The file itself stays: the session's rating change owns it (it may still be playing).
+            if n and not lib.execute("SELECT 1 FROM playlist_tracks WHERE track_id = ? UNION SELECT 1 FROM"
+                                     " deleted_tracks WHERE track_id = ?", (p["library_id"],) * 2).fetchone():
                 lib.execute("UPDATE tracks SET file_path = NULL WHERE id = ?", (p["library_id"],))
 
 

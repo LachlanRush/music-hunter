@@ -184,6 +184,26 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
     PRIMARY KEY (playlist_id, track_id)
 );
 
+-- v5: tracks removed from a playlist, kept for [library] deleted_days (with their stars) so they can be restored.
+CREATE TABLE IF NOT EXISTS deleted_tracks (
+    playlist_id  INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    track_id     INTEGER NOT NULL REFERENCES tracks(id),
+    stars        INTEGER,
+    status       TEXT NOT NULL DEFAULT 'member',
+    added_at     TEXT,
+    starred_at   TEXT,
+    bpm_override REAL,
+    deleted_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+    PRIMARY KEY (playlist_id, track_id)
+);
+
+-- v5: Spotify tracks removed from a playlist for good — a refresh from Spotify doesn't bring them back.
+CREATE TABLE IF NOT EXISTS removed_spotify (
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    spotify_id  TEXT NOT NULL,
+    PRIMARY KEY (playlist_id, spotify_id)
+);
+
 -- v5: background jobs (imports now; Find music, refills and top-ups later), run here or by the PC worker (§18.4).
 CREATE TABLE IF NOT EXISTS jobs (
     id          INTEGER PRIMARY KEY,

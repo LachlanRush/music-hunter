@@ -67,6 +67,11 @@ def run_job(conn: sqlite3.Connection, job: dict) -> None:
             progress.update(result)
             from . import tempo
             tempo.sync_playlist(conn, job["playlist_id"])          # Same BPM copies for the new tracks
+        elif job["kind"] == "add":                              # one song added by hand
+            result = library.add_song(conn, job["payload"]["link"], job["playlist_id"], report)
+            progress.update(result)
+            from . import tempo
+            tempo.sync_playlist(conn, job["playlist_id"])
         else:
             raise ValueError(f"Unknown job kind {job['kind']!r}")
         _set(conn, job["id"], state="done", progress=progress)

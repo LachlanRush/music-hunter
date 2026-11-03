@@ -69,6 +69,15 @@ li.playing .cover-btn { outline: 2px solid var(--accent); outline-offset: 1px; }
   font: 400 11px var(--mono); color: var(--muted); }
 input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 .empty { color: var(--muted); }
+.add-song { display: flex; gap: 8px; }
+.add-song input { flex: 1 1 auto; min-width: 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--fg); font: 400 14px var(--body); }
+.deleted ol { margin-top: 8px; }
+.deleted li { grid-template-columns: 40px minmax(0, 1fr) auto; cursor: default; }
+.deleted li:hover { background: none; }
+.deleted .acts { display: flex; gap: 6px; }
+.deleted .acts button { padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface);
+  font: 500 12px var(--body); color: var(--fg); }
 li { margin-inline: -8px; padding-inline: 8px; border-radius: 6px; }
 @media (hover: hover) { li[data-row]:not(.unavailable):hover { background: var(--surface); } }
 li .cover-btn { cursor: default; }
@@ -131,7 +140,15 @@ li .cover-btn { cursor: default; }
     <h2 id="tracks-label">Tracks</h2>
     <ol id="tracks"></ol>
   </section>
+  <form class="add-song" id="add-song">
+    <input id="add-link" type="url" placeholder="Add a song — Spotify or YouTube Music link" aria-label="Song link" required>
+    <button class="btn" type="submit">Add</button>
+  </form>
   <section id="job" hidden></section>
+  <details class="failures deleted" id="deleted-section" hidden>
+    <summary id="deleted-label">Recently deleted</summary>
+    <ol id="deleted"></ol>
+  </details>
 </main>
 
 <div class="player" id="player" hidden>
@@ -193,6 +210,17 @@ function render() {
   $("added-section").hidden = !added.length;
   $("added").innerHTML = added.map(row).join("");
   $("tracks").innerHTML = main.length ? main.map(row).join("") : `<li class="empty" style="display:block">No tracks yet.</li>`;
+  const del = d.deleted || [];
+  $("deleted-section").hidden = !del.length;
+  $("deleted-label").textContent = `Recently deleted (${del.length})`;
+  $("deleted").innerHTML = del.map((t) => {
+    const days = Math.floor((Date.now() - Date.parse(t.deleted_at.replace(" ", "T") + "Z")) / 864e5);
+    return `<li><div class="art">${t.art ? `<img class="art" src="${t.art}" alt="">` : ""}</div>
+      <div class="t"><b>${esc(t.title)}</b><span>${esc(t.artist)}</span>
+        <span class="sub">${t.stars ? "★".repeat(t.stars) + " • " : ""}${days ? `${days} day${days > 1 ? "s" : ""} ago` : "today"}</span></div>
+      <div class="acts"><button data-restore="${t.id}">Restore</button>
+        <button data-forever="${t.id}" style="color:var(--bad)">Delete</button></div></li>`;
+  }).join("");
   const job = d.job, active = job && (job.state === "queued" || job.state === "running");
   const fails = (job && job.progress && job.progress.failures) || [];
   $("importing").hidden = !active;                 // progress at the top; what couldn't be imported at the bottom
@@ -202,7 +230,7 @@ function render() {
         <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>`;
   }
   // Downloads that failed (e.g. YouTube refusing for a while) can be tried again; tracks already imported are kept.
-  const retryable = job && job.kind === "import" && !active
+  const retryable = job && (job.kind === "import" || job.kind === "add") && !active
     && (job.state === "failed" || fails.some((f) => /^(download|analysis) failed/.test(f.reason)));
   $("job").hidden = !(fails.length || (job && job.state === "failed"));
   if (!$("job").hidden) {
@@ -211,7 +239,10 @@ function render() {
           <ul>${fails.map((f) => `<li style="display:block;border:0;padding:2px 0;cursor:default">${esc(f.artist)} – ${esc(f.title)}: ${esc(f.reason)}</li>`).join("")}</ul></details>` : "")
       + (retryable ? `<button class="btn" id="retry-import">Try again</button>` : "");
     if (retryable) $("retry-import").onclick = async () => {
-      try { await api(`/api/playlists/${PID}/import`, {}); } catch (e) { showError(`Couldn't start the import: ${e.message}`); }
+      try {
+        if (job.kind === "add") await api(`/api/playlists/${PID}/add`, {link: job.payload_link || ""});
+        else await api(`/api/playlists/${PID}/import`, {});
+      } catch (e) { showError(`Couldn't start the import: ${e.message}`); }
       load();
     };
   }
@@ -288,7 +319,8 @@ document.addEventListener("click", async (e) => {
   if (plMore) {
     const menu = document.createElement("div");
     menu.className = "menu";
-    menu.innerHTML = `<button data-pl-action="rename">Rename</button>
+    menu.innerHTML = (data.can_refresh ? `<button data-pl-action="refresh">Refresh from Spotify</button>` : "")
+      + `<button data-pl-action="rename">Rename</button>
       <button data-pl-action="delete" style="color:var(--bad)">Delete playlist</button>`;
     plMore.parentElement.appendChild(menu);
     return;
@@ -322,6 +354,20 @@ document.addEventListener("click", async (e) => {
     catch (err) { showError(err.message); }
     return;
   }
+  const restore = e.target.closest("[data-restore]");
+  if (restore) {
+    try { await api(`/api/playlists/${PID}/deleted/${restore.dataset.restore}/restore`, {}); await load(); }
+    catch (err) { showError(`Couldn't restore it: ${err.message}`); }
+    return;
+  }
+  const forever = e.target.closest("[data-forever]");
+  if (forever) {
+    const t = (data.deleted || []).find((x) => x.id === Number(forever.dataset.forever));
+    if (!confirm(`Delete "${t ? t.title : "this track"}" for good? It can't be restored.`)) return;
+    try { await api(`/api/playlists/${PID}/deleted/${forever.dataset.forever}`, undefined, "DELETE"); await load(); }
+    catch (err) { showError(`Couldn't delete it: ${err.message}`); }
+    return;
+  }
   const remove = e.target.closest("[data-remove]");
   if (remove) {
     try { await api(`/api/playlists/${PID}/tracks/${remove.dataset.remove}`, undefined, "DELETE"); await load(); }
@@ -332,15 +378,20 @@ document.addEventListener("click", (e) => {
   const a = e.target.closest("[data-pl-action]");
   if (!a) return;
   document.querySelectorAll(".menu").forEach((m) => m.remove());
-  (a.dataset.plAction === "rename" ? renamePlaylist : deletePlaylist)();
+  ({rename: renamePlaylist, delete: deletePlaylist, refresh: refreshPlaylist})[a.dataset.plAction]();
 });
 async function renamePlaylist() {
   const name = prompt("Playlist name", data.name);
   if (!name) return;
   await api(`/api/playlists/${PID}`, {name}, "PATCH"); load();
 }
+async function refreshPlaylist() {
+  try { await api(`/api/playlists/${PID}/import`, {}); } catch (e) { showError(`Couldn't refresh: ${e.message}`); }
+  load();
+}
 async function deletePlaylist() {
-  if (!confirm(`Delete "${data.name}"? Tracks only in this playlist lose their audio.`)) return;
+  if (!confirm(`Delete "${data.name}" for good?\n\nThis can't be undone: the playlist, its stars, its Find music and `
+      + "its Recently deleted list are removed, and tracks that are in no other playlist lose their audio.")) return;
   await api(`/api/playlists/${PID}`, undefined, "DELETE"); location.href = "/";
 }
 
@@ -477,6 +528,11 @@ window.feedbackContext = () => {
   const t = queue[pos];
   return {playlist_id: PID, track_id: t ? t.id : null, position_s: Math.round(audio.currentTime || 0)};
 };
+$("add-song").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try { await api(`/api/playlists/${PID}/add`, {link: $("add-link").value}); $("add-link").value = ""; load(); }
+  catch (err) { showError(err.message); }
+});
 load().then(renderTempo);
 loadFind();
 </script>

@@ -55,7 +55,10 @@ def test_remove_drops_audio_only_when_in_no_playlist(lib):
     library.remove_from_playlist(conn, p1, t)
     path = conn.execute("SELECT file_path FROM tracks WHERE id = ?", (t,)).fetchone()[0]
     assert path and (root / path).exists()                           # still in "two"
-    library.remove_from_playlist(conn, p2, t)
+    library.remove_from_playlist(conn, p2, t)                         # in Recently deleted: audio kept
+    assert (root / path).exists() and [d["id"] for d in library.deleted_tracks(conn, p2)] == [t]
+    library.delete_forever(conn, p2, t)
+    library.delete_forever(conn, p1, t)
     assert conn.execute("SELECT file_path FROM tracks WHERE id = ?", (t,)).fetchone()[0] is None
     assert not (root / path).exists()
     assert conn.execute("SELECT count(*) FROM tracks WHERE id = ?", (t,)).fetchone()[0] == 1   # kept for learning
@@ -205,3 +208,62 @@ def test_track_bpm_override(lib):
     assert client.get(f"/api/playlists/{pid}").json()["tracks"][0]["rate"] == 1
     client.put(url, json={"bpm": 150})                                              # a new value replaces it
     assert conn.execute("SELECT bpm_override FROM playlist_tracks").fetchone()[0] == 150
+
+
+def test_recently_deleted(lib):
+    """Removing a track moves it to Recently deleted with its stars; Restore puts it back starred; Delete forever and
+    the 30-day limit remove it for good, and a Spotify refresh leaves removed tracks out."""
+    conn, track, root = lib
+    pid = library.create_playlist(conn, "p")
+    a, b = track("A"), track("B")
+    for t in (a, b):
+        library.add_to_playlist(conn, pid, t)
+    library.set_stars(conn, pid, a, 4)
+    with conn:
+        conn.execute("UPDATE tracks SET spotify_id = 'spA' WHERE id = ?", (a,))
+    library.remove_from_playlist(conn, pid, a)
+    assert [t["id"] for t in library.playlist_tracks(conn, pid)] == [b]
+    assert [(d["id"], d["stars"]) for d in library.deleted_tracks(conn, pid)] == [(a, 4)]
+    library.restore_track(conn, pid, a)
+    assert {t["id"]: t["stars"] for t in library.playlist_tracks(conn, pid)} == {a: 4, b: None}
+    library.remove_from_playlist(conn, pid, a)
+    with conn:
+        conn.execute("UPDATE deleted_tracks SET deleted_at = datetime('now', '-31 days')")
+    assert library.purge_deleted(conn) == 1 and library.deleted_tracks(conn, pid) == []
+    assert conn.execute("SELECT spotify_id FROM removed_spotify WHERE playlist_id = ?", (pid,)).fetchone()[0] == "spA"
+    from music_hunter import spotify
+    calls = []
+    import pytest
+    mp = pytest.MonkeyPatch()
+    mp.setattr(spotify, "expand", lambda links: ["spA"])
+    mp.setattr(spotify, "track", lambda sid: calls.append(sid))
+    out = library.import_spotify(conn, "https://open.spotify.com/playlist/x", pid)
+    mp.undo()
+    assert out["skipped"] == 1 and calls == []                       # removed for good: not brought back
+
+
+def test_youtube_links():
+    assert library.youtube_video_id("https://music.youtube.com/watch?v=1ORA5_EFQHo&si=abc") == "1ORA5_EFQHo"
+    assert library.youtube_video_id("https://youtu.be/1ORA5_EFQHo") == "1ORA5_EFQHo"
+    assert library.youtube_video_id("https://open.spotify.com/track/2zGn6hwGCnANDoSsAxlnRx") is None
+
+
+def test_add_song_and_restore_api(lib, monkeypatch):
+    from fastapi.testclient import TestClient
+    from music_hunter import web
+
+    conn, track, _ = lib
+    monkeypatch.setattr(web.job_runner, "kick", lambda: None)
+    pid = library.create_playlist(conn, "p")
+    t = track("A")
+    library.add_to_playlist(conn, pid, t)
+    client = TestClient(web.app)
+    assert client.post(f"/api/playlists/{pid}/add", json={"link": "not a link"}).status_code == 400
+    assert client.post(f"/api/playlists/{pid}/add", json={"link": "https://open.spotify.com/playlist/abc"}).status_code == 400
+    job = client.post(f"/api/playlists/{pid}/add", json={"link": "https://music.youtube.com/watch?v=1ORA5_EFQHo"}).json()
+    assert conn.execute("SELECT kind FROM jobs WHERE id = ?", (job["job_id"],)).fetchone()[0] == "add"
+    assert client.delete(f"/api/playlists/{pid}/tracks/{t}").status_code == 200
+    d = client.get(f"/api/playlists/{pid}").json()
+    assert d["tracks"] == [] and d["deleted"][0]["id"] == t
+    assert client.post(f"/api/playlists/{pid}/deleted/{t}/restore").status_code == 200
+    assert client.get(f"/api/playlists/{pid}").json()["tracks"][0]["id"] == t

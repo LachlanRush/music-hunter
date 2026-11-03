@@ -353,7 +353,8 @@ def _playlist_or_404(conn, playlist_id: int):
 
 def _job_view(job: dict | None) -> dict | None:
     return None if job is None else {"id": job["id"], "kind": job["kind"], "state": job["state"],
-                                     "progress": job["progress"], "error": job["error"]}
+                                     "progress": job["progress"], "error": job["error"],
+                                     "payload_link": job["payload"].get("link")}
 
 
 class FeedbackBody(BaseModel):
@@ -403,7 +404,8 @@ def new_playlist(body: NewPlaylist) -> dict:
 
 @app.post("/api/playlists/{playlist_id}/import")
 def retry_import(playlist_id: int) -> dict:
-    """Run the playlist's Spotify import again: tracks already in the library are reused, the rest are tried again."""
+    """Run the playlist's Spotify import again ("Try again", "Refresh from Spotify"): new tracks on Spotify are added,
+    tracks already here are kept, failed ones tried again; tracks removed from this playlist stay out."""
     conn = db.connect()
     _playlist_or_404(conn, playlist_id)
     last = jobs.latest_for(conn, playlist_id, "import")
@@ -438,6 +440,9 @@ def get_playlist(playlist_id: int) -> dict:
     return {"id": p["id"], "name": p["name"], "description": p["description"],
             "image": f"/cover/{p['id']}" if p["image_path"] else None,
             "job": _job_view(jobs.latest_for(conn, playlist_id)),
+            "deleted": [{**d, "art": f"/art/{d['id']}" if d["has_art"] else None}
+                        for d in library.deleted_tracks(conn, playlist_id)],
+            "can_refresh": bool((jobs.latest_for(conn, playlist_id, "import") or {}).get("payload", {}).get("link")),
             "tracks": [view(t) for t in tracks], "tempo": _tempo_view(s),
             "others": [{"id": o["id"], "name": o["name"]} for o in library.list_playlists(conn) if o["id"] != playlist_id],
             "max_stretch": CONFIG["bpm"]["max_stretch"], "phone_headroom_db": CONFIG["loudness"]["phone_headroom_db"]}
@@ -515,16 +520,69 @@ def star_track(playlist_id: int, track_id: int, body: StarsBody) -> dict:
     return {"ok": True}
 
 
-@app.delete("/api/playlists/{playlist_id}/tracks/{track_id}")
-def remove_track(playlist_id: int, track_id: int) -> dict:
-    conn = db.connect()
-    library.remove_from_playlist(conn, playlist_id, track_id)
+def _after_membership_change(conn, playlist_id: int) -> None:
+    """A track left or came back: tempo copies follow, and so do the Find music tracks it found (they leave unless
+    another seed found them too, and return with it)."""
     _sync_tempo(conn, playlist_id)
-    if find.started(playlist_id):         # the tracks it found for Find music leave too, unless another seed found them
+    if find.started(playlist_id):
         sess = db.connect(playlist_id)
         find.sync_seeds(conn, sess, playlist_id)
         session_worker(playlist_id).start_if_needed()        # top the pool up from the remaining seeds
+
+
+@app.delete("/api/playlists/{playlist_id}/tracks/{track_id}")
+def remove_track(playlist_id: int, track_id: int) -> dict:
+    """Move a track to the playlist's Recently deleted list."""
+    conn = db.connect()
+    try:
+        library.remove_from_playlist(conn, playlist_id, track_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    _after_membership_change(conn, playlist_id)
     return {"ok": True}
+
+
+@app.post("/api/playlists/{playlist_id}/deleted/{track_id}/restore")
+def restore_track(playlist_id: int, track_id: int) -> dict:
+    conn = db.connect()
+    try:
+        library.restore_track(conn, playlist_id, track_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    _after_membership_change(conn, playlist_id)
+    return {"ok": True}
+
+
+@app.delete("/api/playlists/{playlist_id}/deleted/{track_id}")
+def delete_track_forever(playlist_id: int, track_id: int) -> dict:
+    conn = db.connect()
+    library.delete_forever(conn, playlist_id, track_id)
+    return {"ok": True}
+
+
+class LinkBody(BaseModel):
+    link: str
+
+
+@app.post("/api/playlists/{playlist_id}/add")
+def add_song(playlist_id: int, body: LinkBody) -> dict:
+    """Add one song from a Spotify track link or a YouTube / YouTube Music link (downloaded and analysed as a job)."""
+    from . import spotify
+
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    link = body.link.strip()
+    ok = library.youtube_video_id(link) is not None
+    if not ok:
+        try:
+            ok = spotify.parse(link)[0] == "track"
+        except ValueError:
+            ok = False
+    if not ok:
+        raise HTTPException(400, "Paste a Spotify track link or a YouTube / YouTube Music link")
+    job_id = jobs.enqueue(conn, "add", playlist_id, link=link)
+    job_runner.kick()
+    return {"job_id": job_id}
 
 
 @app.post("/api/playlists/{playlist_id}/tracks")

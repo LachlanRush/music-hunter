@@ -100,8 +100,9 @@ unrated_counts_as = 2                         # Close
 # changeable with the most recent rating. Logged only: no effect on the veto or picks. Keyed by rating.
 # v5 (2026-10-31): five bad, five good, not overlapping; Close gets the bad ones (what kept it from being an Add).
 # 2026-11-02: "lyrics" folded into "vocals"; "wrong genre" for a track that's completely off (rock among EDM).
-"1" = ["vocals", "wrong genre", "boring", "wrong energy", "harsh sound"]
-"2" = ["vocals", "wrong genre", "boring", "wrong energy", "harsh sound"]
+# 2026-11-03: ordered by how much they put me off.
+"1" = ["vocals", "wrong energy", "harsh sound", "boring", "wrong genre"]
+"2" = ["vocals", "wrong energy", "harsh sound", "boring", "wrong genre"]
 "3" = ["great vocals", "groove", "melody", "energy", "the drop"]
 
 [find]
@@ -333,3 +334,9 @@ entity_id = ""
 # v5 (SPEC.md §18.11): reaching Home Assistant from the PC (`music-hunter pi update`; HA_TOKEN in .env).
 [pi]
 home_assistant = "http://100.90.89.29:8123"
+
+# v5 (2026-11-03): a track removed from a playlist goes to its "Recently deleted" list (stars kept), can be restored
+# or deleted for good there, and is deleted for good after this many days. A refresh from Spotify never brings back
+# a track removed from the playlist.
+[library]
+deleted_days = 30

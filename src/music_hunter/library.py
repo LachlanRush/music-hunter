@@ -38,9 +38,13 @@ def rename_playlist(conn: sqlite3.Connection, playlist_id: int, name: str) -> No
 
 def delete_playlist(conn: sqlite3.Connection, playlist_id: int) -> None:
     """Delete a playlist; audio of tracks left in no playlist is deleted (fingerprints are kept)."""
-    tracks = [r[0] for r in conn.execute("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?", (playlist_id,))]
+    tracks = [r[0] for r in conn.execute("SELECT track_id FROM playlist_tracks WHERE playlist_id = ? UNION"
+                                         " SELECT track_id FROM deleted_tracks WHERE playlist_id = ?",
+                                         (playlist_id, playlist_id))]
     with conn:
         conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?", (playlist_id,))
+        conn.execute("DELETE FROM deleted_tracks WHERE playlist_id = ?", (playlist_id,))
+        conn.execute("DELETE FROM removed_spotify WHERE playlist_id = ?", (playlist_id,))
         conn.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
     for tid in tracks:
         _drop_if_orphaned(conn, tid)
@@ -84,19 +88,68 @@ def add_to_playlist(conn: sqlite3.Connection, playlist_id: int, track_id: int, s
     if not conn.execute("SELECT 1 FROM playlists WHERE id = ?", (playlist_id,)).fetchone():
         raise ValueError("No such playlist")
     with conn:
+        conn.execute("DELETE FROM deleted_tracks WHERE playlist_id = ? AND track_id = ?", (playlist_id, track_id))
         return conn.execute("INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, status) VALUES (?, ?, ?)",
                             (playlist_id, track_id, status)).rowcount > 0
 
 
 def remove_from_playlist(conn: sqlite3.Connection, playlist_id: int, track_id: int) -> None:
+    """Move a track to the playlist's Recently deleted list (stars and audio kept, restorable)."""
     with conn:
+        n = conn.execute("INSERT OR REPLACE INTO deleted_tracks (playlist_id, track_id, stars, status, added_at,"
+                         " starred_at, bpm_override) SELECT playlist_id, track_id, stars, status, added_at, starred_at,"
+                         " bpm_override FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                         (playlist_id, track_id)).rowcount
         conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?", (playlist_id, track_id))
+    if not n:
+        raise ValueError("That track isn't in this playlist")
+
+
+def restore_track(conn: sqlite3.Connection, playlist_id: int, track_id: int) -> None:
+    """Put a recently deleted track back, with its stars."""
+    with conn:
+        n = conn.execute("INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, stars, status, added_at,"
+                         " starred_at, bpm_override) SELECT playlist_id, track_id, stars, status,"
+                         " coalesce(added_at, strftime('%Y-%m-%d %H:%M:%f', 'now')), starred_at, bpm_override"
+                         " FROM deleted_tracks WHERE playlist_id = ? AND track_id = ?", (playlist_id, track_id)).rowcount
+        conn.execute("DELETE FROM deleted_tracks WHERE playlist_id = ? AND track_id = ?", (playlist_id, track_id))
+    if not n:
+        raise ValueError("That track isn't in Recently deleted")
+
+
+def delete_forever(conn: sqlite3.Connection, playlist_id: int, track_id: int) -> None:
+    """Remove a recently deleted track for good: its audio goes once it's in no playlist (fingerprint kept), and a
+    refresh from Spotify won't bring it back to this playlist."""
+    sid = conn.execute("SELECT spotify_id FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    with conn:
+        conn.execute("DELETE FROM deleted_tracks WHERE playlist_id = ? AND track_id = ?", (playlist_id, track_id))
+        if sid and sid[0]:
+            conn.execute("INSERT OR IGNORE INTO removed_spotify (playlist_id, spotify_id) VALUES (?, ?)",
+                         (playlist_id, sid[0]))
     _drop_if_orphaned(conn, track_id)
 
 
+def deleted_tracks(conn: sqlite3.Connection, playlist_id: int) -> list[dict]:
+    purge_deleted(conn)
+    return [dict(r) for r in conn.execute(
+        "SELECT t.id, t.artist, t.title, t.duration_s, t.art_path IS NOT NULL AS has_art, d.stars, d.deleted_at"
+        " FROM deleted_tracks d JOIN tracks t ON t.id = d.track_id WHERE d.playlist_id = ? ORDER BY d.deleted_at DESC",
+        (playlist_id,))]
+
+
+def purge_deleted(conn: sqlite3.Connection) -> int:
+    """Delete for good everything in Recently deleted for longer than [library] deleted_days."""
+    old = conn.execute("SELECT playlist_id, track_id FROM deleted_tracks WHERE deleted_at < datetime('now', ?)",
+                       (f"-{CONFIG['library']['deleted_days']} days",)).fetchall()
+    for pid, tid in old:
+        delete_forever(conn, pid, tid)
+    return len(old)
+
+
 def _drop_if_orphaned(conn: sqlite3.Connection, track_id: int) -> None:
-    """A library track in no playlist loses its audio (the fingerprint and ratings stay for learning)."""
-    if conn.execute("SELECT 1 FROM playlist_tracks WHERE track_id = ?", (track_id,)).fetchone():
+    """A library track in no playlist (nor any Recently deleted list) loses its audio (fingerprint and ratings stay)."""
+    if conn.execute("SELECT 1 FROM playlist_tracks WHERE track_id = ? UNION SELECT 1 FROM deleted_tracks"
+                    " WHERE track_id = ?", (track_id, track_id)).fetchone():
         return
     t = conn.execute("SELECT file_path FROM tracks WHERE id = ?", (track_id,)).fetchone()
     if t and t["file_path"] and t["file_path"].startswith(CONFIG["paths"]["library"] + "/"):
@@ -179,7 +232,7 @@ def store(conn: sqlite3.Connection, res, file, artist: str, title: str, origin: 
     return tid
 
 
-def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progress=None) -> dict:
+def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progress=None, skip_removed: bool = True) -> dict:
     """Import a Spotify playlist's (or track's) tracks into a playlist. Safe to re-run: tracks already in the
     library are reused. `progress(done, total, message)` is told how far it's got. Returns
     {'added', 'reused', 'failures': [{'artist', 'title', 'reason'}]}."""
@@ -192,9 +245,16 @@ def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progre
     ids = spotify.expand([link])
     yt, folder = None, path("library")
     folder.mkdir(parents=True, exist_ok=True)
-    out = {"added": 0, "reused": 0, "failures": []}
+    out = {"added": 0, "reused": 0, "skipped": 0, "failures": []}
+    removed = {r[0] for r in conn.execute(
+        "SELECT spotify_id FROM removed_spotify WHERE playlist_id = ? UNION SELECT t.spotify_id FROM deleted_tracks d"
+        " JOIN tracks t ON t.id = d.track_id WHERE d.playlist_id = ? AND t.spotify_id IS NOT NULL",
+        (playlist_id, playlist_id))} if skip_removed else set()
     for i, sid in enumerate(ids):
         report(i, len(ids), "Reading Spotify")
+        if sid in removed:                               # removed from this playlist: a refresh leaves it out
+            out["skipped"] += 1
+            continue
         row = conn.execute("SELECT id FROM tracks WHERE spotify_id = ? ORDER BY id LIMIT 1", (sid,)).fetchone()
         if row:
             out["reused"] += add_to_playlist(conn, playlist_id, row[0])
@@ -232,4 +292,61 @@ def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progre
         db.log_event(conn, "track_imported", playlist_id=playlist_id, track_id=tid, spotify_id=sid,
                      video_id=best.video_id)
     report(len(ids), len(ids), "Done")
+    return out
+
+
+def youtube_video_id(link: str) -> str | None:
+    """The video ID in a YouTube / YouTube Music link (watch?v=…, youtu.be/…), or None."""
+    import re
+    from urllib.parse import parse_qs, urlparse
+
+    u = urlparse(link.strip())
+    host = (u.hostname or "").lower()
+    if host.endswith("youtu.be"):
+        vid = u.path.lstrip("/").split("/")[0]
+    elif "youtube.com" in host:
+        vid = parse_qs(u.query).get("v", [""])[0]
+    else:
+        return None
+    return vid if re.fullmatch(r"[A-Za-z0-9_-]{11}", vid or "") else None
+
+
+def add_song(conn: sqlite3.Connection, link: str, playlist_id: int, progress=None) -> dict:
+    """Add one song to a playlist from a Spotify track link or a YouTube / YouTube Music link (added by hand, so it
+    comes back even if it was removed from this playlist before)."""
+    from .analysis import AnalysisFailed, DownloadFailed, backend
+    from .ratings import _safe, _unique
+    from .sources import YouTubeMusic
+
+    vid = youtube_video_id(link)
+    if vid is None:
+        return import_spotify(conn, link, playlist_id, progress, skip_removed=False)
+    report = lambda done, total, msg: progress and progress(done, total, msg)
+    out = {"added": 0, "reused": 0, "skipped": 0, "failures": []}
+    row = conn.execute("SELECT id FROM tracks WHERE video_id = ? AND file_path IS NOT NULL ORDER BY id LIMIT 1",
+                       (vid,)).fetchone()
+    if row:
+        out["reused"] += add_to_playlist(conn, playlist_id, row[0])
+        report(1, 1, "Done")
+        return out
+    yt = YouTubeMusic()
+    details = yt.api.get_song(vid).get("videoDetails", {})
+    title = details.get("title") or vid
+    artist = (details.get("author") or "").removesuffix(" - Topic") or "Unknown artist"
+    report(0, 1, f"{artist} – {title}")
+    try:
+        res = backend().analyse(vid, status=lambda text: report(0, 1, f"{artist} – {title}: {text}"))
+    except DownloadFailed as e:
+        what = "analysis" if isinstance(e, AnalysisFailed) else "download"
+        out["failures"].append({"artist": artist, "title": title, "reason": f"{what} failed ({str(e)[:120]})"})
+        return out
+    folder = path("library")
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = _unique(folder / f"{_safe(artist)} - {_safe(title)}{res.file.suffix}", res.file)
+    shutil.move(res.file, dest)
+    tid = store(conn, res, dest, artist, title, "library", video_id=vid)
+    add_to_playlist(conn, playlist_id, tid)
+    out["added"] += 1
+    db.log_event(conn, "track_imported", playlist_id=playlist_id, track_id=tid, video_id=vid)
+    report(1, 1, "Done")
     return out
