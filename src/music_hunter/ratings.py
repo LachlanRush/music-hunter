@@ -345,7 +345,10 @@ def _place(conn: sqlite3.Connection, play, rating: int) -> None:
         file_path, undo_path = None, relative(dest)
     if dest != src:
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(src, dest)
+        if db.audio_in_use(relative(src), skip=conn):  # another playlist's Find music has the same file: copy it
+            shutil.copy2(src, dest)
+        else:
+            shutil.move(src, dest)
     conn.execute("UPDATE tracks SET file_path = ? WHERE id = ?", (file_path, track["id"]))
     conn.execute("UPDATE plays SET undo_path = ? WHERE id = ?", (undo_path, play["id"]))
 
@@ -356,16 +359,17 @@ def _purge_skipped(conn: sqlite3.Connection) -> None:
         for r in conn.execute("SELECT t.id, t.file_path FROM plays p JOIN tracks t ON t.id = p.track_id"
                               " WHERE p.skipped_at IS NOT NULL AND p.rating IS NULL AND t.file_path IS NOT NULL"
                               ).fetchall():
-            resolve(r["file_path"]).unlink(missing_ok=True)
             conn.execute("UPDATE tracks SET file_path = NULL WHERE id = ?", (r["id"],))
+            db.release_audio(conn, r["file_path"])
 
 
 def _purge_undo(conn: sqlite3.Connection) -> None:
     """A new rating makes earlier ones final: delete audio held for tracks not Added."""
     with conn:
         for r in conn.execute("SELECT id, undo_path FROM plays WHERE undo_path IS NOT NULL").fetchall():
-            resolve(r["undo_path"]).unlink(missing_ok=True)
             conn.execute("UPDATE plays SET undo_path = NULL WHERE id = ?", (r["id"],))
+            if not db.audio_in_use(r["undo_path"], skip=conn):
+                resolve(r["undo_path"]).unlink(missing_ok=True)
 
 
 def _safe(name: str) -> str:

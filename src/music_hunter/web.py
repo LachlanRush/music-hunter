@@ -507,7 +507,32 @@ def delete_playlist(playlist_id: int) -> dict:
     conn = db.connect()
     _playlist_or_404(conn, playlist_id)
     library.delete_playlist(conn, playlist_id)
+    _delete_session(playlist_id)
     return {"ok": True}
+
+
+def _delete_session(playlist_id: int) -> None:
+    """A deleted playlist's Find music goes too: its worker is forgotten, its pool audio (unless another playlist
+    shares it), stretched copies and session database are deleted."""
+    from . import tempo
+
+    workers.pop(playlist_id, None)
+    if find.started(playlist_id):
+        sess = db.connect(playlist_id)
+        files = [r[0] for r in sess.execute("SELECT file_path FROM tracks WHERE origin = 'pool' AND file_path IS NOT NULL"
+                                            " UNION SELECT undo_path FROM plays WHERE undo_path IS NOT NULL")]
+        sess.close()
+        base = db.session_path(playlist_id)
+        for suffix in ("", "-wal", "-shm"):
+            Path(str(base) + suffix).unlink(missing_ok=True)
+        lib = db.connect_library()
+        for rel in files:
+            if rel.startswith(CONFIG["paths"]["cache"] + "/") or rel.startswith(CONFIG["paths"]["data"] + "/undo/"):
+                if not db.audio_in_use(rel):
+                    resolve(rel).unlink(missing_ok=True)
+        db.log_event(lib, "session_deleted", playlist_id=playlist_id, files=len(files))
+    for scope in (tempo.scope_for(playlist_id, None), tempo.scope_for(None, playlist_id)):
+        tempo._prune(scope, set())
 
 
 @app.put("/api/playlists/{playlist_id}/tracks/{track_id}")
@@ -517,17 +542,25 @@ def star_track(playlist_id: int, track_id: int, body: StarsBody) -> dict:
         library.set_stars(conn, playlist_id, track_id, body.stars)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    _after_membership_change(conn, playlist_id)               # stars change the seeds straight away
     return {"ok": True}
 
 
 def _after_membership_change(conn, playlist_id: int) -> None:
-    """A track left or came back: tempo copies follow, and so do the Find music tracks it found (they leave unless
-    another seed found them too, and return with it)."""
+    """Seeds changed (stars set or cleared, a track removed or restored): everything that depends on them follows
+    straight away — tempo copies and the playlist's tempo range; in Find music the seeds (a newly starred track is
+    pulled for, an unstarred one stops being a seed), the tracks they found (they leave with their seed unless
+    another found them too, and return with it), and the veto's scores."""
     _sync_tempo(conn, playlist_id)
     if find.started(playlist_id):
-        sess = db.connect(playlist_id)
-        find.sync_seeds(conn, sess, playlist_id)
-        session_worker(playlist_id).start_if_needed()        # top the pool up from the remaining seeds
+        token = db.SESSION.set(playlist_id)
+        try:
+            sess = db.connect(playlist_id)
+            find.sync_seeds(conn, sess, playlist_id)
+            veto.update(sess)
+        finally:
+            db.SESSION.reset(token)
+        session_worker(playlist_id).start_if_needed()        # pull for new seeds, top the pool up
 
 
 @app.delete("/api/playlists/{playlist_id}/tracks/{track_id}")
@@ -921,8 +954,10 @@ def change(body: ChangeBody) -> dict:
         play_id = ratings.change_last_rating(conn, body.rating)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    _to_playlist(conn, play_id)                   # an Add joins the playlist / a changed-away Add leaves it
+    if db.SESSION.get() is not None:              # …and the tracks it found follow it
+        find.sync_seeds(db.connect_library(), conn, db.SESSION.get())
     veto.update(conn)
-    _to_playlist(conn, play_id)
     session_worker().start_if_needed()
     return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone())
 

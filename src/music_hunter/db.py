@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import path
+from .config import resolve, path
 
 log = logging.getLogger("music_hunter")
 
@@ -338,6 +338,39 @@ _CURRENT = object()
 
 def session_path(playlist_id: int) -> Path:
     return path("data") / "sessions" / f"playlist-{playlist_id}.db"
+
+
+def audio_in_use(rel: str, skip: sqlite3.Connection | None = None) -> bool:
+    """Whether an audio file is still referenced by any database (the library or a playlist's Find music) other
+    than `skip`'s. Pool files are named by YouTube video, so two playlists finding the same track share one file:
+    it may only be deleted or moved once nobody else points at it."""
+    dbs = [path("db")] + sorted((path("data") / "sessions").glob("playlist-*.db"))
+    skip_file = None
+    if skip is not None:
+        skip_file = Path(skip.execute("PRAGMA database_list").fetchone()[2] or "").resolve()
+    for f in dbs:
+        if not f.exists() or (skip_file and f.resolve() == skip_file):
+            continue
+        c = sqlite3.connect(f, timeout=30)
+        try:
+            if c.execute("SELECT 1 FROM tracks WHERE file_path = ? LIMIT 1", (rel,)).fetchone():
+                return True
+            if c.execute("SELECT name FROM sqlite_master WHERE name = 'plays'").fetchone() and \
+                    c.execute("SELECT 1 FROM plays WHERE undo_path = ? LIMIT 1", (rel,)).fetchone():
+                return True
+        finally:
+            c.close()
+    return False
+
+
+def release_audio(conn: sqlite3.Connection, rel: str | None) -> None:
+    """Delete a pool / undo audio file this database no longer points at, unless another database still does."""
+    if not rel:
+        return
+    if conn.execute("SELECT 1 FROM tracks WHERE file_path = ? LIMIT 1", (rel,)).fetchone():
+        return
+    if not audio_in_use(rel, skip=conn):
+        resolve(rel).unlink(missing_ok=True)
 
 
 def connect(session=_CURRENT) -> sqlite3.Connection:

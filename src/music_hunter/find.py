@@ -73,7 +73,7 @@ def drop_orphans(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id:
         "SELECT t.id, t.veto_state, t.file_path, group_concat(DISTINCT s.seed_track_id) AS seeds"
         " FROM tracks t JOIN suggestions s ON s.candidate_id = t.candidate_id"
         " WHERE t.origin = 'pool' AND t.id NOT IN (SELECT track_id FROM plays) GROUP BY t.id").fetchall()
-    dropped, returned = [], []
+    dropped, returned, gone = [], [], []
     with sess:
         for r in rows:
             keep = bool({int(x) for x in r["seeds"].split(",")} & refs)
@@ -81,11 +81,13 @@ def drop_orphans(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id:
                 dropped.append(r["id"])
                 sess.execute("UPDATE tracks SET veto_state = 'dropped' WHERE id = ?", (r["id"],))
                 if r["file_path"] and r["file_path"].startswith(CONFIG["paths"]["cache"] + "/"):
-                    resolve(r["file_path"]).unlink(missing_ok=True)
                     sess.execute("UPDATE tracks SET file_path = NULL WHERE id = ?", (r["id"],))
+                    gone.append(r["file_path"])
             elif keep and r["veto_state"] == "dropped":
                 returned.append(r["id"])                 # the veto decides again; a restore brings its audio back
                 sess.execute("UPDATE tracks SET veto_state = 'playable' WHERE id = ?", (r["id"],))
+    for fp in gone:
+        db.release_audio(sess, fp)
     if dropped or returned:
         db.log_event(sess, "seed_tracks_dropped", dropped=len(dropped), returned=len(returned))
     return {"dropped": len(dropped), "returned": len(returned)}

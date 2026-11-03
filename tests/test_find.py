@@ -140,3 +140,51 @@ def test_removed_seed_takes_its_tracks(setup):
     library.add_to_playlist(lib, pid, a)                          # back in the playlist: it returns (audio re-fetched)
     find.sync_seeds(lib, sess, pid)
     assert state("only_a")[0] == "playable"
+
+
+def test_changes_reach_find_music_straight_away(setup, monkeypatch):
+    """Starring, unstarring and removing in the playlist change Find music's seeds at once (not at the next pull);
+    deleting the playlist deletes its Find music."""
+    from fastapi.testclient import TestClient
+    from music_hunter import web
+
+    lib, pid, tracks = setup
+    monkeypatch.setattr(web.Worker, "start_if_needed", lambda self: None)
+    library.set_stars(lib, pid, tracks[0], 5)
+    sess = db.connect(pid)
+    find.sync_seeds(lib, sess, pid)
+    client = TestClient(web.app)
+    stars = lambda: {s.stars for s in seeds(sess)}
+    client.put(f"/api/playlists/{pid}/tracks/{tracks[1]}", json={"stars": 2})
+    assert len(seeds(sess)) == 2 and stars() == {5.0, 2.0}                       # a new seed, now
+    client.put(f"/api/playlists/{pid}/tracks/{tracks[1]}", json={"stars": None})
+    assert len(seeds(sess)) == 1                                                  # unstarred: not a seed, now
+    client.delete(f"/api/playlists/{pid}/tracks/{tracks[0]}")
+    assert seeds(sess) == []                                                      # removed: not a seed
+    client.post(f"/api/playlists/{pid}/deleted/{tracks[0]}/restore")
+    assert stars() == {5.0}                                                       # restored with its stars
+    assert db.session_path(pid).exists()
+    client.delete(f"/api/playlists/{pid}")
+    assert not db.session_path(pid).exists()
+
+
+def test_shared_pool_audio_is_kept_while_another_playlist_uses_it(tmp_path, monkeypatch):
+    import music_hunter.config as config
+
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    (tmp_path / "cache").mkdir()
+    f = tmp_path / "cache" / "vidX.webm"
+    f.write_bytes(b"audio")
+    a, b = db.connect(1), db.connect(2)
+    for c in (a, b):
+        with c:
+            c.execute("INSERT INTO tracks (artist, title, duration_s, origin, file_path) VALUES ('x', 'y', 1, 'pool',"
+                      " 'cache/vidX.webm')")
+    with a:
+        a.execute("UPDATE tracks SET file_path = NULL")
+    db.release_audio(a, "cache/vidX.webm")
+    assert f.exists()                                                             # playlist 2 still has it
+    with b:
+        b.execute("UPDATE tracks SET file_path = NULL")
+    db.release_audio(b, "cache/vidX.webm")
+    assert not f.exists()

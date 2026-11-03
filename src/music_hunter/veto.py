@@ -158,7 +158,7 @@ def update(conn: sqlite3.Connection) -> dict:
     rows = {r["id"]: r for r in analysed_tracks(conn)}
     meta = {r["id"]: r for r in conn.execute("SELECT id, gate_since, redownloads FROM tracks WHERE origin = 'pool'")}
     n_rated = conn.execute("SELECT count(*) FROM plays WHERE rating IS NOT NULL").fetchone()[0]
-    vetoed_now, returned, drop_audio = [], [], []
+    vetoed_now, returned, drop_audio, gone = [], [], [], []
     with conn:
         for tid, d in details.items():
             r = rows[tid]
@@ -192,8 +192,15 @@ def update(conn: sqlite3.Connection) -> dict:
         for tid in drop_audio:                        # the fingerprint stays, the audio goes
             fp = rows[tid]["file_path"]
             if fp and fp.startswith(CONFIG["paths"]["cache"] + "/"):
-                resolve(fp).unlink(missing_ok=True)
                 conn.execute("UPDATE tracks SET file_path = NULL WHERE id = ?", (tid,))
+                gone.append(fp)
+        # A playable track whose file has gone (e.g. deleted by another playlist before files were shared safely):
+        # mark it missing, so its audio is fetched again.
+        for tid, r in rows.items():
+            if r["file_path"] and tid not in drop_audio and not resolve(r["file_path"]).exists():
+                conn.execute("UPDATE tracks SET file_path = NULL WHERE id = ?", (tid,))
+    for fp in gone:
+        db.release_audio(conn, fp)                # unless another playlist's Find music shares the file
     counts = {"analysed": len(details), "active": active, "newly_vetoed": len(vetoed_now), "returned": len(returned),
               "playable": playable_count(conn), "vetoed": conn.execute(
                   "SELECT count(*) FROM tracks WHERE origin = 'pool' AND veto_state = 'vetoed'"
