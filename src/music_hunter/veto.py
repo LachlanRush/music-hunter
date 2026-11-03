@@ -216,7 +216,7 @@ def settings_version(conn: sqlite3.Connection) -> int:
     import hashlib
 
     settings = {"veto": CONFIG["veto"], "controls": CONFIG["controls"], "pool_target": CONFIG["pool"]["target_size"],
-                "ratings": CONFIG["ratings"], "picking": CONFIG.get("picking")}
+                "ratings": CONFIG["ratings"]}
     text = json.dumps(settings, sort_keys=True)
     h = hashlib.sha1(text.encode()).hexdigest()[:16]
     row = conn.execute("SELECT id FROM settings_versions WHERE hash = ?", (h,)).fetchone()

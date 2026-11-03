@@ -333,13 +333,3 @@ entity_id = ""
 # v5 (SPEC.md §18.11): reaching Home Assistant from the PC (`music-hunter pi update`; HA_TOKEN in .env).
 [pi]
 home_assistant = "http://100.90.89.29:8123"
-
-# v5 (2026-11-03): which playable track comes next — not random. Playable tracks are split into score bands of
-# band_width_sd above the gate (the last band open-ended); plays are spread over the bands in proportion to how many
-# tracks each holds (pools of 100 / 50 / 25 / 12 → 8 / 4 / 2 / 1 plays), each play going to the band furthest behind
-# its share over the last `window` plays; within a band, the track waiting longest goes first. So the few top
-# tracks are never used up faster than the rest.
-[picking]
-band_width_sd = 0.5
-bands = 4
-window = 40
