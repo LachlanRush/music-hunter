@@ -40,7 +40,7 @@ svg text.end { font: 600 12px var(--body); }
   </header>
   <section style="display:grid;gap:8px">
     <h1 id="name">Results</h1>
-    <p class="sub">Off and Add in Find music by the track's score when it played, from the gate (0) up. Each point averages the plays near that score; dashed where few plays support it. Ticks along the bottom are the plays.</p>
+    <p class="sub">Off and Add in Find music by the track's score when it played. Tracks left of the gate were only played while blocked tracks were being slipped in. Each point averages the plays near that score; dashed where few plays support it. Ticks along the bottom are the plays.</p>
   </section>
   <div class="legend"><span><i style="background:var(--off)"></i>Off</span><span><i style="background:var(--add)"></i>Add</span></div>
   <div class="chart"><p class="sub" id="count"></p><svg id="chart" role="img" aria-label="Off and Add rate by score"></svg></div>
@@ -62,7 +62,8 @@ const el = (tag, attrs = {}, text) => {
   document.getElementById("name").textContent = d.name ? `${d.name} · Results` : "Results";
   document.title = `${d.name} · Results · Music Hunter`;
   document.getElementById("count").textContent = d.plays < 2 ? "Not enough rated plays yet." :
-    `${d.plays} rated plays above the gate · ${d.off}% Off · ${d.add}% Add`;
+    `${d.plays} rated plays` + (d.above_gate ? ` · above the gate: ${d.above_gate} plays, ${d.off}% Off, ${d.add}% Add` : "") +
+    (d.left_out ? ` · ${d.left_out} left out (from an over-full seed share, the pool bug fixed on 6 Nov)` : "");
   if (d.plays < 2) { svg.remove(); return; }
   d.ymax = Math.min(100, Math.ceil(Math.max(10, ...d.curve.flatMap(c => [c.off, c.add])) / 10) * 10 + 10);
   draw(d, svg, tip);
@@ -76,15 +77,19 @@ function draw(d, svg, tip) {
   const L = 40, R = 40, T = 14, B = 46;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   const ymax = d.ymax;
-  const x = v => L + (W - L - R) * v / d.max, y = v => T + (H - T - B) * (1 - v / ymax);
+  const x = v => L + (W - L - R) * (v - d.min) / (d.max - d.min), y = v => T + (H - T - B) * (1 - v / ymax);
   for (let v = 0; v <= ymax; v += ymax > 60 ? 20 : 10) {
     svg.append(el("line", {x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "var(--grid)"}));
     svg.append(el("text", {x: L - 8, y: y(v) + 4, "text-anchor": "end"}, `${v}%`));
   }
   const step = d.max > 3 || W < 520 ? 1 : 0.5;
-  for (let v = 0; v <= d.max + 1e-9; v += step)
+  for (let v = Math.ceil(d.min / step) * step; v <= d.max + 1e-9; v += step)
     svg.append(el("text", {x: x(v), y: H - B + 18, "text-anchor": "middle"}, v.toFixed(1)));
-  svg.append(el("text", {x: (L + W - R) / 2, y: H - 6, "text-anchor": "middle"}, "score when played (0 = the gate)"));
+  svg.append(el("text", {x: (L + W - R) / 2, y: H - 6, "text-anchor": "middle"}, "score when played"));
+  if (d.min < 0) {                                  // the gate: only tracks right of it are played now
+    svg.append(el("line", {x1: x(0), x2: x(0), y1: T, y2: H - B, stroke: "var(--muted)", "stroke-dasharray": "3 3"}));
+    svg.append(el("text", {x: x(0) + 5, y: T + 10}, "gate"));
+  }
   for (const v of d.rug) svg.append(el("line", {x1: x(v), x2: x(v), y1: H - B, y2: H - B + 5, stroke: "var(--muted)", "stroke-opacity": 0.5}));
   for (const key of ["off", "add"]) {
     let seg = [], thin = null;
