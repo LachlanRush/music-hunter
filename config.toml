@@ -50,6 +50,7 @@ tidal = "tidal"
 
 [pool]
 # SPEC.md §4.1 steps 5–7
+min_duration_s = 90               # shorter videos are previews or clips (a 30 s "Lose Ya Mind", 2026-11-06): skipped
 target_size = 200                # playable tracks to keep ready (v5: above the gate; 250 in v3–v4, 150 v2, 75 v1)
 # v3 (SPEC.md §16.4): each seed has its own share of the pool (by seed average, with the floor below), so
 # seeds that few sources know (new, obscure releases) are as present as well-known ones. A share is filled

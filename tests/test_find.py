@@ -188,3 +188,31 @@ def test_shared_pool_audio_is_kept_while_another_playlist_uses_it(tmp_path, monk
         b.execute("UPDATE tracks SET file_path = NULL")
     db.release_audio(b, "cache/vidX.webm")
     assert not f.exists()
+
+
+def test_removed_add_counts_as_close(setup):
+    """An Add removed from the playlist counts as Close; restored, it's an Add again."""
+    from music_hunter.ratings import ADD
+    CLOSE = 2
+
+    lib, pid, tracks = setup
+    library.set_stars(lib, pid, tracks[0], 4)
+    sess = db.connect(pid)
+    find.sync_seeds(lib, sess, pid)
+    with sess:
+        tid = sess.execute("INSERT INTO tracks (artist, title, duration_s, origin, video_id) VALUES ('N', 'F', 200, 'pool',"
+                           " 'vidQ')").lastrowid
+        sess.execute("INSERT INTO track_embeddings (track_id, model, dim, n_chunks, embedding)"
+                     " SELECT ?, model, dim, n_chunks, embedding FROM track_embeddings LIMIT 1", (tid,))
+        play = sess.execute("INSERT INTO plays (track_id, generation, play_number, is_control, rating, components, score,"
+                            " rank, pool_size, provenance) VALUES (?, 1, 1, 0, ?, '{}', 0, 1, 1, '[]')",
+                            (tid, ADD)).lastrowid
+    find.sync_add(lib, sess, pid, play)
+    lid = sess.execute("SELECT library_id FROM tracks WHERE id = ?", (tid,)).fetchone()[0]
+    rating = lambda: sess.execute("SELECT rating FROM plays WHERE id = ?", (play,)).fetchone()[0]
+    library.remove_from_playlist(lib, pid, lid)
+    find.sync_seeds(lib, sess, pid)
+    assert rating() == CLOSE
+    library.restore_track(lib, pid, lid)
+    find.sync_seeds(lib, sess, pid)
+    assert rating() == ADD

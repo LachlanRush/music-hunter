@@ -257,7 +257,8 @@ function renderGate(s) {
     started = true;
     $("gate").hidden = true;
     $("now").hidden = false;
-    loadNext({autoplay: false});            // shown paused; the play button is the first click
+    loadNext({autoplay: resumePlaying});    // first time: shown paused (the play button is the first click)
+    resumePlaying = false;
   } else if (s.seeds === 0) {
     $("gate-label").textContent = "No seeds yet";
     $("gate-title").textContent = "Add your seed tracks first";
@@ -294,14 +295,20 @@ $("volume").addEventListener("input", () => {
   try { localStorage.setItem("volume", $("volume").value); } catch (e) {}
 });
 
+let resumePlaying = false;                 // the gate came back mid-session: the next track starts by itself
 async function loadNext({autoplay = true} = {}) {
   showError("");
-  try {
-    current = await api("/api/next", {});
-  } catch (e) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {          // a passing hiccup shouldn't drop back to the gate
+    try { current = await api("/api/next", {}); lastError = null; break; }
+    catch (e) { lastError = e; await new Promise((r) => setTimeout(r, 1000)); }
+  }
+  if (lastError) {
+    report("next_failed", {message: String(lastError.message || lastError)});
     current = null;
     audio.pause();
     $("now").hidden = true;
+    resumePlaying = started && autoplay;
     started = false;
     $("gate").hidden = false;
     poll();
@@ -335,7 +342,16 @@ async function loadTrack(track, startAt, alreadyPlayed, autoplay = true) {
     awaitingFirstPlay = false;               // no start-latency figure for a track that waited for a click
     setPlayIcon(false);
     report("audio_error", {message: `autoplay blocked: ${e.name}`});
+    return;
   }
+  // Watchdog (feedback #19): a next track that should have started but is still silent gets one more push, and
+  // the moment is logged so the cause can be found.
+  setTimeout(() => {
+    if (onAir() !== track || !awaitingFirstPlay || !audio.paused) return;
+    report("autoplay_stuck", {ready: audio.readyState, network: audio.networkState, hidden: document.hidden,
+                              memory: startedFromMemory, src: audio.src.slice(0, 40)});
+    audio.play().catch((e) => report("audio_error", {message: `retry failed: ${e.name}`}));
+  }, 2500);
 }
 
 // --- Same BPM (static/tempo.js): Find music's own setting (separate from the playlist's), kept on the server ------

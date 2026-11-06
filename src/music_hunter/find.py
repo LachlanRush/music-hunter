@@ -57,7 +57,34 @@ def sync_seeds(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: i
         unstarred = sess.execute(f"UPDATE tracks SET stars = NULL WHERE library_id IS NOT NULL AND stars IS NOT NULL"
                                  f" AND library_id NOT IN ({','.join('?' * len(keep))})", keep).rowcount
     drop_orphans(lib, sess, playlist_id)
+    follow_removed_adds(lib, sess, playlist_id)
     return {"seeds": len(starred), "added": added, "unstarred": unstarred}
+
+
+def follow_removed_adds(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: int) -> dict:
+    """An Add I later remove from the playlist counts as Close from then on (a mild like, not a seed); restoring it
+    makes it an Add again. Returns {'demoted', 'restored'}."""
+    from .ratings import ADD
+
+    CLOSE = CONFIG["ratings"]["unrated_counts_as"] or 2          # Close
+
+    in_playlist = {r[0] for r in lib.execute("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?",
+                                             (playlist_id,))}
+    rows = sess.execute("SELECT p.id, p.rating, p.demoted, t.library_id FROM plays p JOIN tracks t ON t.id = p.track_id"
+                        " WHERE t.library_id IS NOT NULL AND p.is_control = 0"
+                        f" AND (p.rating = {ADD} OR p.demoted = 1)").fetchall()
+    demoted = restored = 0
+    with sess:
+        for r in rows:
+            if r["rating"] == ADD and not r["demoted"] and r["library_id"] not in in_playlist:
+                sess.execute("UPDATE plays SET rating = ?, demoted = 1 WHERE id = ?", (CLOSE, r["id"]))
+                demoted += 1
+            elif r["demoted"] and r["library_id"] in in_playlist:
+                sess.execute("UPDATE plays SET rating = ?, demoted = 0 WHERE id = ?", (ADD, r["id"]))
+                restored += 1
+    if demoted or restored:
+        db.log_event(sess, "removed_adds", demoted=demoted, restored=restored)
+    return {"demoted": demoted, "restored": restored}
 
 
 def drop_orphans(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: int) -> dict:

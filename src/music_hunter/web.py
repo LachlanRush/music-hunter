@@ -37,6 +37,13 @@ async def lifespan(app):
     worker.start_if_needed()
     for p in library.list_playlists(conn):          # v5: resume each started session's background work
         if find.started(p["id"]):
+            token = db.SESSION.set(p["id"])         # re-score under the current rules (a playlist not listened to
+            try:                                    # since an update would otherwise keep its old state)
+                veto.update(db.connect(p["id"]))
+            except Exception as e:  # noqa: BLE001 — never block start-up
+                db.log_event(conn, "startup_rescore_failed", playlist_id=p["id"], error=str(e)[:200])
+            finally:
+                db.SESSION.reset(token)
             session_worker(p["id"]).start_if_needed()
     jobs.requeue_interrupted(conn)                  # v5: a job cut off by a restart runs again (jobs are re-runnable)
     job_runner.kick()
@@ -622,7 +629,7 @@ def add_song(playlist_id: int, body: LinkBody) -> dict:
 def add_track(playlist_id: int, body: AddTrackBody) -> dict:
     conn = db.connect()
     try:
-        added = library.add_to_playlist(conn, playlist_id, body.track_id)
+        added = library.add_to_playlist(conn, playlist_id, body.track_id, "added")   # lands in "To rate"
         _sync_tempo(conn, playlist_id)
     except ValueError as e:
         raise HTTPException(404, str(e))

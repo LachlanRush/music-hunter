@@ -232,7 +232,8 @@ def store(conn: sqlite3.Connection, res, file, artist: str, title: str, origin: 
     return tid
 
 
-def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progress=None, skip_removed: bool = True) -> dict:
+def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progress=None, skip_removed: bool = True,
+                   status: str = "member") -> dict:
     """Import a Spotify playlist's (or track's) tracks into a playlist. Safe to re-run: tracks already in the
     library are reused. `progress(done, total, message)` is told how far it's got. Returns
     {'added', 'reused', 'failures': [{'artist', 'title', 'reason'}]}."""
@@ -257,7 +258,7 @@ def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progre
             continue
         row = conn.execute("SELECT id FROM tracks WHERE spotify_id = ? ORDER BY id LIMIT 1", (sid,)).fetchone()
         if row:
-            out["reused"] += add_to_playlist(conn, playlist_id, row[0])
+            out["reused"] += add_to_playlist(conn, playlist_id, row[0], status)
             continue
         try:
             t = spotify.track(sid)
@@ -275,7 +276,7 @@ def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progre
         row = conn.execute("SELECT id FROM tracks WHERE video_id = ? AND file_path IS NOT NULL ORDER BY id LIMIT 1",
                            (best.video_id,)).fetchone()
         if row:                                          # already downloaded (e.g. a pool track): reuse it
-            out["reused"] += add_to_playlist(conn, playlist_id, row[0])
+            out["reused"] += add_to_playlist(conn, playlist_id, row[0], status)
             continue
         try:
             res = backend().analyse(best.video_id, status=lambda text: report(i, len(ids), f"{artist} – {t.title}: {text}"))
@@ -287,7 +288,7 @@ def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progre
         shutil.move(res.file, dest)
         tid = store(conn, res, dest, artist, t.title, "library", video_id=best.video_id, spotify_id=sid,
                     release_date=t.release_date)
-        add_to_playlist(conn, playlist_id, tid)
+        add_to_playlist(conn, playlist_id, tid, status)
         out["added"] += 1
         db.log_event(conn, "track_imported", playlist_id=playlist_id, track_id=tid, spotify_id=sid,
                      video_id=best.video_id)
@@ -313,20 +314,20 @@ def youtube_video_id(link: str) -> str | None:
 
 def add_song(conn: sqlite3.Connection, link: str, playlist_id: int, progress=None) -> dict:
     """Add one song to a playlist from a Spotify track link or a YouTube / YouTube Music link (added by hand, so it
-    comes back even if it was removed from this playlist before)."""
+    comes back even if it was removed from this playlist before). It lands in "To rate", like every added track."""
     from .analysis import AnalysisFailed, DownloadFailed, backend
     from .ratings import _safe, _unique
     from .sources import YouTubeMusic
 
     vid = youtube_video_id(link)
     if vid is None:
-        return import_spotify(conn, link, playlist_id, progress, skip_removed=False)
+        return import_spotify(conn, link, playlist_id, progress, skip_removed=False, status="added")
     report = lambda done, total, msg: progress and progress(done, total, msg)
     out = {"added": 0, "reused": 0, "skipped": 0, "failures": []}
     row = conn.execute("SELECT id FROM tracks WHERE video_id = ? AND file_path IS NOT NULL ORDER BY id LIMIT 1",
                        (vid,)).fetchone()
     if row:
-        out["reused"] += add_to_playlist(conn, playlist_id, row[0])
+        out["reused"] += add_to_playlist(conn, playlist_id, row[0], "added")
         report(1, 1, "Done")
         return out
     yt = YouTubeMusic()
@@ -345,7 +346,7 @@ def add_song(conn: sqlite3.Connection, link: str, playlist_id: int, progress=Non
     dest = _unique(folder / f"{_safe(artist)} - {_safe(title)}{res.file.suffix}", res.file)
     shutil.move(res.file, dest)
     tid = store(conn, res, dest, artist, title, "library", video_id=vid)
-    add_to_playlist(conn, playlist_id, tid)
+    add_to_playlist(conn, playlist_id, tid, "added")
     out["added"] += 1
     db.log_event(conn, "track_imported", playlist_id=playlist_id, track_id=tid, video_id=vid)
     report(1, 1, "Done")

@@ -145,6 +145,8 @@ class Filler:
             # Same song as a candidate not yet tried (now with this one's provenance): it takes the slot.
             return bool(self.matcher.merged_into) and self.process(self.matcher.merged_into, seed)
         c = self.conn.execute("SELECT * FROM candidates WHERE id = ?", (cid,)).fetchone()
+        if c["duration_s"] and c["duration_s"] < CFG["min_duration_s"]:      # a preview or clip, not the track
+            return self._fail(c, f"too short ({c['duration_s']:.0f} s): a preview or clip")
         from .analysis import AnalysisFailed, DownloadFailed
         from .bpm import seeds_median
 
@@ -158,6 +160,9 @@ class Filler:
             return self._fail(c, f"analysis: {e}", **e.timings)
         except DownloadFailed as e:
             return self._fail(c, f"download: {e}", **e.timings)
+        if res.duration_s < CFG["min_duration_s"]:
+            db.release_audio(self.conn, relative(res.file))
+            return self._fail(c, f"too short ({res.duration_s:.0f} s): a preview or clip")
         for what, reason in res.notes.items():
             db.log_event(self.conn, what, generation=self.generation, video_id=c["video_id"], reason=reason)
 
