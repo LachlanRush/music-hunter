@@ -13,6 +13,7 @@ Lists are visited round-robin, so the first tracks ready span all seeds and sour
 """
 
 import json
+import math
 import re
 import sqlite3
 import subprocess
@@ -67,13 +68,16 @@ def quotas(slots: int, seed_avgs: dict[int, float], source_avgs: dict[str, float
 
 
 def buckets(conn: sqlite3.Connection, generation: int) -> dict[tuple[int, str], list[int]]:
-    """Unprocessed candidates suggested by each (seed, source), in the source's order."""
+    """Unprocessed candidates suggested by each (seed, source), in the source's order.
+
+    v5: from every pull, not only `generation`. A pull for one new Add or star holds only that seed's lists, and
+    filling from it alone gave that one seed every slot the others were short of (2026-11-06: Benwal – Dive's
+    pull, current when the median gate cut the pool, filled 96 places against a share of 8)."""
     out: dict[tuple[int, str], list[int]] = {}
     for r in conn.execute(
             "SELECT s.seed_track_id, s.source, s.candidate_id FROM suggestions s"
-            " JOIN candidates c ON c.id = s.candidate_id"
-            " WHERE s.generation = ? AND c.generation = ? AND c.status = 'candidate'"
-            " ORDER BY s.seed_track_id, s.source, s.rank", (generation, generation)):
+            " JOIN candidates c ON c.id = s.candidate_id WHERE c.status = 'candidate'"
+            " ORDER BY s.seed_track_id, s.source, s.rank, s.generation DESC"):
         lst = out.setdefault((r[0], r[1]), [])
         if r[2] not in lst:
             lst.append(r[2])
@@ -267,6 +271,45 @@ def seed_pool_counts(conn: sqlite3.Connection) -> dict[int, int]:
     return out
 
 
+def park_surplus(conn: sqlite3.Connection) -> int:
+    """A seed share holding far more playable tracks than its target (surplus_factor × target) keeps its best-scoring
+    ones and parks the rest ('surplus': audio released, fingerprint and history kept, not offered), so random picks
+    follow the seed shares again. Owners that are no longer seeds (Adds already pulled for) count at the Add-seed
+    weight. Returns the number parked."""
+    from .pull import seeds
+
+    rows = conn.execute(
+        "SELECT t.id, t.file_path, t.veto, coalesce(c.pool_seed, (SELECT min(seed_track_id) FROM suggestions s"
+        " WHERE s.candidate_id = c.id)) owner FROM tracks t JOIN candidates c ON c.id = t.candidate_id"
+        " WHERE t.origin = 'pool' AND t.rating IS NULL AND coalesce(t.veto_state, 'playable') = 'playable'"
+        " AND t.id NOT IN (SELECT track_id FROM plays)").fetchall()
+    by_owner: dict[int, list] = {}
+    for r in rows:
+        by_owner.setdefault(r["owner"], []).append(r)
+    ids = sorted({s.track_id for s in seeds(conn)} | {o for o in by_owner if o is not None})
+    target = seed_targets(conn, ids)
+    park = []
+    for owner, rs in by_owner.items():
+        cap = math.ceil(target.get(owner, 0) * CFG["surplus_factor"])
+        if owner is None or len(rs) <= cap:
+            continue
+        rs.sort(key=lambda r: json.loads(r["veto"])["z"] if r["veto"] else 0.0, reverse=True)
+        park += rs[cap:]
+    if not park:
+        return 0
+    gone = []
+    with conn:
+        for r in park:
+            conn.execute("UPDATE tracks SET veto_state = 'surplus', file_path = NULL WHERE id = ?", (r["id"],))
+            if r["file_path"] and r["file_path"].startswith(CONFIG["paths"]["cache"] + "/"):
+                gone.append(r["file_path"])
+    for fp in gone:
+        db.release_audio(conn, fp)                # unless another playlist's Find music shares the file
+    db.log_event(conn, "surplus_parked", tracks=len(park))
+    print(f"  Parked {len(park)} tracks over their seed's share")
+    return len(park)
+
+
 def restore_audio(conn: sqlite3.Connection, track_id: int) -> bool:
     """Download a track's audio again (a vetoed track that became playable, or an injected control). Its
     fingerprint and loudness are already stored, so nothing is re-analysed. True if the audio is there."""
@@ -320,9 +363,9 @@ def fill(conn: sqlite3.Connection, generation: int, progress=None) -> dict:
 
     started = time.monotonic()
     with conn:                                        # v3 set leftovers aside once its pool was full; v4 tops up from them
-        conn.execute("UPDATE candidates SET status = 'candidate' WHERE generation = ? AND status = 'not_selected'",
-                     (generation,))
+        conn.execute("UPDATE candidates SET status = 'candidate' WHERE status = 'not_selected'")
     veto.update(conn)
+    park_surplus(conn)
     filler, passes = None, []
     while True:
         before = filler.ready if filler else 0

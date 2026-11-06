@@ -63,6 +63,7 @@ share_by_seed_average = false       # v4: equal seed shares (seeds didn't differ
 multi_source_first = false
 multi_source_always_added = true    # only used when multi_source_first is on
 min_seed_share = 0.3333          # floor on a seed's share, as a fraction of an equal share
+surplus_factor = 1.5             # v5: a seed share holding more than this × its target parks the rest (pool.park_surplus)
 download_delay_seconds = 5       # minimum gap between downloads (analysis runs in the gap)
 download_format = "bestaudio"    # yt-dlp format; kept in its original container, no re-encode
 # SPEC.md §4.2 refills (run in the background while listening)

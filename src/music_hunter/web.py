@@ -90,7 +90,7 @@ class Worker:
         """The background job due now, if any (SPEC.md §17.2, §17.8):
         'pull' — the first pull, or a refill: 5 seeds not yet pulled for, or at least one after refill_min_plays plays,
                  or the playable pool short with no candidates left;
-        'fill' — top the playable pool up to target_size from the latest pull's remaining candidates;
+        'fill' — top the playable pool up to target_size from every pull's remaining candidates;
         'restore' — download audio again for vetoed tracks that became playable.
         """
         from .pool import missing_audio, unpulled_seeds, unrated_pool_size
@@ -102,9 +102,8 @@ class Worker:
         if gen is None:
             return "pull"
         playable = unrated_pool_size(conn)
-        left = conn.execute("SELECT count(*) FROM candidates WHERE generation = ?"
-                            " AND status IN ('candidate', 'not_selected')",
-                            (gen,)).fetchone()[0]
+        left = conn.execute("SELECT count(*) FROM candidates WHERE status IN ('candidate', 'not_selected')"
+                            ).fetchone()[0]          # any pull's leftovers (pool.buckets)
         played_since = conn.execute("SELECT count(*) FROM plays WHERE generation = ?", (gen,)).fetchone()[0]
         waiting = unpulled_seeds(conn)
         from .pull import is_v5_session

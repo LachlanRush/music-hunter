@@ -166,3 +166,37 @@ def test_closeness_follows_seed_stars(conn, monkeypatch):
     after = {t: v["raw"]["seed_closeness"] for t, v in veto.compute(conn).items()}
     assert all(after[t] <= before[t] + 1e-12 for t in before)                       # nobody gains…
     assert sum(after[t] < before[t] - 1e-9 for t in before) > 0                      # …tracks near it lose
+
+
+def test_fill_draws_on_every_pull(conn):
+    """A pull for one new seed mustn't leave the other seeds' shares to be filled from that seed's lists alone."""
+    with conn:
+        conn.execute("UPDATE candidates SET status = 'candidate' WHERE status = 'not_selected'")
+        gen = conn.execute("INSERT INTO generations (stats) VALUES ('{}')").lastrowid
+    seeds = {s for s, _ in pool.buckets(conn, gen)}
+    assert len(seeds) > 1                                   # earlier pulls' leftovers, though this pull is empty
+
+
+def test_surplus_over_a_seed_share_is_parked(conn):
+    veto.update(conn)
+    playable = [r[0] for r in conn.execute(f"SELECT t.id FROM tracks t WHERE {veto.PLAYABLE}")]
+    flood = conn.execute("SELECT min(seed_track_id) FROM suggestions").fetchone()[0]
+    with conn:                                              # one seed's share holds most of the pool
+        conn.executemany("UPDATE candidates SET pool_seed = ? WHERE track_id = ?",
+                         [(flood, t) for t in playable[:len(playable) * 2 // 3]])
+    owned = playable[:len(playable) * 2 // 3]
+    parked = pool.park_surplus(conn)
+    assert parked > 0
+    rows = {r["id"]: r for r in conn.execute(
+        f"SELECT id, veto_state, file_path, veto FROM tracks WHERE id IN ({','.join('?' * len(owned))})", owned)}
+    kept = [t for t in owned if rows[t]["veto_state"] == "playable"]
+    gone = [t for t in owned if rows[t]["veto_state"] == "surplus"]
+    assert gone and len(gone) <= parked and all(rows[t]["file_path"] is None for t in gone)
+    assert len(kept) < len(owned) / 3                                 # back near its share
+    z = lambda t: json.loads(rows[t]["veto"])["z"]
+    assert min(z(t) for t in kept) >= max(z(t) for t in gone)        # the best-scoring stay
+    veto.update(conn)                                                 # the veto leaves them parked
+    assert all(conn.execute("SELECT veto_state FROM tracks WHERE id = ?", (t,)).fetchone()[0] == "surplus"
+               for t in gone)
+    assert set(gone).isdisjoint(ratings.playable_ids(conn))
+    assert pool.park_surplus(conn) == 0                               # nothing more to park

@@ -173,8 +173,9 @@ def update(conn: sqlite3.Connection) -> dict:
         for tid, d in details.items():
             r = rows[tid]
             state = r["veto_state"] or "playable"
-            if state in ("dropped", "owned"):         # v5: its seeds left the playlist (find.drop_orphans), or
-                pass                                  # it's already in the playlist (find.mark_owned)
+            if state in ("dropped", "owned", "surplus"):  # v5: its seeds left the playlist (find.drop_orphans), it's
+                pass                                  # already in the playlist (find.mark_owned), or its seed's share
+                                                      # was over-full (pool.park_surplus)
             elif active and not r["played"]:
                 hard = d["rules"]["backstop"] or d["rules"].get("tempo_band", False)
                 if state != "vetoed" and (d["z"] < -CFG["cut_sd"] or hard):
