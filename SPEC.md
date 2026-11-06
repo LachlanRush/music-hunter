@@ -836,3 +836,5 @@ Every action and background event checked for state that waited for a later rati
 - **History**: ratings from every playlist's Find music (a rating re-scores the other playlists in the background) plus the archived runs v1–v3 (267 ratings; `artist_history` in the library, sent to the Pi with `music-hunter artist-history --send`). Without them only 13 of the 206 picks would have had 5+ ratings (51 with them).
 - **Logged** with every track and play (`veto.artist`: value, ratings, its part); re-check at ~300 ratings.
 - **On a copy of the Pi's data**: pump 82 of 459 unplayed tracks get an artist value (deeper 57 of 324, Interesting d&b 1), playable 196 → 195 and 164 → 162; SWIM, DJ Heartstring, Ned Bennett down ~0.7–1.4 SD, TWOFACED and Marlon Hoffstadt up ~1 SD.
+
+**Released as add-on 0.5.8 (2026-11-06)**: §18.24–18.29.
