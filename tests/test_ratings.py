@@ -173,7 +173,8 @@ def test_scripted_ratings(conn):
     assert sum(q.values()) == 150 and {src for _, src in q} == set(SOURCES)
     best, worst = max(avgs, key=avgs.get), min(avgs, key=avgs.get)
     if avgs[best] > avgs[worst]:
-        assert sum(n for (s, _), n in q.items() if s == best) > sum(n for (s, _), n in q.items() if s == worst)
+        # ≥: with random picks the two averages can be close enough to round to the same number of slots
+        assert sum(n for (s, _), n in q.items() if s == best) >= sum(n for (s, _), n in q.items() if s == worst)
 
     # 8. Next generation: averages follow the decay rule (v3: by rating count, so a refill doesn't age ratings).
     with c:
