@@ -384,6 +384,18 @@ def send_feedback(body: FeedbackBody) -> dict:
     return {"ok": True, "id": fid}
 
 
+@app.get("/results", response_class=HTMLResponse)
+def overview_page() -> str:
+    """Results across all playlists (SPEC.md §18.25)."""
+    return (STATIC / "overview.html").read_text()
+
+
+@app.get("/api/overview")
+def overview_data() -> dict:
+    from .overview import overview
+    return overview()
+
+
 @app.get("/api/playlists")
 def get_playlists() -> list[dict]:
     conn = db.connect()
@@ -1014,11 +1026,6 @@ def client_event(body: ClientEvent) -> dict:
         raise HTTPException(400, f"Unknown event kind {body.kind!r}")
     db.log_event(db.connect(), f"player_{body.kind}", body.play_id, **body.data)
     return {"ok": True}
-
-
-@router.get("/results", response_class=HTMLResponse)
-def results_page() -> str:
-    return (STATIC / "results.html").read_text()
 
 
 @router.get("/api/results")

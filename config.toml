@@ -102,9 +102,10 @@ unrated_counts_as = 2                         # Close
 # v5 (2026-10-31): five bad, five good, not overlapping; Close gets the bad ones (what kept it from being an Add).
 # 2026-11-02: "lyrics" folded into "vocals"; "wrong genre" for a track that's completely off (rock among EDM).
 # 2026-11-03: ordered by how much they put me off.
-"1" = ["vocals", "wrong energy", "harsh sound", "boring", "wrong genre"]
-"2" = ["vocals", "wrong energy", "harsh sound", "boring", "wrong genre"]
-"3" = ["great vocals", "groove", "melody", "energy", "the drop"]
+# 2026-11-06: four each — "wrong genre" (looked too much like "wrong energy") and "melody" (never used) removed.
+"1" = ["vocals", "wrong energy", "harsh sound", "boring"]
+"2" = ["vocals", "wrong energy", "harsh sound", "boring"]
+"3" = ["energy", "groove", "great vocals", "the drop"]
 
 [find]
 # SPEC.md §18.2–18.3 (v5) — Find music per playlist
