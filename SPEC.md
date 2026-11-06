@@ -838,3 +838,7 @@ Every action and background event checked for state that waited for a later rati
 - **On a copy of the Pi's data**: pump 82 of 459 unplayed tracks get an artist value (deeper 57 of 324, Interesting d&b 1), playable 196 → 195 and 164 → 162; SWIM, DJ Heartstring, Ned Bennett down ~0.7–1.4 SD, TWOFACED and Marlon Hoffstadt up ~1 SD.
 
 **Released as add-on 0.5.8 (2026-11-06)**: §18.24–18.29.
+
+### 18.30 Results page: one curve (2026-11-06, my request)
+- The Results page (`/results`) now shows only one chart: the share of plays rated **Off** and **Add** (y) by the track's veto score when it played (x), from the gate (0) to the highest-scoring play, all playlists together. Each point averages the plays near that score (Gaussian, `[ui] results_bandwidth_sd` 0.3); dashed where fewer than `results_thin_n` (15) plays support it; ticks along the axis mark the plays; hover for the numbers. Score bands, trend, sources, tempo, tags and sound maps are gone.
+- On the Pi's data (155 plays above the gate): Off falls from ~38% at the gate to ~20% at +1.2 and ~5% at +2; Add stays at ~15% up to +1.5, then the top ten plays (+1.6 to +2.5) were all Close.

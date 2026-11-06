@@ -261,6 +261,8 @@ session_gap_minutes = 30         # plays further apart than this start a new ses
 
 [ui]
 maintenance_minutes = 60         # v5: re-score idle playlists, purge Recently deleted, restart due work
+results_bandwidth_sd = 0.3       # Results curve: each point averages plays within about this score distance (Gaussian)
+results_thin_n = 15              # …drawn dashed where fewer plays than this support it
 # SPEC.md §11 — localhost player
 host = "127.0.0.1"
 port = 8765
