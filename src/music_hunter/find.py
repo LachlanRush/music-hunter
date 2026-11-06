@@ -58,7 +58,45 @@ def sync_seeds(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: i
                                  f" AND library_id NOT IN ({','.join('?' * len(keep))})", keep).rowcount
     drop_orphans(lib, sess, playlist_id)
     follow_removed_adds(lib, sess, playlist_id)
+    mark_owned(lib, sess, playlist_id)
     return {"seeds": len(starred), "added": added, "unstarred": unstarred}
+
+
+def playlist_songs(lib: sqlite3.Connection, playlist_id: int) -> tuple[set, list]:
+    """Video IDs and songs already in a playlist, its Recently deleted list, or removed from it for good — Find
+    music shouldn't offer these again."""
+    from . import names
+
+    rows = lib.execute("SELECT t.video_id, t.artist, t.title FROM tracks t WHERE t.id IN"
+                       " (SELECT track_id FROM playlist_tracks WHERE playlist_id = ?"
+                       "  UNION SELECT track_id FROM deleted_tracks WHERE playlist_id = ?"
+                       "  UNION SELECT track_id FROM removed_tracks WHERE playlist_id = ?)"
+                       " OR t.spotify_id IN (SELECT spotify_id FROM removed_spotify WHERE playlist_id = ?)",
+                       (playlist_id,) * 4).fetchall()
+    return {r[0] for r in rows if r[0]}, [names.song(r[1], r[2]) for r in rows]
+
+
+def mark_owned(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: int) -> dict:
+    """Unplayed pool tracks that are (or were) already in the playlist — added by link, imported, from another
+    playlist — aren't offered ('owned'); if that stops being true they return and the veto decides again."""
+    from . import names
+
+    vids, songs = playlist_songs(lib, playlist_id)
+    rows = sess.execute("SELECT id, video_id, artist, title, veto_state FROM tracks WHERE origin = 'pool'"
+                        " AND library_id IS NULL AND id NOT IN (SELECT track_id FROM plays)").fetchall()
+    owned, back = [], []
+    for r in rows:
+        mine = (r["video_id"] in vids) or any(names.song(r["artist"], r["title"]).same_song(s) for s in songs)
+        if mine and r["veto_state"] != "owned":
+            owned.append(r["id"])
+        elif not mine and r["veto_state"] == "owned":
+            back.append(r["id"])
+    with sess:
+        sess.executemany("UPDATE tracks SET veto_state = 'owned' WHERE id = ?", [(t,) for t in owned])
+        sess.executemany("UPDATE tracks SET veto_state = 'playable' WHERE id = ?", [(t,) for t in back])
+    if owned or back:
+        db.log_event(sess, "owned_tracks", owned=len(owned), returned=len(back))
+    return {"owned": len(owned), "returned": len(back)}
 
 
 def follow_removed_adds(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: int) -> dict:
@@ -147,9 +185,9 @@ def sync_add(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: int
                     _copy_embedding(sess, p["id"], lib, lid)
             with sess:
                 sess.execute("UPDATE tracks SET library_id = ? WHERE id = ?", (lid, p["id"]))
+        from .library import add_to_playlist
+        add_to_playlist(lib, playlist_id, lid, "added")          # (also takes it out of Recently deleted)
         with lib:
-            lib.execute("INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, status) VALUES (?, ?, 'added')",
-                        (playlist_id, lid))
             if p["file_path"]:
                 lib.execute("UPDATE tracks SET file_path = ? WHERE id = ?", (p["file_path"], lid))
     elif p["library_id"]:

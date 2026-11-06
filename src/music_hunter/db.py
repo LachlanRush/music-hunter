@@ -197,6 +197,13 @@ CREATE TABLE IF NOT EXISTS deleted_tracks (
     PRIMARY KEY (playlist_id, track_id)
 );
 
+-- v5: tracks removed from a playlist for good — Find music doesn't offer them to that playlist again.
+CREATE TABLE IF NOT EXISTS removed_tracks (
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    track_id    INTEGER NOT NULL REFERENCES tracks(id),
+    PRIMARY KEY (playlist_id, track_id)
+);
+
 -- v5: Spotify tracks removed from a playlist for good — a refresh from Spotify doesn't bring them back.
 CREATE TABLE IF NOT EXISTS removed_spotify (
     playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
@@ -296,7 +303,8 @@ MIGRATIONS = [
     ("tracks", "stars", "INTEGER"),                    # v5 session: a seed's stars (synced from its playlist)
     ("tracks", "library_id", "INTEGER"),               # v5 session: the library track this is a copy of / was saved as
     ("plays", "demoted", "INTEGER"),                  # v5: an Add whose track I later removed from the playlist: counts as Close
-    ("tracks", "gate_since", "INTEGER"),              # v5: rating count when a playable track fell below the gate
+    ("tracks", "gate_since", "INTEGER"),
+    ("tracks", "gate_since_at", "TEXT"),              # v5: …and when (the grace also ends after grace_days)              # v5: rating count when a playable track fell below the gate
     ("tracks", "redownloads", "INTEGER"),             # v5: times its audio was downloaded again after being dropped
     ("playlist_tracks", "starred_at", "TEXT"),
     ("playlist_tracks", "bpm_override", "REAL"),        # v5: this track's own "Play at … BPM" in this playlist         # v5: when its stars were last set (order within the same stars)

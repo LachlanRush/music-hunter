@@ -164,15 +164,17 @@ def update(conn: sqlite3.Connection) -> dict:
         return {"analysed": 0, "playable": 0, "vetoed": 0, "newly_vetoed": 0, "returned": 0, "active": False}
     active = CFG["enabled"] and len(details) >= CFG["min_analysed"]
     rows = {r["id"]: r for r in analysed_tracks(conn)}
-    meta = {r["id"]: r for r in conn.execute("SELECT id, gate_since, redownloads FROM tracks WHERE origin = 'pool'")}
+    meta = {r["id"]: r for r in conn.execute(
+        "SELECT id, gate_since, redownloads, gate_since_at < datetime('now', ?) AS grace_over_by_time FROM tracks"
+        " WHERE origin = 'pool'", (f"-{CFG['grace_days']} days",))}
     n_rated = conn.execute("SELECT count(*) FROM plays WHERE rating IS NOT NULL").fetchone()[0]
     vetoed_now, returned, drop_audio, gone = [], [], [], []
     with conn:
         for tid, d in details.items():
             r = rows[tid]
             state = r["veto_state"] or "playable"
-            if state == "dropped":                    # v5: its seeds left the playlist (find.drop_orphans)
-                pass
+            if state in ("dropped", "owned"):         # v5: its seeds left the playlist (find.drop_orphans), or
+                pass                                  # it's already in the playlist (find.mark_owned)
             elif active and not r["played"]:
                 hard = d["rules"]["backstop"] or d["rules"].get("tempo_band", False)
                 if state != "vetoed" and (d["z"] < -CFG["cut_sd"] or hard):
@@ -181,16 +183,18 @@ def update(conn: sqlite3.Connection) -> dict:
                     if r["veto_state"] is None:          # just analysed: its audio goes straight away
                         drop_audio.append(tid)
                     else:                                # was playable: audio kept for grace_ratings ratings
-                        conn.execute("UPDATE tracks SET gate_since = ? WHERE id = ?", (n_rated, tid))
+                        conn.execute("UPDATE tracks SET gate_since = ?, gate_since_at = datetime('now') WHERE id = ?",
+                                     (n_rated, tid))
                 elif state == "vetoed" and d["z"] > -CFG["return_sd"] and not hard:
                     m = meta[tid]
                     if (r["file_path"] or (m["redownloads"] or 0) < CFG["max_redownloads"]
                             or d["z"] > CFG["redownload_exempt_sd"]):
                         state = "playable"               # with its audio (kept, or downloaded again)
                         returned.append(tid)
-                        conn.execute("UPDATE tracks SET gate_since = NULL WHERE id = ?", (tid,))
+                        conn.execute("UPDATE tracks SET gate_since = NULL, gate_since_at = NULL WHERE id = ?", (tid,))
                 elif state == "vetoed" and r["file_path"] and meta[tid]["gate_since"] is not None \
-                        and n_rated - meta[tid]["gate_since"] >= CFG["grace_ratings"]:
+                        and (n_rated - meta[tid]["gate_since"] >= CFG["grace_ratings"]
+                             or meta[tid]["grace_over_by_time"]):
                     drop_audio.append(tid)               # stayed below too long: audio goes
             elif not active and state == "vetoed" and not r["played"]:
                 state = "playable"

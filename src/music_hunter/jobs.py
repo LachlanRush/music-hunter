@@ -65,13 +65,11 @@ def run_job(conn: sqlite3.Connection, job: dict) -> None:
         if job["kind"] == "import":
             result = library.import_spotify(conn, job["payload"]["link"], job["playlist_id"], report)
             progress.update(result)
-            from . import tempo
-            tempo.sync_playlist(conn, job["playlist_id"])          # Same BPM copies for the new tracks
+            after_tracks_added(conn, job["playlist_id"])
         elif job["kind"] == "add":                              # one song added by hand
             result = library.add_song(conn, job["payload"]["link"], job["playlist_id"], report)
             progress.update(result)
-            from . import tempo
-            tempo.sync_playlist(conn, job["playlist_id"])
+            after_tracks_added(conn, job["playlist_id"])
         else:
             raise ValueError(f"Unknown job kind {job['kind']!r}")
         _set(conn, job["id"], state="done", progress=progress)
@@ -80,6 +78,21 @@ def run_job(conn: sqlite3.Connection, job: dict) -> None:
         _set(conn, job["id"], state="failed", error=f"{type(e).__name__}: {e}", progress=progress)
         db.log_event(conn, "job_error", job=job["kind"], job_id=job["id"], error=str(e)[:300],
                      traceback=traceback.format_exc())
+
+
+def after_tracks_added(conn: sqlite3.Connection, playlist_id: int) -> None:
+    """New tracks in a playlist: Same BPM copies, and Find music stops offering them (and re-scores)."""
+    from . import find, tempo, veto
+
+    tempo.sync_playlist(conn, playlist_id)
+    if find.started(playlist_id):
+        token = db.SESSION.set(playlist_id)
+        try:
+            sess = db.connect(playlist_id)
+            find.sync_seeds(conn, sess, playlist_id)
+            veto.update(sess)
+        finally:
+            db.SESSION.reset(token)
 
 
 class Runner:

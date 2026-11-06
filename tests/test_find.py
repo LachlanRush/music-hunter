@@ -216,3 +216,35 @@ def test_removed_add_counts_as_close(setup):
     library.restore_track(lib, pid, lid)
     find.sync_seeds(lib, sess, pid)
     assert rating() == ADD
+
+
+def test_tracks_already_in_the_playlist_are_not_offered(setup):
+    """A pool track that's (now) in the playlist — added by link, imported, from another playlist — isn't offered
+    by Find music; if it leaves the playlist for good it can come back."""
+    lib, pid, tracks = setup
+    library.set_stars(lib, pid, tracks[0], 4)
+    sess = db.connect(pid)
+    find.sync_seeds(lib, sess, pid)
+    with sess:
+        tid = sess.execute("INSERT INTO tracks (artist, title, duration_s, origin, video_id) VALUES ('Someone', 'Song X',"
+                           " 200, 'pool', 'vidOWN')").lastrowid
+    with lib:
+        lid = lib.execute("INSERT INTO tracks (artist, title, duration_s, origin, video_id) VALUES ('Someone',"
+                          " 'Song X (Extended Mix)', 300, 'library', 'otherVid')").lastrowid
+    state = lambda: sess.execute("SELECT veto_state FROM tracks WHERE id = ?", (tid,)).fetchone()[0]
+    library.add_to_playlist(lib, pid, lid, "added")                     # the same song, another version
+    find.sync_seeds(lib, sess, pid)
+    assert state() == "owned"
+    from music_hunter.ratings import playable_ids
+    assert tid not in playable_ids(sess)
+    library.remove_from_playlist(lib, pid, lid)                         # in Recently deleted: still not offered
+    find.sync_seeds(lib, sess, pid)
+    assert state() == "owned"
+    library.delete_forever(lib, pid, lid)                                 # deleted for good: never offered again
+    find.sync_seeds(lib, sess, pid)
+    assert state() == "owned"
+    library.add_to_playlist(lib, pid, lid)                               # back in (by hand): still in the playlist
+    with lib:
+        lib.execute("DELETE FROM playlist_tracks WHERE track_id = ?", (lid,))   # gone without a trace: offered again
+    find.sync_seeds(lib, sess, pid)
+    assert state() == "playable"

@@ -46,6 +46,7 @@ async def lifespan(app):
                 db.SESSION.reset(token)
             session_worker(p["id"]).start_if_needed()
     jobs.requeue_interrupted(conn)                  # v5: a job cut off by a restart runs again (jobs are re-runnable)
+    threading.Thread(target=_maintenance, daemon=True, name="maintenance").start()
     job_runner.kick()
     from . import tempo
     threading.Thread(target=tempo.sync_all, daemon=True).start()   # Same BPM copies for every playlist
@@ -565,6 +566,32 @@ def star_track(playlist_id: int, track_id: int, body: StarsBody) -> dict:
     return {"ok": True}
 
 
+def _maintenance() -> None:
+    """Hourly, so nothing waits for me to open a page or rate a track (SPEC.md §18.26): every Find music session is
+    re-scored (grace periods run out by time too) and its background work restarted if any is due; Recently deleted
+    tracks past their 30 days go; stretched copies follow their playlists."""
+    from . import tempo
+
+    while True:
+        time.sleep(CONFIG["ui"].get("maintenance_minutes", 60) * 60)
+        try:
+            lib = db.connect_library()
+            library.purge_deleted(lib)
+            for p in library.list_playlists(lib):
+                if not find.started(p["id"]):
+                    continue
+                token = db.SESSION.set(p["id"])
+                try:
+                    if session_worker(p["id"]).state != "running":
+                        veto.update(db.connect(p["id"]))
+                finally:
+                    db.SESSION.reset(token)
+                session_worker(p["id"]).start_if_needed()
+            tempo.sync_all()
+        except Exception as e:  # noqa: BLE001 — keep the loop alive
+            db.log_event(db.connect_library(), "maintenance_failed", error=str(e)[:200])
+
+
 def _after_membership_change(conn, playlist_id: int) -> None:
     """Seeds changed (stars set or cleared, a track removed or restored): everything that depends on them follows
     straight away — tempo copies and the playlist's tempo range; in Find music the seeds (a newly starred track is
@@ -577,6 +604,8 @@ def _after_membership_change(conn, playlist_id: int) -> None:
             sess = db.connect(playlist_id)
             find.sync_seeds(conn, sess, playlist_id)
             veto.update(sess)
+            from . import tempo
+            tempo.sync_session(sess, playlist_id)     # its default Set to BPM follows the playlist's tempo
         finally:
             db.SESSION.reset(token)
         session_worker(playlist_id).start_if_needed()        # pull for new seeds, top the pool up
@@ -642,7 +671,7 @@ def add_track(playlist_id: int, body: AddTrackBody) -> dict:
     conn = db.connect()
     try:
         added = library.add_to_playlist(conn, playlist_id, body.track_id, "added")   # lands in "To rate"
-        _sync_tempo(conn, playlist_id)
+        _after_membership_change(conn, playlist_id)
     except ValueError as e:
         raise HTTPException(404, str(e))
     return {"added": added}

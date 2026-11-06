@@ -45,6 +45,7 @@ def delete_playlist(conn: sqlite3.Connection, playlist_id: int) -> None:
         conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?", (playlist_id,))
         conn.execute("DELETE FROM deleted_tracks WHERE playlist_id = ?", (playlist_id,))
         conn.execute("DELETE FROM removed_spotify WHERE playlist_id = ?", (playlist_id,))
+        conn.execute("DELETE FROM removed_tracks WHERE playlist_id = ?", (playlist_id,))
         conn.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
     for tid in tracks:
         _drop_if_orphaned(conn, tid)
@@ -89,6 +90,7 @@ def add_to_playlist(conn: sqlite3.Connection, playlist_id: int, track_id: int, s
         raise ValueError("No such playlist")
     with conn:
         conn.execute("DELETE FROM deleted_tracks WHERE playlist_id = ? AND track_id = ?", (playlist_id, track_id))
+        conn.execute("DELETE FROM removed_tracks WHERE playlist_id = ? AND track_id = ?", (playlist_id, track_id))
         return conn.execute("INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, status) VALUES (?, ?, ?)",
                             (playlist_id, track_id, status)).rowcount > 0
 
@@ -123,6 +125,7 @@ def delete_forever(conn: sqlite3.Connection, playlist_id: int, track_id: int) ->
     sid = conn.execute("SELECT spotify_id FROM tracks WHERE id = ?", (track_id,)).fetchone()
     with conn:
         conn.execute("DELETE FROM deleted_tracks WHERE playlist_id = ? AND track_id = ?", (playlist_id, track_id))
+        conn.execute("INSERT OR IGNORE INTO removed_tracks (playlist_id, track_id) VALUES (?, ?)", (playlist_id, track_id))
         if sid and sid[0]:
             conn.execute("INSERT OR IGNORE INTO removed_spotify (playlist_id, spotify_id) VALUES (?, ?)",
                          (playlist_id, sid[0]))
@@ -153,9 +156,9 @@ def _drop_if_orphaned(conn: sqlite3.Connection, track_id: int) -> None:
         return
     t = conn.execute("SELECT file_path FROM tracks WHERE id = ?", (track_id,)).fetchone()
     if t and t["file_path"] and t["file_path"].startswith(CONFIG["paths"]["library"] + "/"):
-        resolve(t["file_path"]).unlink(missing_ok=True)
         with conn:
             conn.execute("UPDATE tracks SET file_path = NULL WHERE id = ?", (track_id,))
+        db.release_audio(conn, t["file_path"])        # unless a Find music session still plays it (e.g. back)
 
 
 # --- importing from Spotify ----------------------------------------------------------------

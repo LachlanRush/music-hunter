@@ -103,11 +103,12 @@ def fake_restore(conn, track_id):
 
 
 class InlineThread:
-    def __init__(self, target, args=(), daemon=None):
-        self.target, self.args = target, args
+    def __init__(self, target, args=(), daemon=None, name=None):
+        self.target, self.args, self.name = target, args, name
 
     def start(self):
-        self.target(*self.args)
+        if self.name != "maintenance":             # the hourly loop never ends: not run inline
+            self.target(*self.args)
 
 
 def test_session(conn, monkeypatch):

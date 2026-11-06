@@ -119,7 +119,8 @@ enabled = true
 # the middle of everything analysed are played (in pump, pump-like playlists: Off 55% just below vs 25% above).
 cut_sd = 0.0                     # vetoed when the veto score is this many robust SDs below the run's median…
 return_sd = -0.2                 # …and playable again only above this (here: +0.2 SD; two lines: no flip-flopping)
-grace_ratings = 15               # a track that was playable and falls below keeps its audio this many ratings
+grace_ratings = 15               # a track that was playable and falls below keeps its audio this many ratings…
+grace_days = 3                   # …or this many days, whichever comes first (a playlist I'm not using doesn't hold it)
 max_redownloads = 2              # a track whose audio was deleted is downloaded again at most this often…
 redownload_exempt_sd = 1.25      # …unless it rises into the top band
 backstop_sd = 2.5                # also vetoed: closeness to seeds this far below the median (clearly out of the area)
@@ -253,6 +254,7 @@ max_true_peak_db = -1.0
 session_gap_minutes = 30         # plays further apart than this start a new session
 
 [ui]
+maintenance_minutes = 60         # v5: re-score idle playlists, purge Recently deleted, restart due work
 # SPEC.md §11 — localhost player
 host = "127.0.0.1"
 port = 8765

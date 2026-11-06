@@ -132,6 +132,11 @@ class Pull:
         self.known = [names.song(r["artist"], r["title"]) for r in shown]
         self.known_video = {r["video_id"] for r in shown if r["video_id"]}
         self.known_isrc = {r["isrc"] for r in shown if r["isrc"]}
+        if db.SESSION.get() is not None:          # v5: and what's already in (or was removed from) the playlist
+            from .find import playlist_songs
+            vids, songs = playlist_songs(db.connect_library(), db.SESSION.get())
+            self.known += songs
+            self.known_video |= vids
         # Already in the pool (downloaded, unplayed) from earlier generations.
         pool = conn.execute(
             "SELECT c.id, c.song_title, c.song_artists, c.is_extended, c.video_id, c.isrc FROM candidates c"
@@ -358,6 +363,9 @@ class Matcher:
     def _duplicate(self, c, column: str, value: str) -> str | None:
         shown = self.conn.execute(f"SELECT 1 FROM tracks t JOIN candidates c ON c.id = t.candidate_id"
                                   f" WHERE c.{column} = ? AND c.id != ? AND {SHOWN}", (value, c["id"])).fetchone()
+        if column == "video_id" and db.SESSION.get() is not None and not shown:
+            from .find import playlist_songs
+            shown = value in playlist_songs(db.connect_library(), db.SESSION.get())[0]   # already in the playlist
         if shown or (column == "video_id" and self.conn.execute(
                 f"SELECT 1 FROM tracks t WHERE t.video_id = ? AND {SHOWN}", (value,)).fetchone()):
             return self._set(c["id"], "known", f"already_rated_or_shown_{column}")
