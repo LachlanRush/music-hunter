@@ -1,5 +1,5 @@
 """A playlist's Find music results (SPEC.md §18.30): one curve — the share of plays rated Off and Add by the track's
-veto score when it played, from the lowest-scoring play to the highest, with the gate (0) marked. Plays drawn from a
+veto score when it played, from the gate (0) to the highest-scoring play. Plays drawn from a
 seed share that was over-full (more than [pool] surplus_factor × its target at the latest pull before the play — the
 pool bug fixed in §18.28) are left out. Rates only; nothing names a play."""
 
@@ -13,23 +13,18 @@ from .config import CONFIG
 
 def _curve(zs: list[float], ratings: list[int]) -> dict:
     if len(zs) < 2:
-        return {"plays": len(zs), "curve": [], "rug": [], "min": 0, "max": 0}
+        return {"plays": len(zs), "curve": [], "rug": [], "max": 0}
     z, r = np.array(zs), np.array(ratings)
-    # From the third-lowest play (a stray one or two far below would stretch the axis), and never right of the gate.
-    lo = min(0.0, float(np.floor(np.sort(z)[min(2, len(z) - 1)] * 2) / 2))
     top, bw = float(z.max()), CONFIG["ui"]["results_bandwidth_sd"]
     curve = []
-    for x in np.linspace(lo, top, 101):
+    for x in np.linspace(0, top, 101):
         w = np.exp(-0.5 * ((z - x) / bw) ** 2)            # nearby plays count most
         n = w.sum()
         curve.append({"x": round(float(x), 3), "off": round(float(100 * w[r == 1].sum() / n), 1),
                       "add": round(float(100 * w[r == 3].sum() / n), 1),
                       "n": round(float(n ** 2 / (w ** 2).sum()), 1)})   # effective number of plays behind the point
-    above = z >= 0
-    return {"plays": len(zs), "above_gate": int(above.sum()), "min": round(lo, 3), "max": round(top, 3),
-            "curve": curve, "rug": sorted(round(float(v), 2) for v in z if v >= lo),
-            "off": round(100 * float((r[above] == 1).mean()), 1) if above.any() else None,
-            "add": round(100 * float((r[above] == 3).mean()), 1) if above.any() else None}
+    return {"plays": len(zs), "max": round(top, 3), "curve": curve, "rug": sorted(round(float(v), 2) for v in z),
+            "off": round(100 * float((r == 1).mean()), 1), "add": round(100 * float((r == 3).mean()), 1)}
 
 
 def overfull_plays(sess) -> set[int]:
@@ -65,7 +60,7 @@ def overview(playlist_id: int) -> dict:
         for pid, veto, rating in sess.execute(
                 "SELECT id, veto, rating FROM plays WHERE rating IS NOT NULL AND veto IS NOT NULL"):
             z = json.loads(veto).get("z")
-            if z is None:
+            if z is None or z < 0:                      # below the gate: no longer played
                 continue
             if pid in skip:
                 left_out += 1
@@ -73,4 +68,4 @@ def overview(playlist_id: int) -> dict:
             zs.append(z)
             ratings.append(rating)
     return {"name": p["name"] if p else "", **_curve(zs, ratings), "left_out": left_out,
-            "thin_n": CONFIG["ui"]["results_thin_n"]}
+}
