@@ -276,14 +276,16 @@ def _base() -> str:
 
 
 def _find_rate(conn, bpm) -> dict:
-    """Same BPM in Find music: the rate this track plays at, and a short note (none outside a v5 session)."""
+    """Same BPM in Find music: the rate this track plays at, a short note, and its tempo as shown (the reading
+    nearest the playlist's typical tempo; shown even while the track is hidden — it doesn't say which track it is)."""
     from . import tempo
 
     if db.SESSION.get() is None:
-        return {"rate": 1.0, "tempo_note": "", "copy_rate": 1.0}
+        return {"rate": 1.0, "tempo_note": "", "copy_rate": 1.0, "bpm_shown": round(bpm) if bpm else None}
     s = tempo.session_settings(conn)
     rate, note = tempo.rate_for(bpm, s)
-    return {"rate": rate, "tempo_note": note, "copy_rate": tempo.rate_for(bpm, s, ignore_off=True)[0]}
+    return {"rate": rate, "tempo_note": note, "copy_rate": tempo.rate_for(bpm, s, ignore_off=True)[0],
+            "bpm_shown": tempo.shown_bpm(bpm, s["target"])}
 
 
 def track_info(conn, play) -> dict:

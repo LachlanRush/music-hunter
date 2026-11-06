@@ -248,3 +248,43 @@ def test_tracks_already_in_the_playlist_are_not_offered(setup):
         lib.execute("DELETE FROM playlist_tracks WHERE track_id = ?", (lid,))   # gone without a trace: offered again
     find.sync_seeds(lib, sess, pid)
     assert state() == "playable"
+
+
+def test_add_changed_to_close_leaves_no_trace(setup, monkeypatch):
+    """Changing an Add to Close in Find music: it's a Close (mild like) from then on — out of the playlist (not in
+    Recently deleted), not a seed, and the tracks pulled for it leave the pool unless another seed found them."""
+    from fastapi.testclient import TestClient
+    from music_hunter import web
+    from music_hunter.pull import mark_pulled
+
+    lib, pid, tracks = setup
+    monkeypatch.setattr(web.Worker, "start_if_needed", lambda self: None)
+    library.set_stars(lib, pid, tracks[0], 4)
+    sess = db.connect(pid)
+    find.sync_seeds(lib, sess, pid)
+    with sess:
+        add = sess.execute("INSERT INTO tracks (artist, title, file_path, duration_s, origin, video_id) VALUES"
+                           " ('New', 'Find', NULL, 200, 'pool', 'vidADD')").lastrowid
+        sess.execute("INSERT INTO track_embeddings (track_id, model, dim, n_chunks, embedding)"
+                     " SELECT ?, model, dim, n_chunks, embedding FROM track_embeddings LIMIT 1", (add,))
+        play = sess.execute("INSERT INTO plays (track_id, generation, play_number, is_control, rating, rated_at,"
+                            " components, score, rank, pool_size, provenance) VALUES (?, 1, 1, 0, 3, datetime('now'),"
+                            " '{}', 0, 1, 1, '[]')", (add,)).lastrowid
+        g = sess.execute("INSERT INTO generations DEFAULT VALUES").lastrowid
+        cid = sess.execute("INSERT INTO candidates (generation, artist, title, song_title, song_artists, is_extended)"
+                           " VALUES (?, 'X', 'Only from the Add', 'only from the add', '[\"x\"]', 0)", (g,)).lastrowid
+        sess.execute("INSERT INTO suggestions (generation, seed_track_id, source, rank, artist, title, outcome,"
+                     " candidate_id) VALUES (?, ?, 'deezer', 1, 'X', 'Only from the Add', 'new', ?)", (g, add, cid))
+        found = sess.execute("INSERT INTO tracks (artist, title, duration_s, origin, candidate_id) VALUES"
+                             " ('X', 'Only from the Add', 200, 'pool', ?)", (cid,)).lastrowid
+    find.sync_add(lib, sess, pid, play)
+    mark_pulled(sess, [add])
+    lid = sess.execute("SELECT library_id FROM tracks WHERE id = ?", (add,)).fetchone()[0]
+    assert any(t["id"] == lid and t["status"] == "added" for t in library.playlist_tracks(lib, pid))
+    r = TestClient(web.app).post(f"/find/{pid}/api/change", json={"rating": 2})
+    assert r.status_code == 200 and r.json()["rating"] == 2
+    assert not any(t["id"] == lid for t in library.playlist_tracks(lib, pid))      # out of the playlist…
+    assert library.deleted_tracks(lib, pid) == []                                   # …and not in the bin
+    assert add not in {s.track_id for s in seeds(sess)}                              # not a seed
+    assert sess.execute("SELECT veto_state FROM tracks WHERE id = ?", (found,)).fetchone()[0] == "dropped"
+    assert sess.execute("SELECT rating, demoted FROM plays WHERE id = ?", (play,)).fetchone()[:] == (2, None)

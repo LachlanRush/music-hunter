@@ -808,3 +808,16 @@ Every action and background event checked for state that waited for a later rati
 - **Idle playlists**: grace audio was only released after more ratings, and Recently deleted only purged when the page was opened. Now grace also ends after 3 days (`grace_days`), and an hourly maintenance pass (`[ui] maintenance_minutes`) re-scores every Find music session, restarts any background work that's due, purges Recently deleted and keeps stretched copies in step.
 - **Library audio** deleted when a track left every playlist only if no Find music session still points at it (the back button).
 - Already immediate (checked): ratings and changed ratings, stars, removing and restoring, removed Adds (as Close, §18.24), tempo settings and overrides, playlist deletion, imports' stretched copies.
+
+### 18.27 Tempo in Find music; data check (2026-11-06)
+- **BPM under the track** in Find music, also while it's hidden (a tempo doesn't say which track it is): the track's own tempo, read nearest Find music's target (so a half or 2:3 reading shows as its real tempo), as in the playlist rows.
+- **Download quality**: YouTube serves at best Opus ~130 kbps (format 251, what we use) or AAC 128 kbps (140); AAC 256 kbps (141) only with a YouTube Music Premium sign-in, which we don't use. Re-encoding to a higher bitrate would add size, not quality.
+- **Add changed to Close** checked (test and the Pi's data): the track leaves the playlist (not into Recently deleted), stops being a seed, and the finds only it suggested are dropped; finds also suggested by other seeds stay.
+- **Data check** (460 rated plays: v1–v3 and the three playlists; ratings as within-run percentiles):
+  - **Artist**: no signal for a different song by the same artist — within runs ρ −0.03 (shuffled baseline −0.02), across runs −0.04 (p 0.68). A few artists look one-sided (NewTone 8 of 10 liked; Elte 5 of 5 Off, Josh Baker 4 of 4 Off) but about as many as chance gives across 48 artists with 3+ plays.
+  - **Tracks by a seed's artist** look much better at first (pump 33% vs 11% liked), but only because an Add makes its own artist a seed artist; counting only seeds that existed before the play, the effect disappears (pump 10% vs 24% liked) and adding it to the veto made Off-spotting slightly worse (0.730 → 0.714–0.725).
+  - **Seed**: no seed's finds rate differently from the rest beyond chance in any run (permutation tests); one flag in 60+ seed tests (BAUGRUPPE90 – Feedback in deeper, 5 of 18 liked, p 0.04) is what chance gives.
+  - **Track length** (random picks): longer tracks did better in deeper (ρ +0.40; +0.27 after allowing for the veto score) and d&b (20 plays), not in pump (0.00); under 4 min 48% Off vs 29% at 5:30–7 min. To re-check with more ratings before using it.
+  - **Small or none**: position in a listening session (Off 30% in the first 10 plays vs 42% later; part of it chance in the veto scores), time of day, the previous track's rating, release year, remix / feat. in the title.
+  - **Decision time** (Pi, median from start to rating): Off 38 s, Close 74 s, Add 112 s.
+  - The veto score remains the one clear signal on random picks (ρ +0.31, Off-spotting AUC 0.73).

@@ -24,6 +24,8 @@
 .transport { display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 14px; }
 .round:disabled { opacity: 0.4; cursor: default; }
 .now.previous .title { color: var(--muted); }
+.bpm { font: 500 13px var(--mono); color: var(--muted); margin-top: 6px; }
+.bpm:empty { display: none; }
 .title.hidden-name { color: var(--muted); font-stretch: 100%; letter-spacing: 0; }
 .round {
   width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--line);
@@ -112,6 +114,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
         <div class="label" id="now-label"></div>
         <div class="artist" id="artist"></div>
         <h1 class="title" id="title"></h1>
+        <div class="bpm" id="bpm"></div>
       </div>
     </div>
     <div class="transport">
@@ -396,6 +399,7 @@ function showNames(track) {
   $("artist").textContent = hidden ? "" : track.artist;
   $("title").textContent = hidden ? "Hidden until rated" : track.title;
   $("title").classList.toggle("hidden-name", hidden);
+  $("bpm").textContent = track.bpm_shown ? `${track.bpm_shown} BPM` : "";      // shown even while hidden
   $("art-box").innerHTML = track.art ? `<img class="art" src="${track.art}" alt="">` : "?";
   Media.metadata(hidden ? {title: "Hidden until rated", artist: playlistName ? `Finding music for ${playlistName}` : "Find music"}
                         : {title: track.title, artist: track.artist, album: playlistName, art: track.art});
