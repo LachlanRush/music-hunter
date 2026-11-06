@@ -439,6 +439,10 @@ def main() -> None:
     p = sub.add_parser("snapshot", help="Fetch the Pi's databases and log into runs/pi/<time>/ for analysis")
     p.add_argument("--server", help="The app on the Pi (default: [worker] server)")
 
+    p = sub.add_parser("artist-history", help="Store archived runs' ratings (runs/v1–v3) for the artist part of the veto"
+                       " score; --send also sends them to the Pi (§18.29)")
+    p.add_argument("--send", action="store_true")
+    p.add_argument("--server", default=None)
     p = sub.add_parser("pi", help="The app on the Pi: show its log, restart it, or install an update")
     p.add_argument("action", choices=["log", "restart", "update", "feedback"])
     p.add_argument("--server", help="The app on the Pi (default: [worker] server)")
@@ -457,7 +461,8 @@ def main() -> None:
     db.setup_logging()
     if args.playlist is not None:
         from . import find
-        if args.command in ("add-seeds", "embed-seeds", "serve", "worker", "migrate", "snapshot", "pi", "feedback"):
+        if args.command in ("add-seeds", "embed-seeds", "serve", "worker", "migrate", "snapshot", "pi", "feedback",
+                            "artist-history"):
             sys.exit(f"{args.command} doesn't take --playlist (seeds come from the playlist's stars)")
         if not find.started(args.playlist):
             sys.exit(f"Playlist {args.playlist} has no Find music session yet (start it from the playlist page)")
@@ -502,6 +507,20 @@ def main() -> None:
     elif args.command == "pi":
         from .transfer import pi
         pi(args.action, args.server, args.lines)
+    elif args.command == "artist-history":
+        from . import artist
+        from .config import PROJECT
+
+        rows = [r for v in ("v1", "v2", "v3") for r in artist.archived(PROJECT / "runs" / v, v)]
+        print(f"{artist.store(db.connect_library(), rows)} archived ratings stored here")
+        if args.send:
+            import requests
+
+            from .transfer import _app
+            base, headers = _app(args.server)
+            r = requests.post(f"{base}/api/admin/artist-history", json=rows, headers=headers, timeout=120)
+            r.raise_for_status()
+            print(f"{r.json()['stored']} sent to {base}")
     elif args.command == "worker":
         from .analysis import run_worker
         run_worker(args.server, once=args.once)

@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 import traceback
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
@@ -567,6 +567,31 @@ def star_track(playlist_id: int, track_id: int, body: StarsBody) -> dict:
     return {"ok": True}
 
 
+_RESCORE = threading.Lock()
+
+
+def _rescore_all(skip: int | None = None) -> None:
+    """Re-score every other started Find music session in the background (a rating anywhere changes artist values
+    everywhere, §18.29). Sessions whose own background work is running re-score themselves as it goes."""
+    def run():
+        if not _RESCORE.acquire(blocking=False):
+            return                                    # one pass at a time; the next rating starts another
+        try:
+            for p in library.list_playlists(db.connect_library()):
+                if p["id"] == skip or not find.started(p["id"]) or session_worker(p["id"]).state == "running":
+                    continue
+                token = db.SESSION.set(p["id"])
+                try:
+                    veto.update(db.connect(p["id"]))
+                finally:
+                    db.SESSION.reset(token)
+        except Exception as e:  # noqa: BLE001
+            db.log_event(db.connect_library(), "rescore_failed", error=str(e)[:200])
+        finally:
+            _RESCORE.release()
+    threading.Thread(target=run, daemon=True, name="rescore").start()
+
+
 def _maintenance() -> None:
     """Hourly, so nothing waits for me to open a page or rate a track (SPEC.md §18.26): every Find music session is
     re-scored (grace periods run out by time too) and its background work restarted if any is due; Recently deleted
@@ -823,6 +848,16 @@ def admin_feedback() -> list[dict]:
     return [{**dict(r), "context": json.loads(r["context"] or "{}")} for r in rows]
 
 
+@app.post("/api/admin/artist-history", dependencies=[Depends(worker_auth)])
+def admin_artist_history(rows: list[dict] = Body(...)):
+    """Ratings from archived runs, for the artist part of the veto score (SPEC.md §18.29); replaces each source's."""
+    from . import artist
+
+    n = artist.store(db.connect_library(), rows)
+    _rescore_all()
+    return {"stored": n}
+
+
 @app.post("/api/admin/restart", dependencies=[Depends(worker_auth)])
 def admin_restart():
     _restart_soon()
@@ -967,6 +1002,7 @@ def rate(body: RateBody) -> dict:
     veto.update(conn)                         # likes changed: re-score, move tracks across the line
     _to_playlist(conn, body.play_id)
     session_worker().start_if_needed()
+    _rescore_all(skip=db.SESSION.get())          # the artist's value changed in the other playlists too
     return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone())
 
 
@@ -991,6 +1027,7 @@ def skip(body: SkipBody) -> dict:
         db.log_event(conn, "auto_rated", body.play_id, rating=auto)
         reweight.after_rating(conn)
         veto.update(conn)                     # likes changed: re-score, move tracks across the line
+        _rescore_all(skip=db.SESSION.get())
     session_worker().start_if_needed()
     return {**track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone()),
             "rated": True}
@@ -1007,6 +1044,7 @@ def change(body: ChangeBody) -> dict:
     if db.SESSION.get() is not None:              # …and the tracks it found follow it
         find.sync_seeds(db.connect_library(), conn, db.SESSION.get())
     veto.update(conn)
+    _rescore_all(skip=db.SESSION.get())
     session_worker().start_if_needed()
     return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone())
 

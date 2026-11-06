@@ -234,6 +234,17 @@ CREATE TABLE IF NOT EXISTS feedback (
     status  TEXT NOT NULL DEFAULT 'new'   -- new | seen
 );
 
+-- v5 (SPEC.md §18.29): ratings from archived runs (v1–v3), for the artist part of the veto score. Live ratings are read
+-- from the playlists' Find music sessions; these add the history from before them. value: Add +1, Close 0, Off −1.
+CREATE TABLE IF NOT EXISTS artist_history (
+    id       INTEGER PRIMARY KEY,
+    source   TEXT NOT NULL,           -- e.g. 'v1'
+    artist   TEXT NOT NULL,           -- as credited
+    title    TEXT NOT NULL,
+    value    INTEGER NOT NULL,
+    rated_at TEXT
+);
+
 -- v5 (SPEC.md §18.4): tracks waiting to be downloaded and analysed by the PC worker ([worker] mode = remote).
 CREATE TABLE IF NOT EXISTS work (
     id             INTEGER PRIMARY KEY,

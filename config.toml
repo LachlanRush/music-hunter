@@ -140,6 +140,11 @@ tempo_margin_bpm = 6.0
 tempo_core_stars = 4
 tempo_core_min = 3
 tempo_hysteresis_bpm = 2.0
+# v5 (2026-11-06, §18.29): artist history. The average of every earlier rating of songs by the track's artists (Add +1,
+# Close 0, Off −1; several artists pooled; its own song not counted) is artist_share of the veto score, the other parts
+# share the rest equally. Below artist_min_ratings ratings a track counts as the average artist.
+artist_share = 0.4
+artist_min_ratings = 5
 
 [veto.weights]                   # veto score = weighted mean of the robust z-scores of these components
 seed_closeness = 1.0

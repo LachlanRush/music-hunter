@@ -5,6 +5,8 @@ against all tracks analysed this run (median and MAD, so a long low tail doesn't
   seed closeness — mean cosine to the k nearest seeds (original seeds and learning Adds), MAEST;
   like closeness — weighted mean cosine to the k nearest liked plays (Close / Add weights), once there are likes;
   sources        — number of distinct sources that suggested the track;
+  artist         — (v5, §18.29) average of earlier ratings of the track's artists (Add +1, Close 0, Off −1), from
+                   artist_min_ratings ratings; artist_share of the score, the parts above share the rest;
   tempo          — distance from the playlist's tempo range (its 4–5 star tracks, tempo.playlist_tempo; v5), plus
                    a band: a track more than tempo_margin_bpm outside the range is vetoed whatever its score.
 The veto score is their weighted mean, standardised the same way. An unplayed track is vetoed when its score
@@ -50,7 +52,7 @@ def _topk_mean(sims: np.ndarray, weights: np.ndarray, k: int) -> np.ndarray:
 
 def analysed_tracks(conn: sqlite3.Connection):
     return conn.execute(
-        "SELECT t.id, t.candidate_id, t.file_path, t.veto_state, t.bpm, e.embedding,"
+        "SELECT t.id, t.candidate_id, t.file_path, t.veto_state, t.bpm, t.artist, t.title, e.embedding,"
         " t.id IN (SELECT track_id FROM plays) AS played"
         " FROM tracks t JOIN track_embeddings e ON e.track_id = t.id WHERE t.origin = 'pool' ORDER BY t.id").fetchall()
 
@@ -135,6 +137,17 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
     z = {c: robust_z(v) for c, v in raw.items()}
     w = {c: CFG["weights"].get(c, 0.0) for c in z}
     score = sum(w[c] * z[c] for c in z) / (sum(w.values()) or 1.0)
+    # Artist (v5, §18.29): artist_share of the score, the rest shared by the parts above. Tracks whose artists have
+    # fewer than artist_min_ratings ratings count as the average artist; the values are scaled by their spread.
+    from . import artist
+
+    art, art_n = (artist.values(conn, [(r["artist"], r["title"]) for r in rows]) if CFG["artist_share"] > 0
+                  else (np.full(len(rows), np.nan), np.zeros(len(rows), int)))
+    known = ~np.isnan(art)
+    art_z = np.zeros(len(rows))
+    if known.sum() >= 2 and art[known].std() > 1e-9:
+        art_z = np.where(known, (art - art[known].mean()) / art[known].std(), 0.0)
+        score = (1 - CFG["artist_share"]) * robust_z(score) + CFG["artist_share"] * art_z
     zs = robust_z(score)
     pct = np.argsort(np.argsort(score)) / max(1, len(score) - 1)
     out = {}
@@ -149,6 +162,8 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
                       "tempo_band": bool(out_of_band[i])},
             "tempo": {**core, "read": round(float(read[i]), 1), "outside_bpm": round(float(outside[i]), 1)}
                      if core else None,
+            "artist": {"value": None if np.isnan(art[i]) else round(float(art[i]), 3), "ratings": int(art_n[i]),
+                       "z": round(float(art_z[i]), 3)},
             "analysed": len(rows),
         }
     return out
