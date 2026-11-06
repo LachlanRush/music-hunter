@@ -189,7 +189,8 @@ def test_session(conn, monkeypatch):
         assert client.get("/api/state").json()["run_complete"] and client.post("/api/next").status_code == 409
         results = client.get("/api/results").json()
         assert not results["sealed"]
-        assert client.get("/results").status_code == 200
+        assert client.get("/playlist/1/results").status_code == 200
+        assert client.get("/api/playlists/1/results").json()["plays"] == 0      # no Find music session here
 
     plays = c.execute("SELECT * FROM plays ORDER BY play_number").fetchall()
     assert len(plays) == PLAYS

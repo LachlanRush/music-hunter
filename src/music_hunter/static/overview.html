@@ -23,6 +23,8 @@ h1 { font: 800 clamp(26px, 5vw, 40px)/1.05 var(--display); font-stretch: 112%; m
 .sub { color: var(--muted); margin: 0; max-width: 68ch; font-size: 14px; }
 .legend { display: flex; gap: 16px; font-size: 13px; color: var(--muted); }
 .legend i { display: inline-block; width: 14px; height: 2px; margin-right: 6px; vertical-align: 3px; }
+.chart h2 { margin: 2px 4px 8px; font: 700 17px var(--display); }
+.chart .sub { margin: 2px 4px 8px; font-size: 13px; }
 .chart { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 12px 6px; }
 svg { display: block; width: 100%; height: auto; overflow: visible; touch-action: none; }
 svg text { font: 400 11px var(--mono); fill: var(--muted); }
@@ -34,14 +36,14 @@ svg text.end { font: 600 12px var(--body); }
 <body>
 <main class="viz">
   <header>
-    <nav><a class="brand" href="/">MUSIC HUNTER</a><a class="backlink" href="/" aria-label="Back to playlists">←</a></nav>
+    <nav><a class="brand" href="/">MUSIC HUNTER</a><a class="backlink" id="back" href="/" aria-label="Back to the playlist">←</a></nav>
   </header>
   <section style="display:grid;gap:8px">
-    <h1>Results</h1>
-    <p class="sub" id="sub"></p>
+    <h1 id="name">Results</h1>
+    <p class="sub">Off and Add in Find music by the track's score when it played, from the gate (0) up. Each point averages the plays near that score; dashed where few plays support it. Ticks along the bottom are the plays.</p>
   </section>
   <div class="legend"><span><i style="background:var(--off)"></i>Off</span><span><i style="background:var(--add)"></i>Add</span></div>
-  <div class="chart"><svg id="chart" role="img" aria-label="Off and Add rate by score"></svg></div>
+  <div class="chart"><p class="sub" id="count"></p><svg id="chart" role="img" aria-label="Off and Add rate by score"></svg></div>
   <div id="tip" hidden></div>
 </main>
 <script>
@@ -53,12 +55,16 @@ const el = (tag, attrs = {}, text) => {
   return e;
 };
 (async () => {
-  const d = await (await fetch("/api/overview")).json();
+  const pid = location.pathname.split("/")[2];
+  document.getElementById("back").href = `/playlist/${pid}`;
+  const d = await (await fetch(`/api/playlists/${pid}/results`)).json();
   const svg = document.getElementById("chart"), tip = document.getElementById("tip");
-  document.getElementById("sub").textContent = d.plays < 2 ? "Not enough rated plays yet." :
-    `${d.plays} rated plays above the gate, all playlists. Overall ${d.off}% Off, ${d.add}% Add. ` +
-    `Each point averages the plays near that score; dashed where few plays support it. Ticks along the bottom are the plays.`;
-  if (d.plays < 2) return;
+  document.getElementById("name").textContent = d.name ? `${d.name} · Results` : "Results";
+  document.title = `${d.name} · Results · Music Hunter`;
+  document.getElementById("count").textContent = d.plays < 2 ? "Not enough rated plays yet." :
+    `${d.plays} rated plays above the gate · ${d.off}% Off · ${d.add}% Add`;
+  if (d.plays < 2) { svg.remove(); return; }
+  d.ymax = Math.min(100, Math.ceil(Math.max(10, ...d.curve.flatMap(c => [c.off, c.add])) / 10) * 10 + 10);
   draw(d, svg, tip);
   let t; addEventListener("resize", () => { clearTimeout(t); t = setTimeout(() => draw(d, svg, tip), 150); });
 })();
@@ -66,10 +72,10 @@ const el = (tag, attrs = {}, text) => {
 function draw(d, svg, tip) {
   svg.replaceChildren();
   // Drawn in screen pixels, so text keeps its size on a phone.
-  const W = Math.max(300, Math.round(svg.parentElement.clientWidth - 24)), H = W < 520 ? 280 : 380;
+  const W = Math.max(300, Math.round(svg.parentElement.clientWidth - 24)), H = W < 520 ? 280 : 360;
   const L = 40, R = 40, T = 14, B = 46;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-  const ymax = Math.min(100, Math.ceil(Math.max(...d.curve.flatMap(p => [p.off, p.add])) / 10) * 10 + 10);
+  const ymax = d.ymax;
   const x = v => L + (W - L - R) * v / d.max, y = v => T + (H - T - B) * (1 - v / ymax);
   for (let v = 0; v <= ymax; v += ymax > 60 ? 20 : 10) {
     svg.append(el("line", {x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "var(--grid)"}));

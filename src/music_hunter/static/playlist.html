@@ -320,7 +320,8 @@ document.addEventListener("click", async (e) => {
     const menu = document.createElement("div");
     menu.className = "menu";
     menu.innerHTML = (data.can_refresh ? `<button data-pl-action="refresh">Refresh from Spotify</button>` : "")
-      + `<button data-pl-action="rename">Rename</button>
+      + `<button data-pl-action="results">Results</button>
+      <button data-pl-action="rename">Rename</button>
       <button data-pl-action="delete" style="color:var(--bad)">Delete playlist</button>`;
     plMore.parentElement.appendChild(menu);
     return;
@@ -378,7 +379,8 @@ document.addEventListener("click", (e) => {
   const a = e.target.closest("[data-pl-action]");
   if (!a) return;
   document.querySelectorAll(".menu").forEach((m) => m.remove());
-  ({rename: renamePlaylist, delete: deletePlaylist, refresh: refreshPlaylist})[a.dataset.plAction]();
+  ({rename: renamePlaylist, delete: deletePlaylist, refresh: refreshPlaylist,
+    results: () => { location.href = `/playlist/${PID}/results`; }})[a.dataset.plAction]();
 });
 async function renamePlaylist() {
   const name = prompt("Playlist name", data.name);

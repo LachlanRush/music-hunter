@@ -386,16 +386,16 @@ def send_feedback(body: FeedbackBody) -> dict:
     return {"ok": True, "id": fid}
 
 
-@app.get("/results", response_class=HTMLResponse)
-def overview_page() -> str:
-    """Results across all playlists (SPEC.md §18.25)."""
+@app.get("/playlist/{playlist_id}/results", response_class=HTMLResponse)
+def overview_page(playlist_id: int) -> str:
+    """A playlist's Find music results: Off and Add by score (SPEC.md §18.30)."""
     return (STATIC / "overview.html").read_text()
 
 
-@app.get("/api/overview")
-def overview_data() -> dict:
+@app.get("/api/playlists/{playlist_id}/results")
+def overview_data(playlist_id: int) -> dict:
     from .overview import overview
-    return overview()
+    return overview(playlist_id)
 
 
 @app.get("/api/playlists")
