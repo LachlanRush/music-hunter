@@ -105,17 +105,18 @@ class Offline(private val context: Context, private val server: () -> String) {
             return if (SystemClock.elapsedRealtime() < unreachableUntil) unavailable() else null
         }
         val file = webFile(if (fonts) url else if (bare.startsWith("/cover/")) bare + "?" + request.url.query else bare)
-        // Pages, scripts, styles, covers and fonts: what's kept shows at once, and is refreshed behind the scenes for
-        // next time. Asking the Pi for these on every visit was the wait (Pi: ~10 ms each, but dozens on every page).
-        val data = bare.startsWith("/api/")
-        if (!data && file.exists()) {
+        // Covers and fonts: what's kept shows at once, and is refreshed behind the scenes for next time (a page has dozens).
+        // Pages and scripts come from the Pi (~10 ms each), or an old copy would hide an update, one page at a time; what's
+        // kept is for when the Pi doesn't answer quickly.
+        if ((fonts || bare.startsWith("/art/") || bare.startsWith("/cover/")) && file.exists()) {
             if (!fonts) refresh(url, file)
             return fromFile(file)
         }
+        val quick = file.exists() && !bare.startsWith("/api/")
         if (SystemClock.elapsedRealtime() >= unreachableUntil) {
             try {
                 val c = (URL(url).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 3000; readTimeout = 15000
+                    connectTimeout = if (quick) 800 else 3000; readTimeout = if (quick) 2000 else 15000
                     request.requestHeaders.forEach { (k, v) -> if (k.lowercase() !in listOf("range", "accept-encoding")) setRequestProperty(k, v) }
                 }
                 val code = c.responseCode

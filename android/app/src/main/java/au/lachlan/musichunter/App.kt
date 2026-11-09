@@ -72,6 +72,7 @@ class App : Application() {
 
     private var incoming: WebView? = null            // being built behind the page on screen
     private val kept = LinkedHashMap<String, WebView>()   // pages visited, alive: going back to one is instant
+    private val loadedAt = java.util.WeakHashMap<WebView, Long>()   // built afresh after a while, so an update reaches them
 
     private fun key(url: String?) = url.orEmpty().substringBefore('#').trimEnd('/')
 
@@ -81,6 +82,7 @@ class App : Application() {
         val playing = audio.owner?.takeIf { audio.hasTrack && it !== front }
         if (playing != null && samePage(url, playing.url)) { reveal(playing); return }   // the playing page: as it is
         kept.remove(key(url))?.let { page ->                                             // seen lately: as it was, then updated
+            if (android.os.SystemClock.elapsedRealtime() - (loadedAt[page] ?: 0L) > MAX_KEPT_AGE_MS) { close(page); return@let }
             incoming?.let { if (it !== front && it !== audio.owner) close(it) }
             incoming = null
             reveal(page)
@@ -223,6 +225,7 @@ class App : Application() {
     private fun createWeb(url: String): WebView {
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         val web = PageView(webContext)
+        loadedAt[web] = android.os.SystemClock.elapsedRealtime()
         web.setBackgroundColor(android.graphics.Color.parseColor("#111417"))   // never a white flash
         web.settings.apply {
             javaScriptEnabled = true
@@ -284,6 +287,7 @@ class App : Application() {
     companion object {
         private const val TAG = "MusicHunter"
         private const val MAX_KEPT = 4
+        private const val MAX_KEPT_AGE_MS = 600_000L
         fun of(context: Context) = context.applicationContext as App
     }
 }
