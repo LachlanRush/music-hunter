@@ -23,7 +23,9 @@ def _curve(zs: list[float], ratings: list[int]) -> dict:
         curve.append({"x": round(float(x), 3), "off": round(float(100 * w[r == 1].sum() / n), 1),
                       "add": round(float(100 * w[r == 3].sum() / n), 1),
                       "n": round(float(n ** 2 / (w ** 2).sum()), 1)})   # effective number of plays behind the point
-    return {"plays": len(zs), "max": round(top, 3), "curve": curve, "rug": sorted(round(float(v), 2) for v in z),
+    # The last few plays would decide the ends of the lines on their own (one Close at the top: both fall to 0).
+    enough = [p for p in curve if p["n"] >= CONFIG["ui"]["results_min_plays"]]
+    return {"plays": len(zs), "max": round(top, 3), "curve": enough or curve, "rug": sorted(round(float(v), 2) for v in z),
             "off": round(100 * float((r == 1).mean()), 1), "add": round(100 * float((r == 3).mean()), 1)}
 
 

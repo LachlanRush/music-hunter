@@ -50,7 +50,6 @@ li.playing .cover-btn { outline: 2px solid var(--accent); outline-offset: 1px; }
 .stars button { border: 0; background: none; padding: 4px 2px; font-size: 26px; line-height: 1; color: var(--line); }
 .stars button.on { color: var(--accent); }
 .more, .pl-menu { position: relative; }
-.pl-menu .menu { left: 0; right: auto; }
 .more > button { border: 0; background: none; font-size: 20px; padding: 2px 6px; color: var(--muted); }
 .menu { position: absolute; right: 0; top: 100%; z-index: 5; min-width: 200px; background: var(--surface);
   border: 1px solid var(--line); border-radius: 6px; padding: 6px; display: grid; gap: 2px; box-shadow: 0 6px 18px rgba(0,0,0,.15); }
@@ -84,6 +83,8 @@ li { margin-inline: -8px; padding-inline: 8px; border-radius: 6px; }
 li .cover-btn { cursor: default; }
 .btn.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .round.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+#mh-download { display: none; }                           /* (the button an older app adds; it's in the ⋯ menu now) */
+.menu button.off { color: var(--muted); }                 /* Download and Sync while they're off */
 .volume { display: none; width: 90px; }
 @media (hover: hover) and (pointer: fine) { .volume { display: block; } }
 .tempo { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 14px; }
@@ -117,11 +118,11 @@ li .cover-btn { cursor: default; }
   </section>
 
   <section class="actions">
-    <button class="btn primary" id="play-all">Play</button>
+    <button class="btn" id="play-all">Play</button>
     <button class="btn" id="shuffle-all" aria-pressed="false">Shuffle</button>
     <button class="btn" id="find" disabled>Find music</button>
-    <button class="btn" id="sync" aria-pressed="false">Sync</button>
     <div class="pl-menu"><button class="btn" id="pl-more" aria-label="More for this playlist" aria-expanded="false">⋯</button></div>
+    <input id="picture" type="file" accept="image/*" hidden>
   </section>
 
   <section class="tempo" aria-label="Tempo">
@@ -203,7 +204,6 @@ function row(t) {
 }
 
 function render() {
-  renderSync();
   const d = data;
   document.title = `${d.name} · Music Hunter`;
   $("name").textContent = d.name;
@@ -264,7 +264,6 @@ async function loadFind() {
   try { find = await api(`/api/playlists/${PID}/find`); } catch (e) { return; }
   const btn = $("find"), box = $("find-status");
   clearTimeout(findTimer);
-  btn.classList.toggle("primary", find.state === "ready");
   if (find.state === "none") {
     btn.disabled = !find.seeds;
     btn.textContent = "Find music";
@@ -319,16 +318,19 @@ document.addEventListener("click", async (e) => {
   }
   const plMore = e.target.closest("#pl-more");
   const more = e.target.closest("[data-more]");
-  if (e.target.closest(".menu [data-pl-action]")) return;            // handled below
+  if (e.target.closest(".menu [data-pl-action], .menu [data-pl-toggle]")) return;   // handled below
   document.querySelectorAll(".menu").forEach((m) => m.remove());
   if (plMore) {
     const menu = document.createElement("div");
     menu.className = "menu";
     menu.innerHTML = (data.can_refresh ? `<button data-pl-action="refresh">Refresh from Spotify</button>` : "")
+      + (Phone ? `<button data-pl-toggle="download"></button>` : "") + `<button data-pl-toggle="sync"></button>`
       + `<button data-pl-action="results">Results</button>
+      <button data-pl-action="picture">${data.image ? "Change picture" : "Add picture"}</button>
       <button data-pl-action="rename">Rename</button>
       <button data-pl-action="delete" style="color:var(--bad)">Delete playlist</button>`;
     plMore.parentElement.appendChild(menu);
+    renderToggles();
     return;
   }
   if (more) {
@@ -385,7 +387,18 @@ document.addEventListener("click", (e) => {
   if (!a) return;
   document.querySelectorAll(".menu").forEach((m) => m.remove());
   ({rename: renamePlaylist, delete: deletePlaylist, refresh: refreshPlaylist,
+    picture: () => $("picture").click(),
     results: () => { location.href = `/playlist/${PID}/results`; }})[a.dataset.plAction]();
+});
+$("picture").addEventListener("change", async () => {
+  const f = $("picture").files[0];
+  if (!f) return;
+  try {
+    const res = await fetch(`/api/playlists/${PID}/cover`, {method: "POST", body: await f.arrayBuffer()});
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Couldn't use that picture");
+    showError(""); load();
+  } catch (e) { showError(e.message); }
+  $("picture").value = "";
 });
 async function renamePlaylist() {
   const name = prompt("Playlist name", data.name);
@@ -450,6 +463,7 @@ async function playAt(i) {
   render();
 }
 function setIcon(on) {
+  $("play-all").classList.toggle("on", on);               // filled only while this playlist is playing
   $("play-icon").innerHTML = on ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M7 4l13 8-13 8z"/>';
   $("play").setAttribute("aria-label", on ? "Pause" : "Play");
 }
@@ -494,17 +508,42 @@ $("shuffle-all").addEventListener("click", () => {     // just the mode; starts 
   setShuffle(!shuffle);
   if (pos < 0) startQueue(null);
 });
-$("play-all").addEventListener("click", () => startQueue(null));
-$("sync").addEventListener("click", async () => {       // keep this playlist in the folder copied to the laptop
-  try { data.sync = await api(`/api/playlists/${PID}/sync`, {on: !data.sync.on}, "PUT"); renderSync(); }
-  catch (e) { showError(`Couldn't change Sync: ${e.message}`); }
-});
-function renderSync() {
-  const s = data.sync, b = $("sync");
-  if (!s) return;
-  b.classList.toggle("on", s.on); b.setAttribute("aria-pressed", String(s.on));
-  b.textContent = !s.on ? "Sync" : s.ready < s.tracks ? `Synced ${s.ready} of ${s.tracks}` : "Synced";
+const playOrPause = () => {                               // Play and the cover
+  if (pos < 0) return startQueue(null);
+  audio.paused ? audio.play() : audio.pause();
+};
+$("cover").addEventListener("click", playOrPause);
+$("play-all").addEventListener("click", playOrPause);
+// Download and Sync, in the ⋯ menu: greyed out while off, then Downloading / Syncing, then Downloaded / Synced.
+const Phone = window.NativeAudioBridge || null;           // Download is for the phone app, which stores the files
+function downloadState() {
+  try { const s = JSON.parse(Phone.offlineState(PID));
+        return {on: !!s.on, busy: !!s.on && (s.stored < s.tracks || (s.total > 0 && s.done < s.total))};
+  } catch (e) { return {on: false, busy: false}; }
 }
+function renderToggles() {
+  const d = document.querySelector('[data-pl-toggle="download"]'), y = document.querySelector('[data-pl-toggle="sync"]');
+  if (d) { const s = downloadState(); d.textContent = !s.on ? "Download" : s.busy ? "Downloading" : "Downloaded"; d.classList.toggle("off", !s.on); }
+  if (y && data.sync) { const s = data.sync; y.textContent = !s.on ? "Sync" : s.ready < s.tracks ? "Syncing" : "Synced"; y.classList.toggle("off", !s.on); }
+}
+setInterval(async () => {                                 // while the menu is open, they follow what's happening
+  if (!document.querySelector("[data-pl-toggle]")) return;
+  try { data.sync = await api(`/api/playlists/${PID}/sync`); } catch (e) { /* tries again */ }
+  renderToggles();
+}, 2000);
+document.addEventListener("click", async (e) => {
+  const t = e.target.closest("[data-pl-toggle]");
+  if (!t) return;
+  if (t.dataset.plToggle === "download") {
+    const s = downloadState();
+    if (s.on && !confirm("Remove this playlist's downloads from the phone? It will still play while you're connected.")) return;
+    Phone.offlineSet(PID, !s.on);
+  } else {
+    try { data.sync = await api(`/api/playlists/${PID}/sync`, {on: !data.sync.on}, "PUT"); }
+    catch (err) { showError(`Couldn't change Sync: ${err.message}`); }
+  }
+  renderToggles();
+});
 
 // Volume (computers only; phones use their own buttons), after the loudness levelling.
 let volumeNode = null;

@@ -176,64 +176,26 @@ body.mh-now-on { padding-bottom: 140px !important; }`;
   document.addEventListener("DOMContentLoaded", () => { build(); B.npReady(); });
 })();
 
-// Tell the app when this page has its content, so it can swap it in without a blank page in between (SPEC.md §19):
-// the page has loaded and its first requests to the Pi (the playlist, Find music's state) have come back.
+// Tell the app when this page has its content, so it can swap it in straight away (SPEC.md §19): it has loaded and its
+// own data has come back. Covers and anything slower fill in afterwards, in space kept for them.
 (() => {
   if (!window.NativeAudioBridge) return;
   let inflight = 0, sent = false, quietSince = 0;
   const realFetch = window.fetch;
+  const slow = (u) => /\/find(\b|\/)|\/tempo/.test(String(u && u.url || u));   // Find music's status mustn't hold the page up
   window.fetch = function (...args) {
+    if (slow(args[0]) && !location.pathname.startsWith("/find/")) return realFetch.apply(this, args);
     inflight++;
     return realFetch.apply(this, args).finally(() => { inflight--; quietSince = performance.now(); });
   };
-  // Covers on screen only: those further down load as they're scrolled to ("lazy"), and would never count as done.
-  const onScreen = (i) => { const r = i.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight; };
-  const imagesDone = () => Array.from(document.images).every((i) => !i.getAttribute("src") || i.complete || !onScreen(i));
-  const fontsDone = () => !document.fonts || document.fonts.status === "loaded";
   function check() {
     if (sent) return;
-    // Loaded, its requests answered, its covers and fonts in: what's swapped in won't move about afterwards.
-    if (document.readyState === "complete" && inflight === 0 && performance.now() - quietSince > 150
-        && imagesDone() && fontsDone()) {
+    if (document.readyState !== "loading" && inflight === 0 && performance.now() - quietSince > 20) {
       sent = true;
-      requestAnimationFrame(() => requestAnimationFrame(() => window.NativeAudioBridge.pageReady()));
+      requestAnimationFrame(() => window.NativeAudioBridge.pageReady());
       return;
     }
-    setTimeout(check, 30);
+    setTimeout(check, 15);
   }
-  window.addEventListener("load", () => { quietSince = performance.now(); check(); });
-})();
-
-// Download a playlist for listening offline (SPEC.md §19): a switch beside Find music on a playlist page.
-(() => {
-  if (!window.NativeAudioBridge) return;
-  const m = location.pathname.match(/^\/playlist\/(\d+)\/?$/);
-  if (!m) return;
-  const pid = Number(m[1]), B = window.NativeAudioBridge;
-  const mb = (b) => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`;
-  function label(s) {
-    if (!s.on) return "Download";
-    if (s.total && s.done < s.total) return `Downloading ${s.done} of ${s.total}`;
-    if (s.waitingForWifi && s.stored < s.tracks) return "Waiting for Wi-Fi";
-    if (s.stored < s.tracks) return `Downloaded ${s.stored} of ${s.tracks}`;
-    return `Downloaded · ${mb(s.bytes)}`;
-  }
-  document.addEventListener("DOMContentLoaded", () => {
-    const find = document.getElementById("find");
-    if (!find) return;
-    const btn = document.createElement("button");
-    btn.className = "btn"; btn.id = "mh-download";
-    find.insertAdjacentElement("afterend", btn);
-    const render = () => {
-      let s; try { s = JSON.parse(B.offlineState(pid)); } catch (e) { return; }
-      btn.textContent = label(s);
-      btn.classList.toggle("on", !!s.on); btn.setAttribute("aria-pressed", String(!!s.on));
-    };
-    btn.onclick = () => {
-      const s = JSON.parse(B.offlineState(pid));
-      if (s.on && !confirm("Remove this playlist's downloads from the phone? It will still play while you're connected.")) return;
-      B.offlineSet(pid, !s.on); render();
-    };
-    render(); setInterval(render, 1000);
-  });
+  document.addEventListener("DOMContentLoaded", () => { quietSince = performance.now(); setTimeout(check, 15); });
 })();

@@ -9,6 +9,7 @@ keeps playing.
 import contextlib
 import io
 import json
+import subprocess
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -16,6 +17,7 @@ import traceback
 from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
@@ -459,7 +461,7 @@ def get_playlist(playlist_id: int) -> dict:
                 "art": f"/art/{t['id']}" if t["has_art"] else None,
                 "bpm_shown": tempo.shown_bpm(t["bpm"], around), "rate": rate, "tempo_note": note}
     return {"id": p["id"], "name": p["name"], "description": p["description"],
-            "image": f"/cover/{p['id']}" if p["image_path"] else None,
+            "image": library.cover_url(p["id"], p["image_path"]),
             "job": _job_view(jobs.latest_for(conn, playlist_id)),
             "deleted": [{**d, "art": f"/art/{d['id']}" if d["has_art"] else None}
                         for d in library.deleted_tracks(conn, playlist_id)],
@@ -472,6 +474,13 @@ def get_playlist(playlist_id: int) -> dict:
 
 class SyncBody(BaseModel):
     on: bool
+
+
+@app.get("/api/playlists/{playlist_id}/sync")
+def get_sync(playlist_id: int) -> dict:
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    return sync.state(conn, playlist_id)
 
 
 @app.put("/api/playlists/{playlist_id}/sync")
@@ -527,6 +536,30 @@ def set_track_bpm(playlist_id: int, track_id: int, body: OverrideBody) -> dict:
                      (round(body.bpm, 1), playlist_id, track_id))
     tempo.sync_playlist(conn, playlist_id)
     return {"ok": True, "bpm_override": round(body.bpm, 1)}
+
+
+@app.post("/api/playlists/{playlist_id}/cover")
+async def set_playlist_cover(playlist_id: int, request: Request) -> dict:
+    """A picture of my own for the playlist (the file itself is the request's body)."""
+    _playlist_or_404(db.connect(), playlist_id)
+    limit = CONFIG["library"]["cover_max_mb"] * 1024 * 1024
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > limit:
+            raise HTTPException(413, "That picture is too big")
+    if not library.cover_type(bytes(data[:16])):
+        raise HTTPException(400, "That isn't a picture I can read (JPEG, PNG, WebP or GIF)")
+
+    def save() -> str | None:
+        conn = db.connect()
+        library.set_cover(conn, playlist_id, bytes(data))
+        p = _playlist_or_404(conn, playlist_id)
+        return library.cover_url(playlist_id, p["image_path"])
+    try:
+        return {"image": await run_in_threadpool(save)}
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        raise HTTPException(400, "That picture couldn't be read")
 
 
 @app.patch("/api/playlists/{playlist_id}")

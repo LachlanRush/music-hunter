@@ -104,8 +104,14 @@ class Offline(private val context: Context, private val server: () -> String) {
         if (!fonts && !keepable(bare)) {
             return if (SystemClock.elapsedRealtime() < unreachableUntil) unavailable() else null
         }
-        val file = webFile(if (fonts) url else bare)
-        if (fonts && file.exists()) return fromFile(file)                 // fonts never change: kept copy first
+        val file = webFile(if (fonts) url else if (bare.startsWith("/cover/")) bare + "?" + request.url.query else bare)
+        // Pages, scripts, styles, covers and fonts: what's kept shows at once, and is refreshed behind the scenes for
+        // next time. Asking the Pi for these on every visit was the wait (Pi: ~10 ms each, but dozens on every page).
+        val data = bare.startsWith("/api/")
+        if (!data && file.exists()) {
+            if (!fonts) refresh(url, file)
+            return fromFile(file)
+        }
         if (SystemClock.elapsedRealtime() >= unreachableUntil) {
             try {
                 val c = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -123,6 +129,24 @@ class Offline(private val context: Context, private val server: () -> String) {
             }
         }
         return if (file.exists()) fromFile(file) else unavailable()
+    }
+
+    private val refreshing = java.util.concurrent.Executors.newFixedThreadPool(2)
+    private val refreshedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private fun refresh(url: String, file: File) {
+        val now = SystemClock.elapsedRealtime()
+        if (now < unreachableUntil || now - (refreshedAt[url] ?: -600_000L) < 300_000L) return   // at most every 5 min
+        refreshedAt[url] = now
+        refreshing.execute {
+            try {
+                val c = (URL(url).openConnection() as HttpURLConnection).apply { connectTimeout = 3000; readTimeout = 15000 }
+                if (c.responseCode == 200) {
+                    val type = c.contentType ?: "application/octet-stream"
+                    store(file, type, c.inputStream.use { it.readBytes() })
+                }
+            } catch (e: IOException) { /* next time */ }
+        }
     }
 
     private fun store(file: File, type: String, body: ByteArray) {

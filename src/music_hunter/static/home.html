@@ -28,7 +28,7 @@ form input { flex: 1 1 260px; min-width: 0; padding: 10px 12px; border: 1px soli
   background: var(--surface); color: var(--fg); font: 400 14px var(--body); }
 form button, .btn { padding: 10px 14px; border-radius: 6px; border: 1px solid var(--fg); background: var(--fg);
   color: var(--bg); font: 600 14px var(--body); }
-form button.secondary { background: var(--surface); color: var(--fg); border-color: var(--line); }
+form button.secondary, .btn.secondary { background: var(--surface); color: var(--fg); border-color: var(--line); }
 .add { display: grid; gap: 14px; border-top: 1px solid var(--line); padding-top: 22px; }
 .error { color: var(--bad); font-size: 14px; }
 .empty { color: var(--muted); }
@@ -55,6 +55,7 @@ form button.secondary { background: var(--surface); color: var(--fg); border-col
     </form>
     <form id="new-form">
       <input id="name" type="text" placeholder="Name for an empty playlist" aria-label="New playlist name" required>
+      <label class="btn secondary" id="new-picture-label">Picture<input id="new-picture" type="file" accept="image/*" hidden></label>
       <button type="submit" class="secondary">Create</button>
     </form>
     <div class="error" id="error" hidden></div>
@@ -87,7 +88,7 @@ async function load() {
     const lists = await api("/api/playlists");
     $("grid").innerHTML = lists.length ? lists.map((p) => `
       <a class="card" href="/playlist/${p.id}">
-        <div class="cover">${p.has_image ? `<img src="/cover/${p.id}" alt="">` : esc((p.name || "?")[0].toUpperCase())}</div>
+        <div class="cover">${p.image ? `<img src="${p.image}" alt="">` : esc((p.name || "?")[0].toUpperCase())}</div>
         <b>${esc(p.name)}</b>
         <div class="meta">${p.tracks} tracks</div>
         ${jobLine(p.job)}
@@ -111,8 +112,17 @@ $("new-form").addEventListener("submit", async (e) => {
   e.preventDefault(); showError("");
   try {
     const r = await api("/api/playlists", {name: $("name").value.trim()});
+    const picture = $("new-picture").files[0];
+    if (picture) {
+      const res = await fetch(`/api/playlists/${r.playlist_id}/cover`, {method: "POST", body: await picture.arrayBuffer()});
+      if (!res.ok) alert("The playlist is made, but that picture couldn't be read.");
+    }
     location.href = `/playlist/${r.playlist_id}`;
   } catch (err) { showError(`Couldn't create it: ${err.message}`); }
+});
+$("new-picture").addEventListener("change", () => {
+  const f = $("new-picture").files[0];
+  $("new-picture-label").firstChild.textContent = f ? "Picture ✓" : "Picture";
 });
 load();
 </script>

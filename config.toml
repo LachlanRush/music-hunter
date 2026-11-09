@@ -286,6 +286,7 @@ session_gap_minutes = 30         # plays further apart than this start a new ses
 
 [ui]
 maintenance_minutes = 60         # v5: re-score idle playlists, purge Recently deleted, restart due work
+results_min_plays = 8            # Results curve: the lines stop where fewer plays than this are behind a point
 results_bandwidth_sd = 0.3       # Results curve: each point averages plays within about this score distance (Gaussian)
 # SPEC.md §11 — localhost player
 host = "127.0.0.1"
@@ -379,3 +380,5 @@ home_assistant = "http://100.90.89.29:8123"
 # a track removed from the playlist.
 [library]
 deleted_days = 30
+cover_max_mb = 30    # the largest picture accepted for a playlist
+cover_size = 600     # stored square, this many pixels a side

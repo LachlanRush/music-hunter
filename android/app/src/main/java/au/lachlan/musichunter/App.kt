@@ -10,6 +10,7 @@ import android.net.Uri
 import android.util.Log
 import android.view.ViewGroup
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -61,27 +62,36 @@ class App : Application() {
 
     /** The page on screen. The first one stays out of sight until it has its content, as later pages do. */
     fun page(): WebView = front ?: createWeb("$server/").also {
-        front = it; history.add("$server/")
+        front = it
         it.alpha = 0f
-        main.postDelayed({ it.alpha = 1f }, 3000)
+        main.postDelayed({ it.alpha = 1f }, 800)
     }
 
     // --- moving between pages (SPEC.md §19): the next page is built behind the one on screen and swapped in once
-    // it has drawn, so there's no blank page in between; the app keeps the back history itself. -----------------
+    // it has drawn, so there's no blank page in between. -----------------
 
-    private val history = ArrayList<String>()       // pages visited in front, the current one last
     private var incoming: WebView? = null            // being built behind the page on screen
+    private val kept = LinkedHashMap<String, WebView>()   // pages visited, alive: going back to one is instant
+
+    private fun key(url: String?) = url.orEmpty().substringBefore('#').trimEnd('/')
 
     private var openedAt = 0L
     private fun open(url: String) {
         openedAt = android.os.SystemClock.elapsedRealtime()
         val playing = audio.owner?.takeIf { audio.hasTrack && it !== front }
         if (playing != null && samePage(url, playing.url)) { reveal(playing); return }   // the playing page: as it is
+        kept.remove(key(url))?.let { page ->                                             // seen lately: as it was, then updated
+            incoming?.let { if (it !== front && it !== audio.owner) close(it) }
+            incoming = null
+            reveal(page)
+            page.evaluateJavascript("typeof load==='function'&&load();typeof loadFind==='function'&&loadFind()", null)
+            return
+        }
         incoming?.let { if (it !== front && it !== audio.owner) close(it) }
         val web = createWeb(url)
         incoming = web
         activity?.stage(web)
-        main.postDelayed({ if (incoming === web) reveal(web) }, 3000)      // a slow page: show what there is
+        main.postDelayed({ if (incoming === web) reveal(web) }, 800)       // a slow answer: show the page, it fills in
     }
 
     /** The page's script says it has its content (assets/native-audio.js). */
@@ -97,8 +107,11 @@ class App : Application() {
         front = web
         val a = activity
         val swap = {
-            if (was != null && was !== web && !(was === audio.owner && audio.hasTrack)) close(was)
-            else if (was != null && was !== web) (was.parent as? ViewGroup)?.removeView(was)   // the playing page, kept
+            Log.i(TAG, "page on screen ${android.os.SystemClock.elapsedRealtime() - openedAt} ms after the tap")
+            if (was != null && was !== web) {
+                (was.parent as? ViewGroup)?.removeView(was)
+                if (!(was === audio.owner && audio.hasTrack)) keep(was)             // the playing page stays as it is
+            }
             if (was != null && was !== web) was.evaluateJavascript("window.__nowPlaying&&__nowPlaying({show:false})", null)
         }
         if (a != null) a.reveal(web, swap) else swap()
@@ -168,30 +181,34 @@ class App : Application() {
         main.postDelayed({ syncOffline() }, 30 * 60_000L)
     }
 
-    /** Back to the playing page (the bar, the notification): history returns to where it was on that page. */
-    fun showPlaying() {
-        val playing = playingBehind ?: return
-        val i = history.indexOfLast { samePage(it, playing.url) }
-        if (i >= 0) while (history.size > i + 1) history.removeAt(history.lastIndex)
-        else playing.url?.let { history.add(it) }
-        reveal(playing)
-    }
+    /** Back to the playing page (the bar, the notification). */
+    fun showPlaying() { playingBehind?.let { reveal(it) } }
 
-    /** Back through the pages visited. Returns false at the start (the app then goes to the background). */
+    /** Back goes up a level, not to wherever I was before: Find music and Results to their playlist, a playlist to
+     *  the playlists. Returns false at the top (the app then goes to the background). */
     fun back(): Boolean {
-        if (history.size <= 1) {
-            if (playingBehind != null) { showPlaying(); return true }
-            return false
-        }
-        history.removeAt(history.lastIndex)
-        open(history.last())
+        val path = Uri.parse(front?.url ?: return false).path.orEmpty().trimEnd('/')
+        val up = Regex("^/find/(\\d+)").find(path)?.let { "/playlist/${it.groupValues[1]}" }
+            ?: Regex("^/playlist/(\\d+)/.+").find(path)?.let { "/playlist/${it.groupValues[1]}" }
+            ?: if (path.isEmpty()) return false else "/"
+        open("$server$up")
         return true
     }
 
     /** Another page took the music from this one: like leaving a page in a browser, it's closed. */
     fun pageLostMusic(web: WebView) { if (web !== front) close(web) }
 
+    /** Find music isn't kept: its page holds a play, which should only ever be the current one. */
+    private fun keep(web: WebView) {
+        val url = web.url
+        if (url == null || Uri.parse(url).path.orEmpty().startsWith("/find/")) { close(web); return }
+        kept.remove(key(url))?.let { if (it !== web) close(it) }
+        kept[key(url)] = web
+        while (kept.size > MAX_KEPT) kept.remove(kept.keys.first())?.let { close(it) }
+    }
+
     private fun close(web: WebView) {
+        kept.values.remove(web)
         audio.forget(web)
         (web.parent as? ViewGroup)?.removeView(web)
         web.destroy()
@@ -222,7 +239,13 @@ class App : Application() {
         } else {
             Log.e(TAG, "This WebView can't run scripts at page start; update Android System WebView")
         }
-        web.webChromeClient = WebChromeClient()          // confirm, prompt and alert dialogs
+        web.webChromeClient = object : WebChromeClient() {   // confirm, prompt and alert dialogs by default
+            override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
+                val a = activity ?: return false             // choosing a playlist's picture
+                a.chooseFile(callback, params)
+                return true
+            }
+        }
         web.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) = offline.intercept(request)
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -232,7 +255,6 @@ class App : Application() {
                     return true
                 }
                 if (!request.isForMainFrame || view !== front) return false
-                history.add(target)
                 open(target)                              // built behind, swapped in when drawn
                 return true
             }
@@ -261,6 +283,7 @@ class App : Application() {
 
     companion object {
         private const val TAG = "MusicHunter"
+        private const val MAX_KEPT = 4
         fun of(context: Context) = context.applicationContext as App
     }
 }

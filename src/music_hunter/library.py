@@ -11,6 +11,7 @@ Tracks already in the library (same Spotify ID or YouTube video) are reused, not
 
 import shutil
 import sqlite3
+import subprocess
 
 import requests
 
@@ -52,8 +53,8 @@ def delete_playlist(conn: sqlite3.Connection, playlist_id: int) -> None:
 
 
 def list_playlists(conn: sqlite3.Connection) -> list[dict]:
-    return [dict(r) for r in conn.execute(
-        "SELECT p.id, p.name, p.description, p.image_path IS NOT NULL AS has_image,"
+    return [{**dict(r), "image": cover_url(r["id"], r["image_path"])} for r in conn.execute(
+        "SELECT p.id, p.name, p.description, p.image_path,"
         " count(pt.track_id) AS tracks, count(pt.stars) AS seeds,"
         " sum(pt.status = 'added') AS waiting"
         " FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id GROUP BY p.id ORDER BY p.created_at")]
@@ -191,6 +192,46 @@ def save_cover(conn: sqlite3.Connection, playlist_id: int, image_url: str | None
     dest.write_bytes(resp.content)
     with conn:
         conn.execute("UPDATE playlists SET image_path = ? WHERE id = ?", (relative(dest), playlist_id))
+
+
+def cover_type(data: bytes) -> str | None:
+    """The picture formats accepted for a playlist, by their first bytes."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    return None
+
+
+def set_cover(conn: sqlite3.Connection, playlist_id: int, data: bytes) -> None:
+    """A picture I chose for the playlist: square and small, cut from the middle, as the page would show it."""
+    size = CONFIG["library"]["cover_size"]
+    folder = path("library") / "covers"
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = folder / f"{playlist_id}.jpg"
+    tmp = folder / f"{playlist_id}.part.jpg"
+    try:
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "image2pipe", "-i", "pipe:0",
+             "-vf", f"scale={size}:{size}:force_original_aspect_ratio=increase,crop={size}:{size}",
+             "-frames:v", "1", "-q:v", "3", "-update", "1", str(tmp)],
+            input=data, check=True, capture_output=True, timeout=60)
+        tmp.replace(dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+    with conn:
+        conn.execute("UPDATE playlists SET image_path = ? WHERE id = ?", (relative(dest), playlist_id))
+
+
+def cover_url(playlist_id: int, image_path: str | None) -> str | None:
+    """Changes when the picture does, so nothing keeps showing the old one."""
+    if not image_path or not resolve(image_path).exists():
+        return None
+    return f"/cover/{playlist_id}?v={resolve(image_path).stat().st_mtime_ns}"
 
 
 def match_on_youtube(yt, artists: list[str], title: str, duration_s: float):

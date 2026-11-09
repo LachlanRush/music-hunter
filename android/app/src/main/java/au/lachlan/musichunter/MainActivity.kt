@@ -70,12 +70,27 @@ class MainActivity : Activity() {
     private var resumed = false
     private fun isResumed() = resumed
 
+    private var picking: android.webkit.ValueCallback<Array<android.net.Uri>>? = null
+
+    fun chooseFile(callback: android.webkit.ValueCallback<Array<android.net.Uri>>, params: android.webkit.WebChromeClient.FileChooserParams) {
+        picking?.onReceiveValue(null)
+        picking = callback
+        startActivityForResult(params.createIntent(), PICK)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == PICK) {
+            picking?.onReceiveValue(android.webkit.WebChromeClient.FileChooserParams.parseResult(resultCode, data))
+            picking = null
+        }
+    }
+
     override fun onStart() { super.onStart(); app.audio.pageVisible = true; app.pushNowPlaying() }
     override fun onResume() { super.onResume(); resumed = true; Updater.resume(this) }
     override fun onPause() { resumed = false; super.onPause() }
     override fun onStop() { app.audio.pageVisible = false; super.onStop() }
 
-    @Deprecated("Back goes back through the pages, then leaves the app playing.")
+    @Deprecated("Back goes up a level, then leaves the app playing.")
     override fun onBackPressed() {
         if (!app.back()) moveTaskToBack(true)
     }
@@ -88,5 +103,6 @@ class MainActivity : Activity() {
 
     companion object {
         const val SHOW_PLAYING = "show_playing"
+        private const val PICK = 1
     }
 }

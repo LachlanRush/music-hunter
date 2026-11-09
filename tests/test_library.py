@@ -378,3 +378,55 @@ def test_sync_switch_through_the_api(tmp_path, monkeypatch):
         assert client.put(f"/api/playlists/{pid}/sync", json={"on": True}).json()["on"] is True
         sync.wait()
         assert client.get(f"/api/playlists/{pid}").json()["sync"] == {"on": True, "tracks": 1, "ready": 1}
+
+
+def test_results_lines_stop_where_the_plays_run_out():
+    from music_hunter import overview
+
+    zs = [0.1 * i for i in range(30)] + [5.0]                 # a lone play far above the rest
+    d = overview._curve(zs, [1, 2, 3] * 10 + [2])
+    assert d["max"] == 5.0 and 5.0 in d["rug"]                # it still shows as a tick
+    assert d["curve"][-1]["x"] < 4 and min(p["n"] for p in d["curve"]) >= 8
+    assert overview._curve([0.1, 0.2], [1, 2])["curve"]       # too few everywhere: the whole line rather than none
+
+
+def _picture(tmp_path, name, *args):
+    import subprocess
+
+    f = tmp_path / name
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=red:s=800x400",
+                    "-frames:v", "1", *args, "-update", "1", str(f)], check=True)
+    return f.read_bytes()
+
+
+def test_a_playlist_takes_a_picture_of_my_own(lib, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from music_hunter import web
+
+    client = TestClient(web.app)
+    pid = client.post("/api/playlists", json={"name": "Mine"}).json()["playlist_id"]
+    assert client.get(f"/api/playlists/{pid}").json()["image"] is None
+
+    first = client.post(f"/api/playlists/{pid}/cover", content=_picture(tmp_path, "a.png"))
+    assert first.status_code == 200
+    url = first.json()["image"]
+    assert url.startswith(f"/cover/{pid}?v=")
+    shown = client.get(url)
+    assert shown.status_code == 200 and shown.content[:3] == b"\xff\xd8\xff"
+    import subprocess
+    import time
+
+    size = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0", "-"],
+                          input=shown.content, capture_output=True, check=True).stdout.decode().strip()
+    assert size == "600,600"
+    assert client.get("/api/playlists").json()[0]["image"] == url
+
+    time.sleep(0.01)
+    second = client.post(f"/api/playlists/{pid}/cover", content=_picture(tmp_path, "b.jpg")).json()["image"]
+    assert second != url                                   # a new address, so nothing keeps showing the old picture
+
+    assert client.post(f"/api/playlists/{pid}/cover", content=b"not a picture at all").status_code == 400
+    assert client.post(f"/api/playlists/{pid}/cover", content=b"\xff\xd8\xff broken").status_code == 400
+    assert client.get(f"/api/playlists/{pid}").json()["image"] == second
+
