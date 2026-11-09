@@ -65,7 +65,7 @@ def playlist_tracks(conn: sqlite3.Connection, playlist_id: int) -> list[dict]:
     return [dict(r) for r in conn.execute(
         "SELECT t.id, t.artist, t.title, t.duration_s, t.gain_db, t.bpm, t.release_date,"
         " t.art_path IS NOT NULL AS has_art, t.file_path IS NOT NULL AS has_audio, pt.stars, pt.status, pt.added_at,"
-        " pt.bpm_override"
+        " pt.bpm_override, t.quality"
         " FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id WHERE pt.playlist_id = ?"
         " ORDER BY pt.status = 'added' DESC, CASE WHEN pt.status = 'added' THEN pt.added_at END DESC,"
         " pt.stars IS NULL, pt.stars DESC, coalesce(pt.starred_at, pt.added_at) DESC, pt.added_at DESC, t.id DESC",
@@ -82,6 +82,7 @@ def set_stars(conn: sqlite3.Connection, playlist_id: int, track_id: int, stars: 
                          " WHERE playlist_id = ? AND track_id = ?", (stars, stars, playlist_id, track_id)).rowcount
     if not n:
         raise ValueError("That track isn't in this playlist")
+    db.log_event(conn, "stars_changed", playlist_id=playlist_id, track_id=track_id, stars=stars)   # for replays
 
 
 def add_to_playlist(conn: sqlite3.Connection, playlist_id: int, track_id: int, status: str = "member") -> bool:

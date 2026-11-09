@@ -444,7 +444,8 @@ def main() -> None:
     p.add_argument("--send", action="store_true")
     p.add_argument("--server", default=None)
     p = sub.add_parser("pi", help="The app on the Pi: show its log, restart it, or install an update")
-    p.add_argument("action", choices=["log", "restart", "update", "feedback"])
+    p.add_argument("action", choices=["log", "restart", "update", "feedback", "app"],
+                   help="app: send the latest signed Android build to the Pi")
     p.add_argument("--server", help="The app on the Pi (default: [worker] server)")
     p.add_argument("--lines", type=int, default=200)
 

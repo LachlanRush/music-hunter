@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/tempo.js"></script>
 <script src="/static/media.js"></script>
+<script src="/static/shuffle.js"></script>
 <style>
 body { padding-bottom: 140px; }
 .head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: end; }
@@ -119,6 +120,7 @@ li .cover-btn { cursor: default; }
     <button class="btn primary" id="play-all">Play</button>
     <button class="btn" id="shuffle-all" aria-pressed="false">Shuffle</button>
     <button class="btn" id="find" disabled>Find music</button>
+    <button class="btn" id="sync" aria-pressed="false">Sync</button>
     <div class="pl-menu"><button class="btn" id="pl-more" aria-label="More for this playlist" aria-expanded="false">⋯</button></div>
   </section>
 
@@ -201,6 +203,7 @@ function row(t) {
 }
 
 function render() {
+  renderSync();
   const d = data;
   document.title = `${d.name} · Music Hunter`;
   $("name").textContent = d.name;
@@ -299,8 +302,10 @@ document.addEventListener("click", async (e) => {
   if (star) {
     const tid = Number(star.dataset.track), n = Number(star.dataset.star);
     const t = data.tracks.find((x) => x.id === tid);
-    try { await api(`/api/playlists/${PID}/tracks/${tid}`, {stars: t.stars === n ? null : n}, "PUT"); await load(); loadFind(); }
-    catch (err) { showError(`Couldn't save the stars: ${err.message}`); }
+    const stars = t.stars === n ? null : n;
+    t.stars = stars; render();                          // shown at once; the list re-orders when the server answers
+    try { await api(`/api/playlists/${PID}/tracks/${tid}`, {stars}, "PUT"); await load(); loadFind(); }
+    catch (err) { showError(`Couldn't save the stars: ${err.message}`); load(); }
     return;
   }
   const play = e.target.closest("[data-play]");
@@ -402,18 +407,14 @@ const audio = new Audio();
 let ctx = null, gainNode = null, queue = [], pos = -1, shuffle = false, seeking = false;
 
 function playable() { return data.tracks.filter((t) => t.audio); }
-function shuffled(list) {
-  const a = list.slice();
-  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
-  return a;
-}
+const round = ShuffleRound.create(PID);                // what's been heard this shuffle round, kept on this device
 function playTrack(id) {                               // the track already playing isn't restarted
   if (queue[pos] && queue[pos].id === id) { if (audio.paused) audio.play().catch(() => {}); return; }
   startQueue(id);
 }
 function startQueue(firstId) {
   let list = playable();
-  if (shuffle) list = shuffled(list);
+  if (shuffle) list = round.order(list);
   if (firstId != null) {
     const i = list.findIndex((t) => t.id === firstId);
     if (i > 0) list = shuffle ? [list[i], ...list.filter((_, k) => k !== i)] : list.slice(i).concat(list.slice(0, i));
@@ -425,6 +426,7 @@ async function playAt(i) {
   pos = i;
   const t = queue[i];
   if (!t) { audio.pause(); return; }
+  if (shuffle) round.mark(t.id);
   if (Media.desktop) {                                             // loudness levelling (static/media.js)
     if (!ctx) {
       ctx = new AudioContext(); gainNode = ctx.createGain(); volumeNode = ctx.createGain();
@@ -473,23 +475,36 @@ $("play").addEventListener("click", () => {
   audio.paused ? audio.play() : audio.pause();
 });
 $("next").addEventListener("click", () => { if (pos + 1 < queue.length) playAt(pos + 1); });
-$("prev").addEventListener("click", () => { audio.currentTime > 3 || pos === 0 ? (audio.currentTime = 0) : playAt(pos - 1); });
+$("prev").addEventListener("click", () => { audio.currentTime >= (data.back_restart_s ?? 5) || pos === 0 ? (audio.currentTime = 0) : playAt(pos - 1); });
 function setShuffle(on) {
   shuffle = on;
+  round.setOn(on);
   for (const id of ["shuffle", "shuffle-all"]) {
     $(id).classList.toggle("on", on); $(id).setAttribute("aria-pressed", String(on));
   }
   if (pos >= 0) {                                      // keep the current track, reshuffle (or restore) the rest
     const cur = queue[pos], rest = playable().filter((t) => t.id !== cur.id);
-    queue = [cur, ...(shuffle ? shuffled(rest) : rest)]; pos = 0;
+    queue = [cur, ...(shuffle ? round.order(rest) : rest)]; pos = 0;
+    if (shuffle) round.mark(cur.id);
   }
 }
+if (round.on()) setShuffle(true);                      // the mode survives a reload
 $("shuffle").addEventListener("click", () => setShuffle(!shuffle));
 $("shuffle-all").addEventListener("click", () => {     // just the mode; starts playing only if nothing is on yet
   setShuffle(!shuffle);
   if (pos < 0) startQueue(null);
 });
 $("play-all").addEventListener("click", () => startQueue(null));
+$("sync").addEventListener("click", async () => {       // keep this playlist in the folder copied to the laptop
+  try { data.sync = await api(`/api/playlists/${PID}/sync`, {on: !data.sync.on}, "PUT"); renderSync(); }
+  catch (e) { showError(`Couldn't change Sync: ${e.message}`); }
+});
+function renderSync() {
+  const s = data.sync, b = $("sync");
+  if (!s) return;
+  b.classList.toggle("on", s.on); b.setAttribute("aria-pressed", String(s.on));
+  b.textContent = !s.on ? "Sync" : s.ready < s.tracks ? `Synced ${s.ready} of ${s.tracks}` : "Synced";
+}
 
 // Volume (computers only; phones use their own buttons), after the loudness levelling.
 let volumeNode = null;

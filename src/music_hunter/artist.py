@@ -5,8 +5,13 @@ their plain average, once there are artist_min_ratings of them. A track with sev
 of them (each rating once, even if it shares several of the artists); the track's own song never counts. Ratings
 come from every playlist's Find music on this machine and from archived runs (`artist_history`, imported with
 `music-hunter artist-history`).
+
+Every track in the session's own playlist (starred or not, To rate included; not Recently deleted) counts as an Add
+(+1) for its artists, once per song: it replaces any ratings of the same song, so an Add that's now in the playlist
+isn't counted twice.
 """
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -23,8 +28,26 @@ def _db_file(conn: sqlite3.Connection) -> Path | None:
     return Path(f).resolve() if f else None
 
 
+def playlist_id(conn: sqlite3.Connection) -> int | None:
+    """The playlist a Find music session belongs to (None for the library or an older single-session database)."""
+    f = _db_file(conn)
+    m = re.fullmatch(r"playlist-(\d+)\.db", f.name) if f else None
+    return int(m.group(1)) if m else None
+
+
+def members(lib: sqlite3.Connection, pid: int) -> list[tuple[frozenset, str]]:
+    """The playlist's songs: (artists, song title key); versions of one song by the same artists count once."""
+    out: list[tuple[frozenset, str]] = []
+    for a, t in lib.execute("SELECT t.artist, t.title FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id"
+                            " WHERE pt.playlist_id = ?", (pid,)):
+        s = names.song(a, t)
+        if s.artists and not any(title == s.title and arts & s.artists for arts, title in out):
+            out.append((s.artists, s.title))
+    return out
+
+
 def history(conn: sqlite3.Connection) -> list[tuple[frozenset, str, int]]:
-    """Every rating known: (artists, song title key, value)."""
+    """Every rating known: (artists, song title key, value), with the session's playlist tracks as Adds."""
     out = []
 
     def add(artist, title, value):
@@ -47,8 +70,18 @@ def history(conn: sqlite3.Connection) -> list[tuple[frozenset, str, int]]:
                     add(artist, title, VALUE[rating])
         if c is not conn:
             c.close()
-    for artist, title, value in db.connect_library().execute("SELECT artist, title, value FROM artist_history"):
+    lib = db.connect_library()
+    for artist, title, value in lib.execute("SELECT artist, title, value FROM artist_history"):
         add(artist, title, value)
+    pid = playlist_id(conn)
+    if pid is not None:
+        mem = members(lib, pid)
+        by_title: dict[str, list[frozenset]] = {}
+        for arts, title in mem:
+            by_title.setdefault(title, []).append(arts)
+        out = [h for h in out if not any(h[0] & arts for arts in by_title.get(h[1], ()))]
+        out += [(arts, title, 1) for arts, title in mem]
+    lib.close()
     return out
 
 

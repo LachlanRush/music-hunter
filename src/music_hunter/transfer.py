@@ -133,6 +133,8 @@ def pi(action: str, server: str | None, lines: int = 200) -> None:
         print("Restarting.")
     elif action == "update":
         print(ha_update())
+    elif action == "app":
+        print(publish_app(base, headers))
     elif action == "feedback":
         r = requests.get(f"{base}/api/admin/feedback", headers=headers, timeout=60)
         r.raise_for_status()
@@ -164,3 +166,17 @@ def ha_update() -> str:
     requests.post(f"{url}/api/services/update/install", json={"entity_id": u["entity_id"]}, headers=headers,
                   timeout=900).raise_for_status()
     return f"Updated {a.get('installed_version')} → {a.get('latest_version')}"
+
+
+def publish_app(base: str, headers: dict) -> str:
+    """Send the latest signed build of the Android app to the Pi, where the app on the phone finds it (§19)."""
+    import json
+
+    out = config.PROJECT / "android" / "app" / "build" / "outputs" / "apk" / "release"
+    meta = json.loads((out / "output-metadata.json").read_text())["elements"][0]
+    apk = out / meta["outputFile"]
+    r = requests.post(f"{base}/api/admin/app", params={"version_code": meta["versionCode"],
+                      "version_name": meta["versionName"]}, data=apk.read_bytes(), headers=headers, timeout=300)
+    if r.status_code != 200:
+        raise SystemExit(f"The Pi refused it: {r.status_code} {r.text}")
+    return f"Version {meta['versionName']} ({meta['versionCode']}) is on the Pi; the app offers it at its next launch."

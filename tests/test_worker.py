@@ -199,3 +199,60 @@ def test_app_downloads_pause_when_youtube_refuses(remote, monkeypatch):
     monkeypatch.setattr(pool, "download", refuse)
     assert not pool.restore_audio(lib, tid) and analysis.youtube_paused()
     assert not pool.restore_audio(lib, tid) and calls == ["vidZ"]              # paused: not tried again
+
+
+def _library_track(lib, tmp_path, vid="abc"):
+    (tmp_path / "library").mkdir(exist_ok=True)
+    (tmp_path / "library" / "A - T.webm").write_bytes(b"opus")
+    with lib:
+        pid = lib.execute("INSERT INTO playlists (name) VALUES ('p')").lastrowid
+        tid = lib.execute("INSERT INTO tracks (artist, title, origin, video_id, file_path, gain_db) VALUES"
+                          " ('A', 'T', 'library', ?, 'library/A - T.webm', 1.0)", (vid,)).lastrowid
+        lib.execute("INSERT INTO playlist_tracks (playlist_id, track_id) VALUES (?, ?)", (pid, tid))
+    return tid
+
+
+def test_playlist_tracks_get_their_m4a_only_once_and_pool_tracks_never(remote, tmp_path):
+    from music_hunter import analysis, db
+
+    lib = db.connect_library()
+    tid = _library_track(lib, tmp_path)
+    with lib:
+        lib.execute("INSERT INTO tracks (artist, title, origin, video_id, file_path) VALUES"
+                    " ('A', 'Pool', 'pool', 'pooltrack', 'cache/pooltrack.webm')")
+    assert analysis.quality_waiting(lib)
+    item = analysis.quality_claim(lib)
+    assert item == {"track_id": tid, "video_id": "abc"}
+    assert analysis.quality_claim(lib) is None                        # tried just now; the pool track isn't offered
+    assert not analysis.quality_waiting(lib)
+    assert analysis.quality_receive(lib, tid, b"free", ".m4a", 1, -9.0, -1.0, 2.0)
+    assert (tmp_path / "library" / "A - T.m4a").read_bytes() == b"free"
+    assert not (tmp_path / "library" / "A - T.webm").exists()         # the old audio goes
+    t = lib.execute("SELECT file_path, quality, gain_db FROM tracks WHERE id = ?", (tid,)).fetchone()
+    assert (t["file_path"], t["quality"], t["gain_db"]) == ("library/A - T.m4a", 1, 2.0)
+    with lib:                                                         # a day later the good one is tried again
+        lib.execute("UPDATE tracks SET quality_tried_at = datetime('now', '-25 hours') WHERE id = ?", (tid,))
+    assert analysis.quality_claim(lib)["track_id"] == tid
+    assert analysis.quality_receive(lib, tid, b"good", ".m4a", 2, -9.0, -1.0, 2.0)
+    assert lib.execute("SELECT quality FROM tracks WHERE id = ?", (tid,)).fetchone()[0] == 2
+    assert not analysis.quality_receive(lib, tid, b"free", ".m4a", 1, -9.0, -1.0, 2.0)   # never downgraded
+    with lib:
+        lib.execute("UPDATE tracks SET quality_tried_at = datetime('now', '-25 hours') WHERE id = ?", (tid,))
+    assert analysis.quality_claim(lib) is None                        # has the good one: done
+
+
+def test_worker_fetches_a_playlist_track_when_idle(remote, tmp_path, monkeypatch):
+    from music_hunter import analysis, db, pool
+
+    lib = db.connect_library()
+    tid = _library_track(lib, tmp_path)
+    f = tmp_path / "abc.m4a"
+    f.write_bytes(b"good")
+    monkeypatch.setattr(analysis.Quality, "fetch", lambda vid, folder: (f, 2, None))
+    monkeypatch.setattr(pool, "loudness", lambda file: (-9.0, -1.0, 2.0))
+    http = remote[0]
+    http.headers["Authorization"] = "Bearer secret"
+    assert analysis._quality_one(http, "/api/worker", analysis.Local(tmp_path)) == 0
+    assert lib.execute("SELECT quality FROM tracks WHERE id = ?", (tid,)).fetchone()[0] == 2
+    assert analysis._quality_one(http, "/api/worker", analysis.Local(tmp_path)) == 60           # nothing left
+    assert not f.exists()                                             # the worker keeps no copy

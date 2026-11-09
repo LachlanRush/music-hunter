@@ -286,6 +286,8 @@ CREATE TABLE IF NOT EXISTS weight_sets (
 
 # Columns added after a table was first created: (table, column, definition).
 MIGRATIONS = [
+    ("tracks", "quality", "INTEGER"),          # §19 playlist tracks: 2 = M4A ~256 kbps, 1 = free M4A ~130 kbps
+    ("tracks", "quality_tried_at", "TEXT"),
     ("tracks", "candidate_id", "INTEGER REFERENCES candidates(id)"),
     ("tracks", "generation", "INTEGER REFERENCES generations(id)"),
     ("tracks", "video_id", "TEXT"),

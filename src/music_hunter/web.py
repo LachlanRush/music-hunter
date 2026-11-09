@@ -21,8 +21,8 @@ from pydantic import BaseModel
 
 from fastapi.staticfiles import StaticFiles
 
-from . import analysis, db, find, jobs, library, ratings, reweight, veto
-from .config import CONFIG, resolve
+from . import analysis, db, find, jobs, library, ratings, reweight, sync, veto
+from .config import CONFIG, path, resolve
 from .results import results as results_data
 from .scoring import pool_tracks
 
@@ -244,7 +244,7 @@ class ClientEvent(BaseModel):
     data: dict = {}
 
 
-CLIENT_EVENTS = {"playing", "stall", "audio_error", "ended", "page_error", "back", "forward"}
+CLIENT_EVENTS = {"playing", "stall", "audio_error", "ended", "page_error", "back", "forward", "restart", "autoplay_stuck"}
 
 
 def _to_playlist(conn, play_id: int) -> None:
@@ -466,7 +466,21 @@ def get_playlist(playlist_id: int) -> dict:
             "can_refresh": bool((jobs.latest_for(conn, playlist_id, "import") or {}).get("payload", {}).get("link")),
             "tracks": [view(t) for t in tracks], "tempo": _tempo_view(s),
             "others": [{"id": o["id"], "name": o["name"]} for o in library.list_playlists(conn) if o["id"] != playlist_id],
-            "max_stretch": CONFIG["bpm"]["max_stretch"], "phone_headroom_db": CONFIG["loudness"]["phone_headroom_db"]}
+            "max_stretch": CONFIG["bpm"]["max_stretch"], "phone_headroom_db": CONFIG["loudness"]["phone_headroom_db"],
+            "back_restart_s": CONFIG["ui"]["back_restart_s"], "sync": sync.state(conn, playlist_id)}
+
+
+class SyncBody(BaseModel):
+    on: bool
+
+
+@app.put("/api/playlists/{playlist_id}/sync")
+def set_sync(playlist_id: int, body: SyncBody) -> dict:
+    """Keep this playlist in the folder Syncthing copies to the laptop."""
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    sync.set_on(conn, playlist_id, body.on)
+    return sync.state(conn, playlist_id)
 
 
 @app.put("/api/playlists/{playlist_id}/tempo")
@@ -520,6 +534,7 @@ def rename_playlist(playlist_id: int, body: RenameBody) -> dict:
     conn = db.connect()
     _playlist_or_404(conn, playlist_id)
     library.rename_playlist(conn, playlist_id, body.name)
+    sync.request()
     return {"ok": True}
 
 
@@ -528,6 +543,7 @@ def delete_playlist(playlist_id: int) -> dict:
     conn = db.connect()
     _playlist_or_404(conn, playlist_id)
     library.delete_playlist(conn, playlist_id)
+    wait_follow_ups()                                  # its Find music may still be catching up with a change
     _delete_session(playlist_id)
     return {"ok": True}
 
@@ -614,27 +630,71 @@ def _maintenance() -> None:
                     db.SESSION.reset(token)
                 session_worker(p["id"]).start_if_needed()
             tempo.sync_all()
+            sync.request()
+            # Playlist tracks due for their M4A (SPEC.md §19): the PC only wakes for work.
+            if CONFIG["worker"]["mode"] == "remote" and analysis.quality_waiting(lib) \
+                    and not analysis.worker_connected(lib):
+                db.log_event(lib, "pc_wake", reason="quality", problem=analysis.wake())
         except Exception as e:  # noqa: BLE001 — keep the loop alive
             db.log_event(db.connect_library(), "maintenance_failed", error=str(e)[:200])
+
+
+_FOLLOW = {}                      # playlist id -> {"lock", "thread", "again"}: Find music catching up, one at a time
+_FOLLOW_GUARD = threading.Lock()
 
 
 def _after_membership_change(conn, playlist_id: int) -> None:
     """Seeds changed (stars set or cleared, a track removed or restored): everything that depends on them follows
     straight away — tempo copies and the playlist's tempo range; in Find music the seeds (a newly starred track is
     pulled for, an unstarred one stops being a seed), the tracks they found (they leave with their seed unless
-    another found them too, and return with it), and the veto's scores."""
+    another found them too, and return with it), and the veto's scores.
+
+    Find music's part runs in the background (SPEC.md §19: on the Pi it took ~2 s, and the star waited for it). Taps
+    in quick succession run it once more after the current pass, not once per tap."""
     _sync_tempo(conn, playlist_id)
-    if find.started(playlist_id):
+    sync.request()                                    # the laptop's folder and ratings follow
+    if not find.started(playlist_id):
+        return
+    with _FOLLOW_GUARD:
+        f = _FOLLOW.setdefault(playlist_id, {"thread": None, "again": False})
+        if f["thread"] is not None and f["thread"].is_alive():
+            f["again"] = True
+            return
+        f["thread"] = threading.Thread(target=_follow_up, args=(playlist_id,), daemon=True)
+        f["thread"].start()
+
+
+def _follow_up(playlist_id: int) -> None:
+    while True:
         token = db.SESSION.set(playlist_id)
         try:
-            sess = db.connect(playlist_id)
-            find.sync_seeds(conn, sess, playlist_id)
+            lib, sess = db.connect_library(), db.connect(playlist_id)
+            find.sync_seeds(lib, sess, playlist_id)
             veto.update(sess)
             from . import tempo
             tempo.sync_session(sess, playlist_id)     # its default Set to BPM follows the playlist's tempo
+        except Exception as e:                        # the next change or maintenance pass tries again
+            db.log_event(db.connect_library(), "follow_up_failed", playlist_id=playlist_id, error=str(e)[:200])
         finally:
             db.SESSION.reset(token)
         session_worker(playlist_id).start_if_needed()        # pull for new seeds, top the pool up
+        with _FOLLOW_GUARD:
+            f = _FOLLOW[playlist_id]
+            if not f["again"]:
+                f["thread"] = None
+                return
+            f["again"] = False
+
+
+def wait_follow_ups(timeout: float = 30) -> None:
+    """Wait for Find music to catch up with playlist changes (tests, and deleting a playlist)."""
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        with _FOLLOW_GUARD:
+            busy = [f["thread"] for f in _FOLLOW.values() if f["thread"] is not None]
+        if not busy:
+            return
+        busy[0].join(max(0.0, end - time.monotonic()))
 
 
 @app.delete("/api/playlists/{playlist_id}/tracks/{track_id}")
@@ -749,6 +809,64 @@ async def worker_file(work_id: int, kind: str, request: Request, ext: str = ""):
     body = await request.body()
     if not analysis.receive_file(db.connect_library(), work_id, kind, body, ext):
         raise HTTPException(409, "Not wanted any more")
+    return {"ok": True}
+
+
+# --- the Android app's updates (SPEC.md §19): the latest build lives on the Pi; the app checks it at launch ---------
+
+def _app_dir() -> Path:
+    return path("data") / "app"
+
+
+@app.get("/app/latest.json")
+def app_latest() -> dict:
+    f = _app_dir() / "latest.json"
+    if not f.exists():
+        raise HTTPException(404, "No app published yet")
+    return {**json.loads(f.read_text()), "url": "/app/music-hunter.apk"}
+
+
+@app.get("/app/music-hunter.apk")
+def app_apk() -> FileResponse:
+    f = _app_dir() / "music-hunter.apk"
+    if not f.exists():
+        raise HTTPException(404, "No app published yet")
+    return FileResponse(f, media_type="application/vnd.android.package-archive", filename="music-hunter.apk")
+
+
+@app.post("/api/admin/app", dependencies=[Depends(worker_auth)])
+async def app_publish(request: Request, version_code: int, version_name: str):
+    """A new build of the app, sent from the PC (`music-hunter pi app`)."""
+    import hashlib
+
+    body = await request.body()
+    if body[:2] != b"PK":
+        raise HTTPException(400, "That isn't an APK")
+    folder = _app_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = folder / "music-hunter.apk.part"
+    tmp.write_bytes(body)
+    tmp.replace(folder / "music-hunter.apk")
+    info = {"version_code": version_code, "version_name": version_name, "size": len(body),
+            "sha256": hashlib.sha256(body).hexdigest()}
+    (folder / "latest.json").write_text(json.dumps(info))
+    db.log_event(db.connect_library(), "app_published", **info)
+    return info
+
+
+@app.post("/api/worker/quality/claim", dependencies=[Depends(worker_auth)])
+def quality_claim():
+    item = analysis.quality_claim(db.connect_library())
+    return item if item else Response(status_code=204)
+
+
+@app.post("/api/worker/quality/{track_id}", dependencies=[Depends(worker_auth)])
+async def quality_file(track_id: int, request: Request, ext: str, quality: int, lufs: float, peak: float, gain: float,
+                       why: str = ""):
+    body = await request.body()
+    if not analysis.quality_receive(db.connect_library(), track_id, body, ext, quality, lufs, peak, gain, why):
+        raise HTTPException(409, "Not wanted any more")
+    sync.request()                                    # now it can go to the laptop
     return {"ok": True}
 
 
@@ -913,6 +1031,7 @@ def state() -> dict:
         "last": track_info(conn, last) if last else None,
         "labels": ratings.LABELS, "hints": CONFIG["ratings"]["hints"], "add": ratings.ADD,
         "play_to_end": UI["play_to_end"], "preload_next": UI["preload_next"], "stall_log_ms": UI["stall_log_ms"],
+        "back_restart_s": UI["back_restart_s"],
         "seeds": conn.execute("SELECT count(*) FROM tracks WHERE origin = 'original_reference'").fetchone()[0],
     }
 
@@ -1228,6 +1347,6 @@ def serve() -> None:
             sock.close()
             continue
         sockets.append(sock)
-        print(f"Player: http://{host}:{UI['port']}   Results: http://{host}:{UI['port']}/results")
+        print(f"Player: http://{host}:{UI['port']}")
     print("Log: data/music-hunter.log")
     uvicorn.Server(uvicorn.Config(app, log_level="warning", timeout_keep_alive=75)).run(sockets=sockets)

@@ -142,9 +142,11 @@ tempo_core_min = 3
 tempo_hysteresis_bpm = 2.0
 # v5 (2026-11-06, §18.29): artist history. The average of every earlier rating of songs by the track's artists (Add +1,
 # Close 0, Off −1; several artists pooled; its own song not counted) is artist_share of the veto score, the other parts
-# share the rest equally. Below artist_min_ratings ratings a track counts as the average artist.
+# share the rest equally. Below artist_min_ratings ratings a track gets no push. The value is read against a fixed
+# reference (0 = all Close is neutral), divided by artist_scale: at 0.5, all Add is +2 and all Off −2 before the share.
 artist_share = 0.4
 artist_min_ratings = 5
+artist_scale = 0.5
 
 [veto.weights]                   # veto score = weighted mean of the robust z-scores of these components
 seed_closeness = 1.0
@@ -232,6 +234,29 @@ diversity_penalty = -0.10
 bpm_match = 0.10                 # mild (v2: +0.15)
 year_match = 0.15                # v2: newer rated higher (+0.26)
 
+[quality]
+# §19: tracks added to a playlist are fetched again as M4A by the PC worker: ~256 kbps with my Music Premium sign-in
+# (needs the cookies file and the token tool running on the PC), else the free ~130 kbps, which Rekordbox can read too.
+# Find music's pool stays signed out. A track that couldn't get the good one is tried again after retry_hours.
+enabled = true
+format = "141"
+free_format = "140"
+cookies_file = "~/.config/music-hunter/youtube-cookies.txt"
+token_provider = "http://127.0.0.1:4416"
+retry_hours = 24
+
+[sync]
+# §19: playlists with Sync on are kept here on the Pi: Playlists inside my Songs share (Syncthing, Send & Receive with
+# the laptop, which also backs up my other songs). laptop_folder is where they land there, for rekordbox.xml's paths.
+folder = "/share/syncthing/Songs/Playlists"
+laptop_folder = "C:/Users/lachl/Music/Songs/Playlists"
+
+[vocals]
+# §18.34: the PC worker measures each new track's vocal share (Demucs) and mood (Essentia) in the taste-test
+# environment and sends them with the analysis; the Pi logs them for the replay test. Nothing uses them yet.
+enabled = true
+timeout_s = 120
+
 [bpm]
 # SPEC.md §15.6 — tempo measured from the audio, folded into [min, max) to undo half/double errors
 min = 85.0
@@ -274,6 +299,7 @@ hide_names_until_rated = true    # artist and title stay hidden until the track 
 play_to_end = [2, 3]             # ratings that keep playing to the end (Close, Add; Close added 2026-10-30); Off skips
 preload_next = true              # v3: while a track plays, fetch the likely next track's audio into memory
 stall_log_ms = 250               # v3: only log playback stalls at least this long (v2 logged ~500 of 0–20 ms)
+back_restart_s = 5               # v5: the back button restarts the track once it's this many seconds in (both players)
 
 [tempo]
 # SPEC.md §16.4 — held steady during an evaluation run: a changing target changes what "top-scored" means.

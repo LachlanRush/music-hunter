@@ -52,3 +52,37 @@ def test_archived_runs_map_to_add_close_off(tmp_path):
     c.executemany("INSERT INTO plays VALUES (?, ?, ?, NULL)", [(i, i, i) for i in range(1, 6)])
     c.commit()
     assert [r["value"] for r in artist.archived(tmp_path / "v1", "v1")] == [-1, -1, 0, 1, 1]   # 1–5 stars
+
+
+def test_playlist_tracks_count_as_adds_once(conn, monkeypatch):
+    monkeypatch.setitem(config.CONFIG["veto"], "artist_min_ratings", 5)
+    _hist(conn, [("Alpha", "One", -1), ("Alpha", "Two", -1), ("Alpha", "Three", -1),
+                 ("Alpha", "Kept (Extended Mix)", 1)])               # an Add that's now in the playlist
+    with conn:
+        pid = conn.execute("INSERT INTO playlists (name) VALUES ('test')").lastrowid
+        for t in ("Kept", "Kept (Radio Edit)", "Starred"):            # one song in two versions, and a seed
+            tid = conn.execute("INSERT INTO tracks (origin, artist, title, video_id) VALUES ('library', 'Alpha', ?, ?)",
+                               (t, f"vid-{t}")).lastrowid
+            conn.execute("INSERT INTO playlist_tracks (playlist_id, track_id, stars) VALUES (?, ?, ?)",
+                         (pid, tid, 5 if t == "Starred" else None))
+    monkeypatch.setattr(artist, "playlist_id", lambda c: pid)
+    vals, n = artist.values(conn, [("Alpha", "New")])
+    assert n[0] == 5                                   # 3 Offs + Kept once (not its Add as well) + Starred
+    assert vals[0] == np.mean([-1, -1, -1, 1, 1])
+    monkeypatch.setattr(artist, "playlist_id", lambda c: None)
+    assert artist.values(conn, [("Alpha", "New")])[1][0] == 4   # outside a playlist's session: ratings only
+
+
+def test_artist_push_is_read_against_zero_not_other_artists(conn, monkeypatch):
+    worst, mild, unknown = [r[0] for r in conn.execute("SELECT id FROM tracks WHERE origin = 'pool' LIMIT 3")]
+    with conn:      # made-up names: real credits can share an artist, which would pool their ratings
+        for tid, name in ((worst, "Worst Artist"), (mild, "Mild Artist"), (unknown, "Unknown Artist")):
+            conn.execute("UPDATE tracks SET artist = ? WHERE id = ?", (name, tid))
+    # Every artist known here leans disliked: the less disliked one must still be pushed down, not up.
+    _hist(conn, [("Worst Artist", f"W{i}", -1) for i in range(6)]
+          + [("Mild Artist", f"M{i}", -1 if i < 2 else 0) for i in range(6)])
+    d = veto.compute(conn)
+    scale = config.CONFIG["veto"]["artist_scale"]
+    assert d[worst]["artist"]["z"] == round(-1 / scale, 3)
+    assert d[mild]["artist"]["z"] == round(-(2 / 6) / scale, 3)
+    assert d[unknown]["artist"]["z"] == 0              # too few ratings: no push

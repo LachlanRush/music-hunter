@@ -137,16 +137,17 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
     z = {c: robust_z(v) for c, v in raw.items()}
     w = {c: CFG["weights"].get(c, 0.0) for c in z}
     score = sum(w[c] * z[c] for c in z) / (sum(w.values()) or 1.0)
-    # Artist (v5, §18.29): artist_share of the score, the rest shared by the parts above. Tracks whose artists have
-    # fewer than artist_min_ratings ratings count as the average artist; the values are scaled by their spread.
+    # Artist (v5, §18.29): artist_share of the score, the rest shared by the parts above. The value is read against a
+    # fixed reference, not other artists: 0 (all Close) is neutral, above pushes up, below pushes down, by value ÷
+    # artist_scale. Tracks whose artists have fewer than artist_min_ratings ratings get no push.
     from . import artist
 
     art, art_n = (artist.values(conn, [(r["artist"], r["title"]) for r in rows]) if CFG["artist_share"] > 0
                   else (np.full(len(rows), np.nan), np.zeros(len(rows), int)))
     known = ~np.isnan(art)
     art_z = np.zeros(len(rows))
-    if known.sum() >= 2 and art[known].std() > 1e-9:
-        art_z = np.where(known, (art - art[known].mean()) / art[known].std(), 0.0)
+    if known.any():
+        art_z = np.where(known, art / CFG["artist_scale"], 0.0)
         score = (1 - CFG["artist_share"]) * robust_z(score) + CFG["artist_share"] * art_z
     zs = robust_z(score)
     pct = np.argsort(np.argsort(score)) / max(1, len(score) - 1)

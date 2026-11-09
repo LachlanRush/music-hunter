@@ -156,12 +156,16 @@ def test_changes_reach_find_music_straight_away(setup, monkeypatch):
     client = TestClient(web.app)
     stars = lambda: {s.stars for s in seeds(sess)}
     client.put(f"/api/playlists/{pid}/tracks/{tracks[1]}", json={"stars": 2})
+    web.wait_follow_ups()
     assert len(seeds(sess)) == 2 and stars() == {5.0, 2.0}                       # a new seed, now
     client.put(f"/api/playlists/{pid}/tracks/{tracks[1]}", json={"stars": None})
+    web.wait_follow_ups()
     assert len(seeds(sess)) == 1                                                  # unstarred: not a seed, now
     client.delete(f"/api/playlists/{pid}/tracks/{tracks[0]}")
+    web.wait_follow_ups()
     assert seeds(sess) == []                                                      # removed: not a seed
     client.post(f"/api/playlists/{pid}/deleted/{tracks[0]}/restore")
+    web.wait_follow_ups()
     assert stars() == {5.0}                                                       # restored with its stars
     assert db.session_path(pid).exists()
     client.delete(f"/api/playlists/{pid}")

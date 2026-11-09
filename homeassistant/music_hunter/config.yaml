@@ -1,5 +1,5 @@
 name: Music Hunter
-version: "0.5.8"
+version: "0.5.9"
 slug: music_hunter
 description: Playlists with stars and Find music; the PC is woken for downloads and analysis
 url: https://github.com/LachlanRush/music-hunter
@@ -10,6 +10,8 @@ startup: application
 boot: auto
 init: true
 homeassistant_api: true
+map:
+  - share:rw
 ports:
   8765/tcp: 8765
 ports_description:

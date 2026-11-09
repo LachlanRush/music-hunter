@@ -103,6 +103,9 @@ class Local:
                 tempo = estimate(audio.decode(file, bpm_sr), bpm_sr, bpm_prior)
             except Exception as e:
                 notes["bpm_failed"] = str(e)[:200]
+            vocals = Vocals.measure(file)                  # §18.34: logged on the Pi for the replay test
+            if vocals:
+                notes["vocals"] = vocals
             t2 = time.monotonic()
             art, published = None, None
             try:
@@ -111,6 +114,105 @@ class Local:
                 notes["art_failed"] = str(e)[:200]
             return Result(file, len(samples) / sr, lufs, peak, gain, emb, self.embedder.model_name, tempo, art,
                           published, {"download_s": t1 - t0, "analysis_s": t2 - t1, "waited_s": max(wait, 0)}, notes)
+
+
+class Quality:
+    """The PC side of playlist tracks' M4A files (SPEC.md §19). Only tracks in a playlist come here."""
+
+    @staticmethod
+    def premium_ready() -> bool:
+        """My sign-in and the token tool are both there."""
+        q = CONFIG["quality"]
+        if not Path(q["cookies_file"]).expanduser().exists():
+            return False
+        try:
+            return requests.get(q["token_provider"].rstrip("/") + "/ping", timeout=3).ok
+        except requests.RequestException:
+            return False
+
+    @staticmethod
+    def fetch(video_id: str, folder: Path) -> tuple[Path, int, str | None]:
+        """(file, quality, why not the good one). A refusal by YouTube is raised, to pause as other downloads do."""
+        from .pool import download
+
+        q, why = CONFIG["quality"], "the sign-in file or token tool isn't there"
+        with Local.lock:
+            wait = CONFIG["pool"]["download_delay_seconds"] - (time.monotonic() - Local.last_download)
+            if wait > 0:
+                time.sleep(wait)
+            try:
+                if Quality.premium_ready():
+                    try:
+                        return download(video_id, folder, {
+                            "format": q["format"], "cookiefile": str(Path(q["cookies_file"]).expanduser()),
+                            "extractor_args": {"youtube": {"player_client": ["web_music"]}},
+                        }), 2, None
+                    except Exception as e:
+                        if refusal(str(e)) == "blocked":
+                            raise
+                        why = str(e)[:200]
+                return download(video_id, folder, {"format": q["free_format"]}), 1, why
+            finally:
+                Local.last_download = time.monotonic()
+
+
+class Vocals:
+    """How much of a track is vocals, and how happy, bright and approachable it sounds (SPEC.md §18.34).
+
+    Measured by a helper in the taste-test environment (tastetest/vocals_server.py: Demucs and Essentia, which the
+    app's environment doesn't carry), started once and kept running. Only where that environment exists (the PC);
+    anywhere else, or if it fails, tracks are simply not measured."""
+
+    proc = None
+    broken = False
+
+    @classmethod
+    def measure(cls, file: Path) -> dict | None:
+        import json
+        import select
+        import subprocess
+
+        if not CONFIG.get("vocals", {}).get("enabled", True) or cls.broken:
+            return None
+        from .config import PROJECT
+
+        python = PROJECT / "tastetest" / ".venv" / "bin" / "python"
+        if not python.exists():
+            return None
+        try:
+            if cls.proc is None or cls.proc.poll() is not None:
+                cls.proc = subprocess.Popen([str(python), "vocals_server.py"], cwd=PROJECT / "tastetest", text=True,
+                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                if cls._read(cls.proc, 180).get("ready") is not True:
+                    raise RuntimeError("the vocals helper didn't start")
+            cls.proc.stdin.write(f"{file}\n")
+            cls.proc.stdin.flush()
+            out = cls._read(cls.proc, CONFIG.get("vocals", {}).get("timeout_s", 120))
+            return out.get("features")
+        except Exception as e:
+            print(f"Vocals not measured ({e}); the helper is off until the worker restarts", flush=True)
+            cls.broken = True
+            if cls.proc:
+                cls.proc.kill()
+            return None
+
+    @staticmethod
+    def _read(proc, timeout: float) -> dict:
+        """The helper's next JSON answer (Essentia prints its own lines on the same output; those are skipped)."""
+        import json
+        import select
+
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            ready, _, _ = select.select([proc.stdout], [], [], max(0.0, end - time.monotonic()))
+            if not ready:
+                break
+            line = proc.stdout.readline()
+            if not line:
+                raise RuntimeError("the vocals helper stopped")
+            if line.startswith("{"):
+                return json.loads(line)
+        raise TimeoutError("the vocals helper took too long")
 
 
 class Remote:
@@ -304,7 +406,7 @@ def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
     local = local or Local(path("cache") / "worker")
     base = server.rstrip("/") + "/api/worker"
     inhibitor, done, last_work, announced = Inhibitor(), 0, time.monotonic(), False
-    blocked_streak, attempts = 0, {}
+    blocked_streak, attempts, quality_next = 0, {}, 0.0
     while True:
         try:
             r = http.post(f"{base}/claim", timeout=60)
@@ -313,6 +415,12 @@ def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
             time.sleep(CFG["idle_poll_seconds"])
             continue
         if r.status_code == 204:
+            if time.monotonic() >= quality_next:
+                pause = _quality_one(http, base, local)       # nothing to analyse: playlist tracks' M4A files
+                if pause == 0:
+                    last_work = time.monotonic()
+                    continue
+                quality_next = time.monotonic() + pause
             idle = time.monotonic() - last_work
             if idle > CFG["idle_minutes"] * 60 and inhibitor.proc is not None:
                 inhibitor.release()
@@ -360,6 +468,40 @@ def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
                 if f is not None:
                     Path(f).unlink(missing_ok=True)       # the app keeps the copies
         last_work = time.monotonic()
+
+
+def _quality_one(http, base: str, local) -> float:
+    """Fetch one playlist track's M4A and send it. Returns seconds to wait before asking again (0: ask straight away)."""
+    from .pool import loudness
+
+    if not CONFIG["quality"]["enabled"]:
+        return 3600
+    try:
+        r = http.post(f"{base}/quality/claim", timeout=60)
+    except requests.RequestException:
+        return 60
+    if r.status_code == 404:
+        return 600                                       # an app that doesn't do this yet
+    if r.status_code == 204:
+        return 60
+    r.raise_for_status()
+    item = r.json()
+    file = None
+    try:
+        file, quality, why = Quality.fetch(item["video_id"], local.folder or path("cache"))
+        lufs, peak, gain = loudness(file)
+        with open(file, "rb") as f:
+            _post(http, f"{base}/quality/{item['track_id']}", data=f, params={
+                "ext": file.suffix, "quality": quality, "lufs": lufs, "peak": peak, "gain": gain, "why": why or ""})
+        print(f"  {item['video_id']} {'~256' if quality == 2 else '~130'} kbps M4A sent"
+              + (f" ({why[:100]})" if why else ""), flush=True)
+        return 0
+    except Exception as e:
+        print(f"  {item['video_id']}: no M4A: {str(e)[:160]}", flush=True)
+        return CONFIG["worker"]["blocked_pause_minutes"][0] * 60 if refusal(str(e)) == "blocked" else 0
+    finally:
+        if file is not None:
+            Path(file).unlink(missing_ok=True)
 
 
 def _release(http, base: str, wid: int, pause_s: int) -> bool:
@@ -412,6 +554,55 @@ def claim(lib) -> dict | None:
         lib.execute("UPDATE work SET state = 'claimed', claimed_at = datetime('now'), updated_at = datetime('now')"
                     " WHERE id = ?", (w["id"],))
     return {"id": w["id"], "video_id": w["video_id"], "bpm_prior": w["bpm_prior"]}
+
+
+def quality_claim(lib) -> dict | None:
+    """The next track in a playlist still without its good M4A (not tried lately)."""
+    db.set_setting(lib, "worker_seen", time.time(), log=False)
+    with lib:
+        w = lib.execute(
+            "SELECT t.id, t.video_id FROM tracks t WHERE t.video_id IS NOT NULL AND t.file_path IS NOT NULL"
+            " AND t.id IN (SELECT track_id FROM playlist_tracks) AND coalesce(t.quality, 0) < 2"
+            " AND (t.quality_tried_at IS NULL OR t.quality_tried_at < datetime('now', ?))"
+            " ORDER BY t.id LIMIT 1", (f"-{CONFIG['quality']['retry_hours']} hours",)).fetchone()
+        if w is None:
+            return None
+        lib.execute("UPDATE tracks SET quality_tried_at = datetime('now') WHERE id = ?", (w["id"],))
+    return {"track_id": w["id"], "video_id": w["video_id"]}
+
+
+def quality_receive(lib, track_id: int, body: bytes, ext: str, quality: int, lufs: float, peak: float, gain: float,
+                    why: str = "") -> bool:
+    """A playlist track's M4A has come back: it replaces the track's audio (the fingerprint stays: same recording)."""
+    from .config import relative
+
+    t = lib.execute("SELECT file_path, quality FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if t is None or not t["file_path"] or (t["quality"] or 0) >= quality:
+        return False
+    old = t["file_path"]
+    ext = ext if ext.startswith(".") and ext[1:].isalnum() and len(ext) <= 6 else ".m4a"
+    dest = resolve(old).with_suffix(ext)
+    if dest == resolve(old):
+        dest = dest.with_name(f"{dest.stem}.q{quality}{ext}")
+    tmp = dest.with_name(dest.name + ".part")
+    tmp.write_bytes(body)
+    tmp.replace(dest)
+    with lib:
+        lib.execute("UPDATE tracks SET file_path = ?, quality = ?, loudness_lufs = ?, true_peak_db = ?, gain_db = ?"
+                    " WHERE id = ?", (relative(dest), quality, lufs, peak, gain, track_id))
+    if relative(dest) != old:
+        db.release_audio(lib, old)
+    db.log_event(lib, "track_quality", track_id=track_id, quality=quality, bytes=len(body), why=why[:200] or None)
+    return True
+
+
+def quality_waiting(lib) -> bool:
+    """Whether a playlist track is due for its M4A (the app wakes the PC for it)."""
+    return lib.execute(
+        "SELECT 1 FROM tracks t WHERE t.video_id IS NOT NULL AND t.file_path IS NOT NULL"
+        " AND t.id IN (SELECT track_id FROM playlist_tracks) AND coalesce(t.quality, 0) < 2"
+        " AND (t.quality_tried_at IS NULL OR t.quality_tried_at < datetime('now', ?)) LIMIT 1",
+        (f"-{CONFIG['quality']['retry_hours']} hours",)).fetchone() is not None
 
 
 def release(lib, wid: int, pause_s: float) -> bool:

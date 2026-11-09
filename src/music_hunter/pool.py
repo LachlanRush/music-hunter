@@ -86,7 +86,7 @@ def buckets(conn: sqlite3.Connection, generation: int) -> dict[tuple[int, str], 
 
 # --- download, loudness, analysis --------------------------------------------------------
 
-def download(video_id: str, folder: Path | None = None) -> Path:
+def download(video_id: str, folder: Path | None = None, extra: dict | None = None) -> Path:
     """Full audio with yt-dlp into cache/ (or `folder`), original container (no re-encode)."""
     import yt_dlp
 
@@ -101,6 +101,7 @@ def download(video_id: str, folder: Path | None = None) -> Path:
         "no_warnings": True,
         "noprogress": True,
     }
+    opts.update(extra or {})
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(f"https://music.youtube.com/watch?v={video_id}", download=True)
     return Path(info["requested_downloads"][0]["filepath"])

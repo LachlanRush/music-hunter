@@ -1,5 +1,7 @@
 """v5 playlists and library (SPEC.md §18.1), on an empty temporary project — no network."""
 
+import json
+
 import pytest
 
 import music_hunter.config as config
@@ -94,6 +96,7 @@ def test_playlist_api(lib, monkeypatch):
         assert client.put(f"/api/playlists/{pid}/tracks/{t}", json={"stars": 4}).status_code == 200
         assert client.put(f"/api/playlists/{pid}/tracks/{t}", json={"stars": 9}).status_code == 400
         d = client.get(f"/api/playlists/{pid}").json()
+        assert d["back_restart_s"] == config.CONFIG["ui"]["back_restart_s"]
         assert d["tracks"][0]["stars"] == 4 and d["tracks"][0]["audio"] == f"/audio/{t}"
         assert d["others"] == [{"id": other, "name": "Other"}]
         assert client.post(f"/api/playlists/{other}/tracks", json={"track_id": t}).json()["added"]
@@ -267,3 +270,111 @@ def test_add_song_and_restore_api(lib, monkeypatch):
     assert d["tracks"] == [] and d["deleted"][0]["id"] == t
     assert client.post(f"/api/playlists/{pid}/deleted/{t}/restore").status_code == 200
     assert client.get(f"/api/playlists/{pid}").json()["tracks"][0]["id"] == t
+
+
+def test_star_changes_are_logged_for_replays(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    conn = db.connect(None)
+    with conn:
+        pid = conn.execute("INSERT INTO playlists (name) VALUES ('p')").lastrowid
+        tid = conn.execute("INSERT INTO tracks (artist, title, origin) VALUES ('A', 'T', 'library')").lastrowid
+    library.add_to_playlist(conn, pid, tid)
+    library.set_stars(conn, pid, tid, 4)
+    library.set_stars(conn, pid, tid, None)
+    rows = [json.loads(r[0])["stars"] for r in conn.execute("SELECT data FROM events WHERE kind = 'stars_changed' ORDER BY id")]
+    assert rows == [4, None]
+
+
+def test_app_updates_are_published_and_offered(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from music_hunter import analysis, web
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    monkeypatch.setattr(analysis, "worker_token", lambda: "secret")
+    with TestClient(web.app) as client:
+        assert client.get("/app/latest.json").status_code == 404
+        auth = {"Authorization": "Bearer secret"}
+        assert client.post("/api/admin/app?version_code=2&version_name=0.2.0", content=b"not an apk",
+                           headers=auth).status_code == 400
+        assert client.post("/api/admin/app?version_code=2&version_name=0.2.0", content=b"PK fake").status_code == 401
+        r = client.post("/api/admin/app?version_code=2&version_name=0.2.0", content=b"PK fake", headers=auth)
+        assert r.status_code == 200
+        latest = client.get("/app/latest.json").json()
+        assert latest["version_code"] == 2 and latest["url"] == "/app/music-hunter.apk" and latest["size"] == 7
+        assert client.get("/app/music-hunter.apk").content == b"PK fake"
+
+
+def _sync_setup(tmp_path, monkeypatch):
+    import subprocess
+
+    from music_hunter import sync
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    monkeypatch.setitem(sync.CFG, "folder", str(tmp_path / "share"))
+    (tmp_path / "library").mkdir()
+    def m4a(name):
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                        "-c:a", "aac", str(tmp_path / "library" / name)], check=True)
+    conn = db.connect(None)
+    with conn:
+        pid = conn.execute("INSERT INTO playlists (name) VALUES ('pump: 140')").lastrowid
+    def track(artist, title, status="member", stars=None, file=None):
+        with conn:
+            tid = conn.execute("INSERT INTO tracks (artist, title, origin, file_path, duration_s, bpm) VALUES"
+                               " (?, ?, 'library', ?, 1.0, 140.0)", (artist, title, file)).lastrowid
+            conn.execute("INSERT INTO playlist_tracks (playlist_id, track_id, status, stars) VALUES (?, ?, ?, ?)",
+                         (pid, tid, status, stars))
+        return tid
+    return sync, conn, pid, track, m4a
+
+
+def test_sync_keeps_a_tagged_m4a_folder_and_a_rekordbox_file(tmp_path, monkeypatch):
+    import json as js
+    import subprocess
+
+    sync, conn, pid, track, m4a = _sync_setup(tmp_path, monkeypatch)
+    m4a("a.m4a"); m4a("b.m4a"); m4a("rate.m4a")
+    a = track("Art & Co", "One", stars=5, file="library/a.m4a")
+    b = track("Art", "Two", file="library/b.m4a")
+    track("Art", "Opus yet", file="library/o.webm")               # no M4A yet: waits
+    track("Art", "To rate", status="added", file="library/rate.m4a")   # not reviewed: not synced
+    sync.run_once(conn)                                           # off: nothing happens
+    assert not (tmp_path / "share").exists()
+    db.set_setting(conn, sync.setting(pid), True)
+    sync.run_once(conn)
+    folder = tmp_path / "share" / "pump_ 140"
+    assert sorted(f.name for f in folder.iterdir()) == ["Art & Co - One.m4a", "Art - Two.m4a"]
+    tags = js.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "json",
+                                    str(folder / "Art & Co - One.m4a")], capture_output=True, text=True).stdout)
+    assert tags["format"]["tags"]["title"] == "One" and tags["format"]["tags"]["album"] == "pump: 140"
+    assert sync.state(conn, pid) == {"on": True, "tracks": 3, "ready": 2}
+    xml = (tmp_path / "share" / "rekordbox.xml").read_text()
+    assert 'Rating="255"' in xml and 'Name="pump: 140"' in xml and "Art &amp; Co" in xml
+    assert 'file://localhost/C:/Users/lachl/Music/Songs/Playlists/pump_%20140/Art%20%26%20Co%20-%20One.m4a' in xml
+    import xml.dom.minidom as md
+    md.parseString(xml)                                           # well formed
+    # A track leaving the playlist leaves the folder; files that aren't ours stay.
+    (folder / "mine.txt").write_text("keep")
+    library.remove_from_playlist(conn, pid, b)
+    sync.run_once(conn)
+    assert sorted(f.name for f in folder.iterdir()) == ["Art & Co - One.m4a", "mine.txt"]
+    # Renaming moves the folder; switching off leaves the files.
+    library.rename_playlist(conn, pid, "pumped")
+    sync.run_once(conn)
+    assert (tmp_path / "share" / "pumped" / "Art & Co - One.m4a").exists() and not folder.exists()
+    db.set_setting(conn, sync.setting(pid), False)
+    library.remove_from_playlist(conn, pid, a)
+    sync.run_once(conn)
+    assert (tmp_path / "share" / "pumped" / "Art & Co - One.m4a").exists()
+
+
+def test_sync_switch_through_the_api(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from music_hunter import web
+
+    sync, conn, pid, track, m4a = _sync_setup(tmp_path, monkeypatch)
+    m4a("a.m4a")
+    track("A", "T", file="library/a.m4a")
+    with TestClient(web.app) as client:
+        assert client.get(f"/api/playlists/{pid}").json()["sync"] == {"on": False, "tracks": 1, "ready": 0}
+        assert client.put(f"/api/playlists/{pid}/sync", json={"on": True}).json()["on"] is True
+        sync.wait()
+        assert client.get(f"/api/playlists/{pid}").json()["sync"] == {"on": True, "tracks": 1, "ready": 1}
