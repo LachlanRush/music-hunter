@@ -15,6 +15,7 @@ else if (window.top !== window) document.documentElement.classList.add("framed")
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/nav.js"></script>
+<script src="/static/ui.js"></script>
 <style>
 h1 { font: 700 20px/1.2 var(--display); margin: 0; }      /* the same as "Add" below */
 .status:empty { display: none; }
@@ -210,9 +211,9 @@ document.addEventListener("click", async (e) => {
     const id = Number(act.dataset.id), name = actName || "this folder";
     try {
       if (act.dataset.folderAct === "rename") {
-        const n = prompt("Folder name", name);
+        const n = await askText("Rename folder", {value: name, ok: "Rename"});
         if (n) await api(`/api/folders/${id}`, {name: n}, "PATCH");
-      } else if (confirm(`Delete the folder "${name}"? Its playlists stay; they move to Playlists.`)) {
+      } else if (await ask(`Delete the folder "${name}"?`, {detail: "Its playlists stay; they move to Playlists.", ok: "Delete", danger: true})) {
         await api(`/api/folders/${id}`, undefined, "DELETE");
       }
     } catch (err) { showError(err.message); }
@@ -223,7 +224,7 @@ document.addEventListener("keydown", (e) => {
   if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-toggle]")) { e.preventDefault(); e.target.click(); }
 });
 $("new-folder").addEventListener("click", async () => {
-  const name = prompt("Folder name");
+  const name = await askText("New folder", {placeholder: "Folder name", ok: "Create"});
   if (!name) return;
   try { await api("/api/folders", {name}); load(); } catch (e) { showError(e.message); }
 });
@@ -427,17 +428,17 @@ const PlMenu = (() => {
       if (act === "picture") { $("picture").click(); return; }
       if (act === "refresh") await api(`/api/playlists/${pid}/import`, {});
       if (act === "download") { const s = JSON.parse(Phone.offlineState(pid));
-        if (s.on && !confirm("Remove this playlist's downloads from the phone?")) return; Phone.offlineSet(pid, !s.on); }
+        if (s.on && !await ask("Remove the downloads from this phone?", {detail: "It will still play while you're connected.", ok: "Remove"})) return; Phone.offlineSet(pid, !s.on); }
       if (act === "sync") await api(`/api/playlists/${pid}/sync`, {on: !(info.sync && info.sync.on)}, "PUT");
       if (act === "results") return go(`/playlist/${pid}/results`);
       if (act === "delete") {
-        if (!confirm(`Delete "${info.name}" for good?\n\nThis can't be undone: the playlist, its stars, its Find music and `
-            + "its Recently deleted list are removed, and tracks that are in no other playlist lose their audio.")) return;
+        if (!await ask(`Delete "${info.name}"?`, {ok: "Delete", danger: true, detail: "This can't be undone: the playlist, its stars, "
+            + "its Find music and its Recently deleted list go, and songs in no other playlist lose their audio."})) return;
         await api(`/api/playlists/${pid}`, undefined, "DELETE");
       }
       if (act === "to") {
         let fid = b.dataset.folder;
-        if (fid === "new") { const name = prompt("Folder name"); if (!name) return; fid = (await api("/api/folders", {name})).folder_id; }
+        if (fid === "new") { const name = await askText("New folder", {placeholder: "Folder name", ok: "Create"}); if (!name) return; fid = (await api("/api/folders", {name})).folder_id; }
         await api(`/api/playlists/${pid}/folder`, {folder_id: fid === "none" ? null : Number(fid)}, "PUT");
       }
     } catch (err) { showError(err.message); }

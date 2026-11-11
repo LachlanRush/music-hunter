@@ -18,7 +18,7 @@
       if (!r.ok) throw new Error(r.statusText);
       text.value = "";
       box.open = false;                                  // sent: fold it away
-    } catch (e) { alert(`Couldn't send: ${e.message}`); }
+    } catch (e) { box.querySelector("summary").textContent = `Feedback — couldn't send (${e.message})`; }
     send.disabled = false;
   });
 })();

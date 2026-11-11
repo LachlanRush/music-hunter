@@ -15,6 +15,7 @@ else if (window.top !== window) document.documentElement.classList.add("framed")
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/nav.js"></script>
+<script src="/static/ui.js"></script>
 <script src="/static/colour.js"></script>
 <script src="/static/tempo.js"></script>
 <script src="/static/media.js"></script>
@@ -382,7 +383,6 @@ function showTempoNote() { $("tempo-note").textContent = SameBpm.note(onAir(), t
 function renderTempo() {
   $("same-bpm").checked = tempo.on;
   $("bpm-target").value = tempo.target ?? "";
-  $("bpm-target").disabled = !tempo.on;
 }
 async function saveTempo(on, bpm) {
   try {
@@ -401,7 +401,7 @@ async function saveTempo(on, bpm) {
 $("same-bpm").addEventListener("change", () => saveTempo($("same-bpm").checked, tempo.bpm));
 $("bpm-target").addEventListener("change", () => {
   const v = Number($("bpm-target").value);
-  saveTempo(true, v >= 60 && v <= 200 ? v : null);
+  saveTempo(tempo.on, v >= 60 && v <= 200 ? v : null);       // (the box works with the tick off too)
 });
 $("bpm-target").addEventListener("keydown", (e) => { if (e.key === "Enter") $("bpm-target").blur(); });
 api("/api/tempo").then((s) => { tempo = s; renderTempo(); }).catch(() => {});

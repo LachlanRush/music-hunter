@@ -15,6 +15,7 @@ else if (window.top !== window) document.documentElement.classList.add("framed")
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/nav.js"></script>
+<script src="/static/ui.js"></script>
 <script src="/static/colour.js"></script>
 <script src="/static/tempo.js"></script>
 <script src="/static/media.js"></script>
@@ -194,6 +195,10 @@ li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba
     <h2 id="tracks-label">Tracks <span class="meta" id="tracks-count"></span></h2>
     <ol id="tracks"></ol>
   </section>
+  <section id="pending-section" hidden>
+    <h2 id="pending-label">Downloading <span class="meta" id="pending-count"></span></h2>
+    <ol id="pending"></ol>
+  </section>
   <form class="add-song" id="add-song">
     <input id="add-link" type="url" placeholder="Add a song — Spotify or YouTube Music link" aria-label="Song link" required>
     <button class="btn" type="submit">Add</button>
@@ -361,14 +366,12 @@ function rowStatus(t) {
   const job = data && data.job, active = job && (job.state === "queued" || job.state === "running");
   if (!active) return "No audio";
   const msg = (job.progress && job.progress.message) || "", name = `${t.artist} – ${t.title}`;
-  if (msg.startsWith(name)) { stepLine(msg); return `<span class="row-step">${clock()}</span>`; }
+  if (msg.startsWith(name)) return `<span class="row-step">Downloading now</span>`;
   return "Waiting to download";
 }
 setInterval(() => {
   const el = document.getElementById("import-step");
   if (el && stepSeen.text) el.textContent = stepLine(stepSeen.text);
-  const row = document.querySelector(".row-step");
-  if (row && stepSeen.text) row.textContent = clock();
 }, 1000);
 function render() {
   if (typeof RowDrag !== "undefined" && RowDrag.busy()) return;   // not under a row being dragged
@@ -395,7 +398,14 @@ function render() {
     $("tracks-count").textContent = n(all.length);
     fill($("tracks"), all.map(row));
   } else {
-    const added = d.tracks.filter((t) => t.status === "added"), main = d.tracks.filter((t) => t.status !== "added");
+    // Songs without their audio yet (being imported, or waiting) sit in their own list below the rest.
+    const ready = d.tracks.filter((t) => t.audio), waiting = d.tracks.filter((t) => !t.audio);
+    const added = ready.filter((t) => t.status === "added"), main = ready.filter((t) => t.status !== "added");
+    const job = d.job, busy = job && (job.state === "queued" || job.state === "running");
+    $("pending-section").hidden = !waiting.length;
+    $("pending-label").firstChild.textContent = busy ? "Downloading " : "No audio ";
+    $("pending-count").textContent = n(waiting.length);
+    fill($("pending"), waiting.map(row));
     $("added-count").textContent = n(added.length);
     $("tracks-count").textContent = main.length ? n(main.length) : "";
     $("added-section").hidden = !added.length;
@@ -482,9 +492,9 @@ async function loadFind() {
 $("find").addEventListener("click", async () => {
   if (!find) return;
   if (find.state === "ready") { go(`/find/${PID}`); return; }
-  if (find.state === "none" && !confirm(`Find music for "${data.name}"?\n\nThis finds and downloads new tracks from your ${find.seeds} `
-      + `${find.starred ? "starred " : ""}track${find.seeds > 1 ? "s" : ""} and analyses them — a few minutes before the first ${find.early_start} are ready; `
-      + "the rest keep coming in the background.")) return;
+  if (find.state === "none" && !await ask(`Find music for "${data.name}"?`, {ok: "Find music",
+      detail: `New tracks are found from your ${find.seeds} ${find.starred ? "starred " : ""}track${find.seeds > 1 ? "s" : ""}, `
+        + `downloaded and analysed: a few minutes before the first ${find.early_start} are ready; the rest keep coming in the background.`})) return;
   try { await api(`/api/playlists/${PID}/find`, {}); } catch (e) { showError(`Couldn't start Find music: ${e.message}`); }
   loadFind();
 });
@@ -547,11 +557,11 @@ document.addEventListener("click", async (e) => {
     const menu = document.createElement("div");
     menu.className = "menu";
     const tt = data.tracks.find((x) => x.id === tid);
-    menu.innerHTML = `<button data-sound="${tid}">Sort by sound like this</button>`
+    menu.innerHTML = `<button data-sheet="${tid}">Add to playlist…</button>`
+      + `<button data-sound="${tid}">Sort by sound like this</button>`
       + `<button data-similar="${tid}">Find similar</button>`
       + (tt && tt.art ? `<button data-cover-from="${tid}">Use as playlist cover</button>` : "")
       + `<button data-own-bpm="${tid}">Play at … BPM</button>`
-      + `<button data-sheet="${tid}">Add to playlist…</button>`
       + `<hr><button data-remove="${tid}" style="color:var(--bad)">Remove from this playlist</button>`;
     more.parentElement.appendChild(menu);
     placeMenu(menu);
@@ -581,7 +591,7 @@ document.addEventListener("click", async (e) => {
     let fid = folderPick.dataset.folderPick;
     try {
       if (fid === "new") {
-        const name = prompt("Folder name");
+        const name = await askText("New folder", {placeholder: "Folder name", ok: "Create"});
         if (!name) return;
         fid = (await api("/api/folders", {name})).folder_id;
       }
@@ -601,9 +611,9 @@ document.addEventListener("click", async (e) => {
   const own = e.target.closest("[data-own-bpm]");
   if (own) {
     const t = data.tracks.find((x) => x.id === Number(own.dataset.ownBpm));
-    const v = prompt(`Play "${t.title}" at how many BPM in this playlist? (used instead of Set to BPM while it's on)`,
-                     t.bpm_override || t.bpm_shown || "");
-    if (v === null || v.trim() === "") return;
+    const v = await askText(`Play "${t.title}" at`, {value: String(t.bpm_override || t.bpm_shown || ""),
+                                                    placeholder: "BPM", ok: "Set", inputmode: "decimal"});
+    if (!v) return;
     try { await api(`/api/playlists/${PID}/tracks/${t.id}/bpm`, {bpm: Number(v)}, "PUT"); await load(); retuneCurrent(); }
     catch (err) { showError(err.message); }
     return;
@@ -623,7 +633,7 @@ document.addEventListener("click", async (e) => {
   const forever = e.target.closest("[data-forever]");
   if (forever) {
     const t = (data.deleted || []).find((x) => x.id === Number(forever.dataset.forever));
-    if (!confirm(`Delete "${t ? t.title : "this track"}" for good? It can't be restored.`)) return;
+    if (!await ask(`Delete "${t ? t.title : "this track"}" for good?`, {detail: "It can't be restored.", ok: "Delete", danger: true})) return;
     data.deleted = (data.deleted || []).filter((x) => x.id !== Number(forever.dataset.forever)); render();
     try { await api(`/api/playlists/${PID}/deleted/${forever.dataset.forever}`, undefined, "DELETE"); settleLater(300); }
     catch (err) { showError(`Couldn't delete it: ${err.message}`); load(); }
@@ -796,7 +806,7 @@ const RowDrag = (() => {
 })();
 $("delete-all").addEventListener("click", async () => {
   const n = (data.deleted || []).length;
-  if (!n || !confirm(`Delete all ${n} track${n > 1 ? "s" : ""} in Recently deleted for good? They can't be restored.`)) return;
+  if (!n || !await ask(`Delete all ${n} track${n > 1 ? "s" : ""} for good?`, {detail: "Everything in Recently deleted goes. It can't be restored.", ok: "Delete all", danger: true})) return;
   data.deleted = []; render();                          // gone at once; the server follows
   try { await api(`/api/playlists/${PID}/deleted`, undefined, "DELETE"); settleLater(300); }
   catch (err) { showError(`Couldn't delete them: ${err.message}`); load(); }
@@ -816,8 +826,8 @@ async function refreshPlaylist() {
   load();
 }
 async function deletePlaylist() {
-  if (!confirm(`Delete "${data.name}" for good?\n\nThis can't be undone: the playlist, its stars, its Find music and `
-      + "its Recently deleted list are removed, and tracks that are in no other playlist lose their audio.")) return;
+  if (!await ask(`Delete "${data.name}"?`, {ok: "Delete", danger: true, detail: "This can't be undone: the playlist, its stars, "
+      + "its Find music and its Recently deleted list go, and songs in no other playlist lose their audio."})) return;
   await api(`/api/playlists/${PID}`, undefined, "DELETE"); go("/");
 }
 
@@ -990,7 +1000,7 @@ document.addEventListener("click", async (e) => {
   if (!t) return;
   if (t.dataset.plToggle === "download") {
     const s = downloadState();
-    if (s.on && !confirm("Remove this playlist's downloads from the phone? It will still play while you're connected.")) return;
+    if (s.on && !await ask("Remove the downloads from this phone?", {detail: "It will still play while you're connected.", ok: "Remove"})) return;
     Phone.offlineSet(PID, !s.on);
   } else {
     try { data.sync = await api(`/api/playlists/${PID}/sync`, {on: !data.sync.on}, "PUT"); }
@@ -1015,7 +1025,6 @@ function renderTempo() {
   const s = data.tempo;
   $("same-bpm").checked = s.on;
   $("bpm-target").value = s.target;
-  $("bpm-target").disabled = !s.on;
 }
 async function saveTempo(on, bpm) {
   try { await api(`/api/playlists/${PID}/tempo`, {on, bpm}, "PUT"); } catch (e) { showError(`Couldn't save: ${e.message}`); }
@@ -1031,7 +1040,7 @@ function retuneCurrent() {                              // the playing track fol
 $("same-bpm").addEventListener("change", () => saveTempo($("same-bpm").checked, data.tempo.bpm));
 $("bpm-target").addEventListener("change", () => {
   const v = Number($("bpm-target").value);
-  saveTempo(true, v >= 60 && v <= 200 ? v : null);
+  saveTempo(data.tempo.on, v >= 60 && v <= 200 ? v : null);   // (the box works with the tick off too)
 });
 
 window.feedbackContext = () => {
