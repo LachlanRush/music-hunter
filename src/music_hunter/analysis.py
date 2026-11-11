@@ -149,8 +149,8 @@ class Local:
             except Exception as e:
                 notes["art_failed"] = str(e)[:200]
             return Result(file, len(samples) / sr, lufs, peak, gain, emb, self.embedder.model_name, tempo, art,
-                          published, {"download_s": download_s, "analysis_s": t2 - t1, "waited_s": max(wait, 0),
-                                     "lane": lane["name"]}, notes)
+                          published, {"download_s": download_s, "analysis_s": t2 - t1, "waited_s": max(wait, 0)},
+                          notes)
 
 
 class Quality:
