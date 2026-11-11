@@ -990,3 +990,4 @@ All 297 rated plays on the Pi (289 tracks) re-downloaded (256; YouTube refused t
 - **Spotify's stand-in description** ("Playlist · Lachlan Rush · 12 items", what Spotify's page shows for a playlist without one) isn't kept on import, and is cleared from earlier imports at start-up.
 - **Creating a playlist** asks only for a name; a picture is added from the playlist's ⋯ (Add picture).
 - **No "Music Hunter" heading** on any page, and less space at the top: the home page starts with "Your playlists"; other pages keep only the back arrow (Find music also its "Finding music for …").
+- **The playlist cover no longer plays** when tapped (it did since §18.12); Play is the round button. The back arrow has its own short row above the cover again (laid over the page it covered the cover).
