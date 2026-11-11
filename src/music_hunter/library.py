@@ -9,6 +9,7 @@ within tolerance), downloads it into library/ and analyses it (loudness, MAEST f
 Tracks already in the library (same Spotify ID or YouTube video) are reused, not downloaded again.
 """
 
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -105,6 +106,7 @@ def playlist_tracks(conn: sqlite3.Connection, playlist_id: int) -> list[dict]:
     return [dict(r) for r in conn.execute(
         "SELECT t.id, t.artist, t.title, t.duration_s, t.gain_db, t.bpm, t.release_date,"
         " t.art_path IS NOT NULL AS has_art, t.file_path IS NOT NULL AS has_audio, pt.stars, pt.status, pt.added_at,"
+        " pt.starred_at,"
         " pt.bpm_override, t.quality"
         " FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id WHERE pt.playlist_id = ?"
         " ORDER BY pt.status = 'added' DESC, CASE WHEN pt.status = 'added' THEN pt.added_at END DESC,"
@@ -271,6 +273,22 @@ def _drop_if_orphaned(conn: sqlite3.Connection, track_id: int) -> None:
 
 # --- importing from Spotify ----------------------------------------------------------------
 
+# Spotify's page gives a playlist without a description this stand-in ("Playlist · Lachlan Rush · 12 items"): not kept.
+_SPOTIFY_FILLER = re.compile(r"^Playlist · .* · \d+ (items?|songs?)( · .*)?$")
+
+
+def real_description(text: str | None) -> str | None:
+    return None if not text or _SPOTIFY_FILLER.match(text.strip()) else text.strip()
+
+
+def clean_descriptions(conn: sqlite3.Connection) -> None:
+    """Drop Spotify's stand-in descriptions saved by earlier imports."""
+    for pid, d in conn.execute("SELECT id, description FROM playlists WHERE description IS NOT NULL").fetchall():
+        if real_description(d) is None:
+            with conn:
+                conn.execute("UPDATE playlists SET description = NULL WHERE id = ?", (pid,))
+
+
 def spotify_playlist_info(link: str) -> dict:
     """{'kind', 'id', 'name', 'description', 'image'} for a Spotify playlist or track link."""
     from . import spotify
@@ -280,7 +298,7 @@ def spotify_playlist_info(link: str) -> dict:
         return {"kind": kind, "id": sid, "name": None, "description": None, "image": None}
     page = spotify._page(f"https://open.spotify.com/playlist/{sid}")
     return {"kind": kind, "id": sid, "name": spotify._meta(page, "og:title"),
-            "description": spotify._meta(page, "og:description"), "image": spotify._meta(page, "og:image")}
+            "description": real_description(spotify._meta(page, "og:description")), "image": spotify._meta(page, "og:image")}
 
 
 def save_cover(conn: sqlite3.Connection, playlist_id: int, image_url: str | None) -> None:

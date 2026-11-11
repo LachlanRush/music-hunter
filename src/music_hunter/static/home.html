@@ -27,6 +27,13 @@ h1 { font: 800 clamp(28px, 6vw, 40px)/1.1 var(--display); letter-spacing: -0.02e
 .cover img { width: 100%; height: 100%; object-fit: cover; }
 .card b { font: 700 15px/1.3 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .bar { margin-top: 6px; }
+@media (max-width: 600px) {                       /* phones: three across */
+  .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .card { padding: 6px; gap: 2px; }
+  .cover { margin-bottom: 6px; font-size: 28px; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4); }
+  .card b { font-size: 13px; }
+  .card .meta { font-size: 11px; }
+}
 
 /* Folders: one level, opened and closed with the arrow; the playlists inside stay one tap away */
 .folders { display: grid; gap: 6px; }

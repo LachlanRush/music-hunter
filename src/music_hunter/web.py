@@ -36,6 +36,7 @@ async def lifespan(app):
     db.log_event(conn, "server_start", host=UI["host"], port=UI["port"],
                  hide_names_until_rated=UI["hide_names_until_rated"])
     analysis.drop_unfinished(conn)                  # v5: nobody waits for tracks queued for the PC before a restart
+    library.clean_descriptions(conn)                # Spotify's "Playlist · <owner> · N items" isn't a description
     worker.start_if_needed()
     for p in library.list_playlists(conn):          # v5: resume each started session's background work
         if find.started(p["id"]):

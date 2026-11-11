@@ -21,6 +21,7 @@ else if (window.top !== window) document.documentElement.classList.add("framed")
 <script src="/static/shuffle.js"></script>
 <style>
 body { padding-bottom: 150px; }
+main { overflow-anchor: none; }                   /* the page keeps its own place when rows move (keepView) */
 .head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 22px; align-items: end; padding-top: 8px; }
 .cover { width: 200px; height: 200px; border-radius: 6px; background: var(--raised); display: grid; place-items: center;
   overflow: hidden; font: 800 64px var(--display); color: var(--faint); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
@@ -246,8 +247,37 @@ function fill(ol, html) {
     }
     return el;
   });
-  ol.replaceChildren(...els);
+  // Moved into place one by one (not emptied and refilled: the list collapsing for a moment threw the page back up).
+  els.forEach((el, i) => { if (ol.children[i] !== el) ol.insertBefore(el, ol.children[i] || null); });
+  while (ol.children.length > els.length) ol.lastElementChild.remove();
   if (rowCache.size > 600) rowCache.clear();              // (old versions of rows)
+}
+// The playlist's order, as the server keeps it (library.playlist_tracks): To rate first, newest first; then by stars,
+// 5 at the top, unstarred last; the same stars, the most recently starred first. Used to move a starred track at once.
+// Redraw without the page moving: a row on screen (not the one being moved) stays exactly where it was.
+function keepView(except, redraw) {
+  const ref = [...document.querySelectorAll("li[data-row]")].find((r) => {
+    if (r === except) return false;
+    const b = r.getBoundingClientRect();
+    return b.top >= 0 && b.bottom <= innerHeight;
+  });
+  const before = ref ? ref.getBoundingClientRect().top : 0, id = ref && ref.dataset.row;
+  redraw();
+  const now = id && document.querySelector(`li[data-row="${id}"]`);   // (redrawn rows are new elements)
+  if (now) window.scrollBy(0, now.getBoundingClientRect().top - before);
+}
+const nowStamp = () => new Date().toISOString().replace("T", " ").slice(0, 23);
+function sortTracks(list) {
+  const added = (t) => t.status === "added";
+  const cmp = (a, b) => a < b ? 1 : a > b ? -1 : 0;              // newest / largest first
+  return [...list].sort((a, b) =>
+    (added(b) - added(a))
+    || (added(a) && added(b) ? cmp(a.added_at || "", b.added_at || "") : 0)
+    || ((a.stars == null) - (b.stars == null))
+    || ((b.stars || 0) - (a.stars || 0))
+    || cmp(a.starred_at || a.added_at || "", b.starred_at || b.added_at || "")
+    || cmp(a.added_at || "", b.added_at || "")
+    || (b.id - a.id));
 }
 // The playlist as last seen is kept on this device and shown at once on opening; fresh data follows.
 const CACHE_KEY = `playlist:${PID}`;
@@ -346,7 +376,7 @@ function render() {
 }
 
 async function load() {
-  try { data = await api(`/api/playlists/${PID}`); keep(data); render(); }
+  try { data = await api(`/api/playlists/${PID}`); keep(data); keepView(null, render); }
   catch (e) { showError(`Couldn't load the playlist: ${e.message}`); }
 }
 
@@ -395,8 +425,13 @@ document.addEventListener("click", async (e) => {
     const tid = Number(star.dataset.track), n = Number(star.dataset.star);
     const t = data.tracks.find((x) => x.id === tid);
     const stars = t.stars === n ? null : n;
-    t.stars = stars; render();                          // shown at once; the list re-orders after a pause
-    try { await api(`/api/playlists/${PID}/tracks/${tid}`, {stars}, "PUT"); settleLater(); }
+    // Shown and moved into place at once (the server does the same and catches up behind); the page stays where it
+    // is: the moving row isn't used to hold the scroll position, so the view doesn't follow it.
+    t.stars = stars; t.starred_at = nowStamp();
+    if (stars != null) t.status = "member";             // a starred To rate track joins the list
+    data.tracks = sortTracks(data.tracks);
+    keepView(star.closest("li"), render);
+    try { await api(`/api/playlists/${PID}/tracks/${tid}`, {stars}, "PUT"); settleLater(4000); }
     catch (err) { showError(`Couldn't save the stars: ${err.message}`); load(); }
     return;
   }
