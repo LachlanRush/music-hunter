@@ -27,7 +27,7 @@ main { overflow-anchor: none; }                   /* the page keeps its own plac
    phone, beside the centred cover */
 .head .backlink { position: absolute; top: 8px; left: -54px; }
 .status:empty { display: none; }
-@media (max-width: 980px) and (min-width: 601px) { .head { padding-left: 50px; } .head .backlink { left: 0; } }
+@media (max-width: 1440px) and (min-width: 601px) { .head { padding-left: 50px; } .head .backlink { left: 0; } }
 .cover { width: 200px; height: 200px; border-radius: 6px; background: var(--raised); display: grid; place-items: center;
   overflow: hidden; font: 800 64px var(--display); color: var(--faint); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); }
 .cover img { width: 100%; height: 100%; object-fit: cover; }
@@ -84,7 +84,7 @@ li.found { animation: found 1.4s ease-out; }
 .player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--tint);
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35); transition: background .6s; }
 .framed .player { display: none !important; }       /* in the browser shell its bar plays this part (static/shell.js) */
-.player-in { max-width: 860px; margin: 0 auto; display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+.player-in { max-width: 1280px; margin: 0 auto; display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
 .player .art { width: 48px; height: 48px; border-radius: 5px; }
 .player .art, .player .t { cursor: pointer; }
 .player .t b { font-weight: 700; }

@@ -386,6 +386,17 @@ class MoveBody(BaseModel):
     folder_id: int | None = None
 
 
+class OrderBody(BaseModel):
+    ids: list[int]
+
+
+@app.put("/api/playlists-order")
+def order_playlists(body: OrderBody) -> dict:
+    """The home page's order of playlists, after a drag."""
+    library.order_playlists(db.connect(), body.ids)
+    return {"ok": True}
+
+
 class PlayFilterBody(BaseModel):
     min_stars: int = 0
 

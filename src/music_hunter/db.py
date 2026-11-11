@@ -328,6 +328,7 @@ MIGRATIONS = [
     ("tracks", "redownloads", "INTEGER"),             # v5: times its audio was downloaded again after being dropped
     ("playlist_tracks", "starred_at", "TEXT"),
     ("playlists", "folder_id", "INTEGER REFERENCES folders(id) ON DELETE SET NULL"),   # its folder on the home page
+    ("playlists", "position", "INTEGER"),            # its place on the home page (dragged); NULL: after, oldest first
     ("playlist_tracks", "bpm_override", "REAL"),        # v5: this track's own "Play at … BPM" in this playlist         # v5: when its stars were last set (order within the same stars)
     ("tracks", "veto_state", "TEXT"),                  # v4: NULL/'playable' or 'vetoed' (audio dropped, fingerprint kept);
                                                        # v5: 'dropped' — every seed that suggested it left the playlist

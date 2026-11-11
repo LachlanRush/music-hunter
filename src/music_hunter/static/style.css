@@ -27,7 +27,7 @@ html, body { margin: 0; }
 body {
   background: var(--bg); color: var(--fg); font: 400 15px/1.5 var(--body);
   font-variant-numeric: tabular-nums;
-  padding-block: 0 48px; padding-inline: 16px; min-height: 100vh;
+  padding-block: 0 48px; padding-inline: clamp(16px, 3vw, 40px); min-height: 100vh;
   -webkit-font-smoothing: antialiased;
 }
 /* The glow behind the top of the page, in the cover's colour */
@@ -36,7 +36,7 @@ body::before {
   background: linear-gradient(180deg, var(--glow) 0%, color-mix(in srgb, var(--glow) 40%, transparent) 45%, transparent 100%);
   transition: background .6s;
 }
-main { max-width: 860px; margin: 0 auto; display: grid; gap: 24px; padding-top: max(14px, env(safe-area-inset-top)); }
+main { max-width: 1280px; margin: 0 auto; display: grid; gap: 24px; padding-top: max(14px, env(safe-area-inset-top)); }
 button { font: inherit; color: inherit; cursor: pointer; }
 a { color: inherit; }
 button:focus-visible, input:focus-visible, a:focus-visible, select:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }

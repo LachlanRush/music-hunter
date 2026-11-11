@@ -97,7 +97,15 @@ def list_playlists(conn: sqlite3.Connection) -> list[dict]:
         "SELECT p.id, p.name, p.description, p.image_path, p.folder_id,"
         " count(pt.track_id) AS tracks, count(pt.stars) AS seeds,"
         " sum(pt.status = 'added') AS waiting"
-        " FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id GROUP BY p.id ORDER BY p.created_at")]
+        " FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id GROUP BY p.id"
+        " ORDER BY p.position IS NULL, p.position, p.created_at, p.id")]
+
+
+def order_playlists(conn: sqlite3.Connection, ids: list[int]) -> None:
+    """The home page's order, as dragged: these playlists in this order (others keep theirs, after them)."""
+    with conn:
+        for i, pid in enumerate(ids):
+            conn.execute("UPDATE playlists SET position = ? WHERE id = ?", (i, pid))
 
 
 def playlist_tracks(conn: sqlite3.Connection, playlist_id: int) -> list[dict]:

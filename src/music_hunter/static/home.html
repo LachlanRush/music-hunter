@@ -18,7 +18,7 @@ else if (window.top !== window) document.documentElement.classList.add("framed")
 <style>
 h1 { font: 700 20px/1.2 var(--display); margin: 0; }      /* the same as "Add" below */
 .status:empty { display: none; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
 .card { display: grid; gap: 4px; align-content: start; text-decoration: none; color: inherit; padding: 12px;
   border-radius: var(--radius); background: rgba(255, 255, 255, 0.04); transition: background .2s; min-width: 0; }
 .card:hover { background: rgba(255, 255, 255, 0.09); }
@@ -54,6 +54,15 @@ h1 { font: 700 20px/1.2 var(--display); margin: 0; }      /* the same as "Add" b
 .folder.closed .grid { display: none; }
 .folder-more { position: relative; }
 
+/* Dragging a playlist (into or out of a folder, or to a new place) */
+.card { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+.card.dragging { opacity: .25; }
+.ghost { position: fixed; z-index: 50; pointer-events: none; width: 120px; border-radius: 6px; overflow: hidden;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6); transform: translate(-50%, -60%) scale(1.04); opacity: .95; }
+.ghost img, .ghost div { width: 120px; height: 120px; object-fit: cover; display: grid; place-items: center;
+  background: var(--raised); font: 800 36px var(--display); color: var(--faint); }
+.folder.drop-here > .folder-head { background: var(--accent-soft); outline: 2px solid rgba(255, 255, 255, 0.35); outline-offset: -2px; }
+body.dragging-card { cursor: grabbing; }
 .add { display: grid; gap: 12px; padding-top: 12px; }
 .add h2 { font: 700 20px/1.2 var(--display); margin: 0; }
 form { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -106,8 +115,8 @@ function jobLine(job) {
     <div class="meta">${job.state === "queued" ? "Waiting to import…" : `Importing ${p.done || 0} of ${p.total || "?"}`}</div>`;
 }
 const card = (p) => `
-  <a class="card" href="/playlist/${p.id}">
-    <div class="cover">${p.image ? `<img src="${p.image}" alt="">` : esc((p.name || "?")[0].toUpperCase())}</div>
+  <a class="card" href="/playlist/${p.id}" data-id="${p.id}" draggable="false">
+    <div class="cover">${p.image ? `<img src="${p.image}" alt="" draggable="false">` : esc((p.name || "?")[0].toUpperCase())}</div>
     <b>${esc(p.name)}</b>
     <div class="meta">${p.tracks} track${p.tracks === 1 ? "" : "s"}</div>
     ${p.description ? `<div class="desc">${esc(p.description)}</div>` : ""}
@@ -141,6 +150,7 @@ async function load() {
   } catch (e) { $("status").textContent = "Can't reach the music-hunter server."; }
 }
 function show(lists, folders) {
+  if (typeof Drag !== "undefined" && Drag.busy()) return;    // not while a playlist is being dragged
   const fh = folders.map((f) => {
     const inside = lists.filter((p) => p.folder_id === f.id);
     return `<div class="folder ${closed.has(f.id) ? "closed" : ""}" data-folder="${f.id}">
@@ -221,6 +231,101 @@ $("new-form").addEventListener("submit", async (e) => {
     go(`/playlist/${r.playlist_id}`);
   } catch (err) { showError(`Couldn't create it: ${err.message}`); }
 });
+// --- dragging playlists: into a folder (drop on it), out of one (drop among the loose playlists), or to a new place.
+// A mouse drags straight away; a finger holds for a moment first, so scrolling still works.
+const Drag = (() => {
+  let d = null, justDragged = false;
+  const HOLD_MS = 350, SLOP = 8;
+  const at = (x, y) => document.elementFromPoint(x, y);
+  function begin(card, x, y) {
+    const img = card.querySelector(".cover img");
+    const ghost = document.createElement("div");
+    ghost.className = "ghost";
+    ghost.innerHTML = img ? `<img src="${img.src}" alt="">` : `<div>${esc(card.querySelector("b").textContent[0] || "?")}</div>`;
+    document.body.appendChild(ghost);
+    card.classList.add("dragging");
+    document.body.classList.add("dragging-card");
+    d = {...d, card, ghost, active: true};
+    move(x, y);
+    if (navigator.vibrate) navigator.vibrate(15);
+  }
+  function move(x, y) {
+    d.ghost.style.left = `${x}px`; d.ghost.style.top = `${y}px`;
+    if (y < 70) window.scrollBy(0, -12); else if (y > innerHeight - 70) window.scrollBy(0, 12);   // near an edge: scroll
+    document.querySelectorAll(".drop-here").forEach((f) => f.classList.remove("drop-here"));
+    const el = at(x, y);
+    if (!el) return;
+    const head = el.closest(".folder-head"), over = el.closest(".card");
+    if (head) { head.parentElement.classList.add("drop-here"); return; }      // into the folder, at its end
+    if (over && over !== d.card) {                                             // beside another playlist
+      const r = over.getBoundingClientRect(), after = x > r.left + r.width / 2;
+      over.parentElement.insertBefore(d.card, after ? over.nextSibling : over);
+      return;
+    }
+    const grid = el.closest(".grid");                                          // an empty space in a grid: its end
+    if (grid && d.card.parentElement !== grid) grid.appendChild(d.card);
+  }
+  async function end(x, y) {
+    const {card, ghost} = d;
+    ghost.remove();
+    card.classList.remove("dragging");
+    document.body.classList.remove("dragging-card");
+    const into = document.querySelector(".folder.drop-here");
+    document.querySelectorAll(".drop-here").forEach((f) => f.classList.remove("drop-here"));
+    if (into) into.querySelector(".grid").appendChild(card);
+    d = null; justDragged = true; setTimeout(() => { justDragged = false; }, 50);
+    const box = card.closest("[data-folder]");
+    const folder = box ? Number(box.dataset.folder) : null;
+    const ids = [...document.querySelectorAll(".card[data-id]")].map((c) => Number(c.dataset.id));
+    try {
+      await api(`/api/playlists/${card.dataset.id}/folder`, {folder_id: folder}, "PUT");
+      await api("/api/playlists-order", {ids}, "PUT");
+    } catch (e) { showError(`Couldn't move it: ${e.message}`); }
+    load();
+  }
+  function cancel() {
+    if (d && d.timer) clearTimeout(d.timer);
+    if (d && d.active) { d.ghost.remove(); d.card.classList.remove("dragging"); document.body.classList.remove("dragging-card"); load(); }
+    d = null;
+  }
+  // Mouse
+  document.addEventListener("mousedown", (e) => {
+    const card = e.button === 0 && e.target.closest(".card[data-id]");
+    if (card) d = {card, x0: e.clientX, y0: e.clientY, active: false};
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!d || d.touch) return;
+    if (!d.active && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > SLOP) begin(d.card, e.clientX, e.clientY);
+    else if (d.active) move(e.clientX, e.clientY);
+  });
+  document.addEventListener("mouseup", (e) => { if (d && !d.touch) { d.active ? end(e.clientX, e.clientY) : (d = null); } });
+  // Finger: hold, then drag
+  document.addEventListener("touchstart", (e) => {
+    const card = e.target.closest(".card[data-id]");
+    if (!card || e.touches.length > 1) return;
+    const t = e.touches[0];
+    d = {card, x0: t.clientX, y0: t.clientY, active: false, touch: true};
+    d.timer = setTimeout(() => { if (d && !d.active) begin(card, d.x0, d.y0); }, HOLD_MS);
+  }, {passive: true});
+  document.addEventListener("touchmove", (e) => {
+    if (!d || !d.touch) return;
+    const t = e.touches[0];
+    if (!d.active) { if (Math.hypot(t.clientX - d.x0, t.clientY - d.y0) > SLOP) { clearTimeout(d.timer); d = null; } return; }
+    e.preventDefault();                                   // dragging, not scrolling
+    d.x = t.clientX; d.y = t.clientY;
+    move(t.clientX, t.clientY);
+  }, {passive: false});
+  document.addEventListener("touchend", (e) => {
+    if (!d || !d.touch) return;
+    clearTimeout(d.timer);
+    if (d.active) { e.preventDefault(); end(d.x ?? d.x0, d.y ?? d.y0); } else d = null;
+  });
+  document.addEventListener("touchcancel", cancel);
+  document.addEventListener("contextmenu", (e) => { if (e.target.closest(".card")) e.preventDefault(); });   // no link menu on hold
+  document.addEventListener("click", (e) => { if (justDragged && e.target.closest(".card")) { e.preventDefault(); e.stopPropagation(); } }, true);
+  return {busy: () => !!(d && d.active)};
+})();
+
 { const c = cache.get("home"); if (c) show(c.lists, c.folders); }
 load();
 </script>
