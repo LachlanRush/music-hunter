@@ -241,7 +241,7 @@ year_match = 0.15                # v2: newer rated higher (+0.26)
 enabled = true
 format = "141"
 free_format = "140"
-cookies_file = "~/.config/music-hunter/youtube-cookies.txt"
+cookies_file = "secrets/youtube-cookies.txt"   # in the project, git-ignored
 token_provider = "http://127.0.0.1:4416"
 retry_hours = 24
 

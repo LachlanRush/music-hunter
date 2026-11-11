@@ -13,3 +13,6 @@ keepers/
 
 # Archived runs (earlier databases, logs and audio)
 runs/
+
+# My sign-ins (YouTube cookies): never committed, never sent to the Pi
+secrets/

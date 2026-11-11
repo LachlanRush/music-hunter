@@ -119,13 +119,20 @@ class Local:
 class Quality:
     """The PC side of playlist tracks' M4A files (SPEC.md §19). Only tracks in a playlist come here."""
 
+    @staticmethod
+    def cookies() -> Path:
+        """My YouTube sign-in: secrets/ in the project (git-ignored, never sent to the Pi), or an absolute path."""
+        from .config import PROJECT
+
+        return PROJECT / Path(CONFIG["quality"]["cookies_file"]).expanduser()
+
     signed_in_at: tuple[float, bool] | None = None   # (when checked, signed in?)
 
     @staticmethod
     def premium_ready() -> bool:
         """My sign-in and the token tool are both there."""
         q = CONFIG["quality"]
-        if not Path(q["cookies_file"]).expanduser().exists():
+        if not Quality.cookies().exists():
             return False
         try:
             return requests.get(q["token_provider"].rstrip("/") + "/ping", timeout=3).ok
@@ -140,7 +147,7 @@ class Quality:
         again. Not signed in: no 256 kbps attempts, and each track's note says why."""
         import http.cookiejar
 
-        now, file = time.time(), Path(CONFIG["quality"]["cookies_file"]).expanduser()
+        now, file = time.time(), Quality.cookies()
         fresh = Quality.signed_in_at and now - Quality.signed_in_at[0] < CONFIG["quality"].get("signin_check_minutes", 60) * 60
         if fresh and not (not Quality.signed_in_at[1] and file.stat().st_mtime > Quality.signed_in_at[0]):
             return Quality.signed_in_at[1]                 # (a newly saved cookies file is checked straight away)
@@ -173,7 +180,7 @@ class Quality:
                 elif Quality.premium_ready():
                     try:
                         return download(video_id, folder, {
-                            "format": q["format"], "cookiefile": str(Path(q["cookies_file"]).expanduser()),
+                            "format": q["format"], "cookiefile": str(Quality.cookies()),
                             "extractor_args": {"youtube": {"player_client": ["web_music"]}},
                             # YouTube's web player needs its JavaScript challenge solved; yt-dlp only tries Deno by
                             # default, which this PC hasn't got (2026-11-11: every premium fetch failed on it).
