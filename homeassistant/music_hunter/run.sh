@@ -26,10 +26,22 @@ PY
 # unpacking an uploaded bundle first.
 APP=""
 trap 'if [ -n "$APP" ]; then kill -TERM "$APP"; wait "$APP"; fi; exit 0' TERM INT
+# Code pushed from the PC (`music-hunter pi push`) runs instead of the release until `pi revert` or a new add-on
+# version; if it fails to start, it's set aside and the release runs.
+export MUSIC_HUNTER_RELEASE=/app
 while true; do
   python3 -c 'import pathlib; from music_hunter.transfer import unpack_incoming; unpack_incoming(pathlib.Path("/data"))'
-  python3 -c 'import sys; sys.argv = ["music-hunter", "serve"]; from music_hunter import main; main()' &
+  SRC=$(python3 -c 'import pathlib; from music_hunter.transfer import prepare_code; print(prepare_code(pathlib.Path("/data"), pathlib.Path("/app")))' || echo /app/src)
+  STARTED=$(date +%s)
+  PYTHONPATH="$SRC" python3 -c 'import sys; sys.argv = ["music-hunter", "serve"]; from music_hunter import main; main()' &
   APP=$!
-  wait "$APP" || sleep 5
+  if wait "$APP"; then STATUS=0; else STATUS=$?; fi
   APP=""
+  if [ "$STATUS" -ne 0 ]; then
+    if [ "$SRC" != "/app/src" ] && [ $(( $(date +%s) - STARTED )) -lt 60 ]; then
+      python3 -c 'import pathlib; from music_hunter.transfer import code_failed; code_failed(pathlib.Path("/data"))' || true
+    else
+      sleep 5
+    fi
+  fi
 done

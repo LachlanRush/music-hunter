@@ -61,6 +61,19 @@ MUSIC_HUNTER_ROOT=runs/pi/<time> uv run music-hunter --playlist 1 report
 uv run music-hunter pi log | restart | update   # update needs HA_TOKEN in .env
 ```
 
+**Previewing UI changes** without a release: `music-hunter dev` serves the pages, scripts and styles from this working
+tree and passes everything else (data, audio, stars, ratings) through to the Pi, on port 8766 (`[dev]`), also on the
+PC's Tailscale address. Pages reload by themselves when a file changes (styles are swapped in place). Whatever is done
+on a dev page happens on the Pi. Changes to the Python app: `pi push` (below).
+
+```sh
+uv run music-hunter dev              # then open http://127.0.0.1:8766, or http://100.68.159.86:8766 on the phone
+uv run music-hunter pi push         # run this working tree's code on the Pi (real data), no release needed
+uv run music-hunter pi revert       # back to the released code; `pi code` says which runs
+cd android && ./gradlew assembleDebug   # "Music Hunter Dev": a separate app on the dev preview, installed beside the
+                                        # real one; its injected script (native-audio.js) also comes from the PC
+```
+
 ## v4: veto and random picks
 
 ```sh

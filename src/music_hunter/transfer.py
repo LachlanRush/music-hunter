@@ -10,6 +10,7 @@ All of it goes through the same token as the PC worker (WORKER_TOKEN).
 """
 
 import sqlite3
+import sys
 import tarfile
 import tempfile
 import time
@@ -75,6 +76,100 @@ def unpack_incoming(root: Path) -> bool:
     return True
 
 
+# --- pushed code (`pi push`): the PC's working tree running on the Pi without a release ---------------------------
+# Kept in /data/code (src/music_hunter and config.toml, as in the project), tied to the release it was pushed onto:
+# once a different add-on version is installed, the release wins and the pushed code is moved aside.
+
+def prepare_code(root: Path, release: Path) -> Path:
+    """Add-on start-up: unpack pushed code (or drop it on `pi revert`); the folder to run the app from."""
+    import shutil
+
+    code, incoming, revert = root / "code", root / "code-incoming.tar", root / "code-revert"
+    version = (release / "VERSION").read_text().strip() if (release / "VERSION").exists() else "?"
+    if revert.exists():
+        shutil.rmtree(code, ignore_errors=True)
+        shutil.rmtree(root / "code.failed", ignore_errors=True)
+        revert.unlink()
+        print("Back on the released code", file=sys.stderr, flush=True)
+    if incoming.exists():
+        shutil.rmtree(code, ignore_errors=True)
+        shutil.rmtree(root / "code.failed", ignore_errors=True)
+        code.mkdir()
+        with tarfile.open(incoming) as tar:
+            tar.extractall(code, filter="data")
+        (code / "BASE").write_text(version)
+        incoming.unlink()
+        print(f"Unpacked pushed code onto {version}", file=sys.stderr, flush=True)
+    if code.exists():
+        base = (code / "BASE").read_text().strip() if (code / "BASE").exists() else ""
+        if base == version and (code / "src" / "music_hunter").is_dir():
+            return code / "src"
+        shutil.rmtree(root / "code.superseded", ignore_errors=True)
+        shutil.move(code, root / "code.superseded")
+        print(f"Pushed code was for {base or '?'}, not {version}: running the release", file=sys.stderr, flush=True)
+    return release / "src"
+
+
+def code_failed(root: Path) -> None:
+    """The pushed code didn't start: set it aside (code.failed) so the release runs instead."""
+    import shutil
+
+    shutil.rmtree(root / "code.failed", ignore_errors=True)
+    if (root / "code").exists():
+        shutil.move(root / "code", root / "code.failed")
+    print("Pushed code failed to start; running the release (it's in code.failed)", file=sys.stderr, flush=True)
+
+
+def code_bundle(dest: Path) -> dict:
+    """The working tree's app code and config.toml as a tar.gz, with a label saying what it is."""
+    import io
+    import json
+    import py_compile
+    import subprocess
+
+    src = config.PROJECT / "src" / "music_hunter"
+    files = [p for p in src.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
+    for p in files:
+        if p.suffix == ".py":
+            py_compile.compile(str(p), doraise=True, cfile=str(Path(tempfile.gettempdir()) / "mh-check.pyc"))
+    git = subprocess.run(["git", "describe", "--always", "--dirty", "--tags"], cwd=config.PROJECT,
+                         capture_output=True, text=True).stdout.strip()
+    label = {"git": git or "?", "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    with tarfile.open(dest, "w:gz") as tar:
+        for p in files:
+            tar.add(p, arcname=str(p.relative_to(config.PROJECT)))
+        tar.add(config.PROJECT / "config.toml", arcname="config.toml")
+        data = json.dumps(label).encode()
+        info = tarfile.TarInfo("PUSHED.json")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    return label
+
+
+def _wait_for_code(base: str, headers: dict, want, timeout: float = 120) -> dict:
+    """After a restart: the Pi's code status once `want(status)` holds."""
+    t0 = time.monotonic()
+    time.sleep(2)
+    while time.monotonic() - t0 < timeout:
+        try:
+            r = requests.get(f"{base}/api/admin/code", headers=headers, timeout=5)
+            if r.status_code == 200 and want(r.json()):
+                return r.json()
+        except requests.RequestException:
+            pass
+        time.sleep(1)
+    raise SystemExit("The Pi didn't come back as expected; see `music-hunter pi log`")
+
+
+def _describe_code(s: dict) -> str:
+    if s.get("failed") and not s.get("pushed"):
+        return (f"Pushed code {s['failed']['git']} failed to start, so the Pi runs release {s['release']};"
+                " see `music-hunter pi log`")
+    if s.get("pushed"):
+        return f"Pi runs pushed code {s['pushed']['git']} ({s['pushed']['at']}) on release {s['release']}"
+    return f"Pi runs release {s['release']}"
+
+
 # --- the PC side --------------------------------------------------------------------------------------------------
 
 def _app(server: str | None) -> tuple[str, dict]:
@@ -135,6 +230,25 @@ def pi(action: str, server: str | None, lines: int = 200) -> None:
         print(ha_update())
     elif action == "app":
         print(publish_app(base, headers))
+    elif action == "push":
+        out = path("data") / "code.tar.gz"
+        label = code_bundle(out)
+        with out.open("rb") as f:
+            r = requests.post(f"{base}/api/admin/code", data=f, headers=headers, timeout=120)
+        out.unlink()
+        if r.status_code != 200:
+            raise SystemExit(f"The Pi refused it: {r.status_code} {r.text}")
+        print(f"Sent {label['git']}; the app on the Pi is restarting…", flush=True)
+        print(_describe_code(_wait_for_code(base, headers, lambda s: s.get("pushed") == label
+                                            or s.get("failed") == label)))
+    elif action == "revert":
+        requests.delete(f"{base}/api/admin/code", headers=headers, timeout=60).raise_for_status()
+        print("Restarting on the release…", flush=True)
+        print(_describe_code(_wait_for_code(base, headers, lambda s: not s.get("pushed"))))
+    elif action == "code":
+        r = requests.get(f"{base}/api/admin/code", headers=headers, timeout=60)
+        r.raise_for_status()
+        print(_describe_code(r.json()))
     elif action == "feedback":
         r = requests.get(f"{base}/api/admin/feedback", headers=headers, timeout=60)
         r.raise_for_status()

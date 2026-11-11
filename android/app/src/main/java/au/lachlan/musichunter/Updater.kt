@@ -29,7 +29,7 @@ object Updater {
 
     fun check(activity: MainActivity) {
         val app = App.of(activity)
-        if (app.updateOffered) return
+        if (BuildConfig.DEBUG || app.updateOffered) return     // the dev build isn't updated from the Pi
         app.updateOffered = true
         thread(isDaemon = true) {
             try {

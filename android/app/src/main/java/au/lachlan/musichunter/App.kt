@@ -237,7 +237,13 @@ class App : Application() {
         web.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
         web.addJavascriptInterface(PageBridge(this, web), "NativeAudioBridge")
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-            val script = assets.open("native-audio.js").bufferedReader().use { it.readText() }
+            val bundled = assets.open("native-audio.js").bufferedReader().use { it.readText() }
+            // Dev build: the working tree's copy from the dev preview, so the app's own parts change without a
+            // reinstall; the bundled one if that can't be had.
+            val script = if (!BuildConfig.DEBUG) bundled else "if (!(function () { try {" +
+                " var x = new XMLHttpRequest(); x.open('GET', '/__dev/native-audio.js', false); x.send();" +
+                " if (x.status === 200) { (0, eval)(x.responseText); return true; } } catch (e) {} return false; })()) {\n" +
+                bundled + "\n}"
             WebViewCompat.addDocumentStartJavaScript(web, script, setOf(Uri.parse(server).let { "${it.scheme}://${it.authority}" }))
         } else {
             Log.e(TAG, "This WebView can't run scripts at page start; update Android System WebView")

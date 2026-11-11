@@ -19,6 +19,7 @@ COPY . /addon
 RUN if [ -d /addon/source ]; then cp -r /addon/source /app; \
     else mkdir /app && curl -fsSL "https://github.com/LachlanRush/music-hunter/archive/refs/tags/v${BUILD_VERSION}.tar.gz" \
          | tar xz --strip-components=1 -C /app; fi \
+ && echo "${BUILD_VERSION}" > /app/VERSION \
  && cp /addon/run.sh /run.sh && chmod +x /run.sh
 
 ENV MUSIC_HUNTER_ROOT=/data PYTHONPATH=/app/src PYTHONUNBUFFERED=1

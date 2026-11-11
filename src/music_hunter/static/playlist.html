@@ -61,6 +61,9 @@ li.playing .cover-btn { outline: 2px solid var(--accent); outline-offset: 1px; }
   padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); }
 .player-in { max-width: 760px; margin: 0 auto; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
 .player .art { width: 44px; height: 44px; }
+.player .art, .player .t { cursor: pointer; }
+li.found { animation: found 1.2s ease-out; }
+@keyframes found { from { background: color-mix(in srgb, var(--accent) 22%, transparent); } to { background: transparent; } }
 .controls { display: flex; gap: 6px; align-items: center; }
 .round { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: var(--bg); display: grid; place-items: center; }
 .round svg { width: 15px; height: 15px; fill: currentColor; }
@@ -158,7 +161,7 @@ li .cover-btn { cursor: default; }
 <div class="player" id="player" hidden>
   <div class="player-in">
     <img class="art" id="p-art" alt="">
-    <div class="t"><b id="p-title"></b><span id="p-artist"></span><span class="meta" id="p-tempo"></span></div>
+    <div class="t" id="p-open"><b id="p-title"></b><span id="p-artist"></span><span class="meta" id="p-tempo"></span></div>
     <div class="controls">
       <button class="round" id="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg></button>
       <button class="round primary" id="play" aria-label="Play"><svg viewBox="0 0 24 24" id="play-icon"><path d="M7 4l13 8-13 8z"/></svg></button>
@@ -344,6 +347,7 @@ document.addEventListener("click", async (e) => {
     menu.innerHTML = (data.others.length ? `<div class="label">Add to</div>` + data.others.map((o) =>
         `<button data-addto="${o.id}" data-track="${tid}">${esc(o.name)}</button>`).join("") : "")
       + `<button data-own-bpm="${tid}">Play at … BPM</button>`
+      + `<button data-similar="${tid}">Find similar</button>`
       + `<button data-remove="${tid}" style="color:var(--bad)">Remove from this playlist</button>`;
     more.parentElement.appendChild(menu);
     return;
@@ -354,6 +358,14 @@ document.addEventListener("click", async (e) => {
       const r = await api(`/api/playlists/${addto.dataset.addto}/tracks`, {track_id: Number(addto.dataset.track)});
       $("status").textContent = r.added ? "Added." : "Already in that playlist.";
     } catch (err) { showError(`Couldn't add it: ${err.message}`); }
+    return;
+  }
+  const similar = e.target.closest("[data-similar]");
+  if (similar) {
+    try {
+      const r = await api(`/api/tracks/${similar.dataset.similar}/similar`, {});
+      location.href = `/playlist/${r.playlist_id}`;
+    } catch (err) { showError(`Couldn't make it: ${err.message}`); }
     return;
   }
   const own = e.target.closest("[data-own-bpm]");
@@ -494,6 +506,13 @@ $("play").addEventListener("click", () => {
   audio.paused ? audio.play() : audio.pause();
 });
 $("next").addEventListener("click", () => { if (pos + 1 < queue.length) playAt(pos + 1); });
+// Tapping the playing track (cover or names) shows it in the list (feedback #38).
+$("p-art").onclick = $("p-open").onclick = () => {
+  const t = queue[pos], row = t && document.querySelector(`li[data-row="${t.id}"]`);
+  if (!row) return;
+  row.scrollIntoView({behavior: "smooth", block: "center"});
+  row.classList.remove("found"); void row.offsetWidth; row.classList.add("found");
+};
 $("prev").addEventListener("click", () => { audio.currentTime >= (data.back_restart_s ?? 5) || pos === 0 ? (audio.currentTime = 0) : playAt(pos - 1); });
 function paintShuffleAll(playing) {                       // like Play: filled only while this playlist is playing, shuffled
   const on = playing && shuffle;

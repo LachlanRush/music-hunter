@@ -346,6 +346,12 @@ pca_components = 16              # audio dimensions added to agreement/year/BPM 
 # v5 (SPEC.md §18.4): who downloads and analyses tracks. local = this machine (the PC on its own); remote = queue it
 # for the PC worker (`music-hunter worker` on the PC), waking the PC through Home Assistant when no worker is about.
 # Pulls, YouTube matching, the veto and scoring always run where the app runs.
+[dev]
+# `music-hunter dev`: pages from this working tree, everything else from the Pi ([worker] server), so UI changes can
+# be seen without a release. Same addresses as [ui]; the Android dev build points at the Tailscale one.
+port = 8766
+poll_ms = 1000                       # how often a dev page checks for changed files
+
 [worker]
 mode = "local"
 server = "http://100.90.89.29:8765"  # the PC worker's default --server: the app on the Pi (Home Assistant's Tailscale address)
@@ -382,3 +388,7 @@ home_assistant = "http://100.90.89.29:8123"
 deleted_days = 30
 cover_max_mb = 30    # the largest picture accepted for a playlist
 cover_size = 600     # stored square, this many pixels a side
+# "Find similar" on a track (feedback #39, 2026-11-11): a new playlist with that track at 5 stars, and the closest-
+# sounding tracks from my other playlists in its To rate section, to keep or remove before starting Find music.
+# Closeness uses the veto's star handicap ([veto] star_handicap_sd), so better-starred tracks come first.
+similar_count = 10

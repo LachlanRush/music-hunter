@@ -796,6 +796,18 @@ def add_track(playlist_id: int, body: AddTrackBody) -> dict:
     return {"added": added}
 
 
+@app.post("/api/tracks/{track_id}/similar")
+def similar_playlist(track_id: int) -> dict:
+    """"Find similar" (feedback #39): a new playlist from this track, with its closest tracks to rate."""
+    conn = db.connect()
+    try:
+        pid = library.similar_playlist(conn, track_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    _after_membership_change(conn, pid)
+    return {"playlist_id": pid}
+
+
 @app.get("/api/playlists/{playlist_id}/find")
 def find_state(playlist_id: int) -> dict:
     """Find music for this playlist: none (not started) / preparing (progress) / ready / error."""
@@ -1007,6 +1019,57 @@ def admin_artist_history(rows: list[dict] = Body(...)):
     n = artist.store(db.connect_library(), rows)
     _rescore_all()
     return {"stored": n}
+
+
+def _code_status() -> dict:
+    """Which code runs: the release, or code pushed from the PC (`pi push`, kept in <data>/code)."""
+    import os
+
+    from . import config
+
+    def label(folder):
+        f = folder / "PUSHED.json"
+        return json.loads(f.read_text()) if f.exists() else None
+    release = Path(os.environ.get("MUSIC_HUNTER_RELEASE", "/app")) / "VERSION"
+    pushed = label(config.PROJECT) if config.PROJECT == config.ROOT / "code" else None
+    return {"release": release.read_text().strip() if release.exists() else "?", "pushed": pushed,
+            "failed": None if pushed else label(config.ROOT / "code.failed")}
+
+
+@app.get("/api/admin/code", dependencies=[Depends(worker_auth)])
+def admin_code() -> dict:
+    return _code_status()
+
+
+@app.post("/api/admin/code", dependencies=[Depends(worker_auth)])
+async def admin_push_code(request: Request):
+    """Code pushed from the PC (`music-hunter pi push`): the start script unpacks it and runs the app from it."""
+    from . import config
+
+    if config.ROOT == config.PROJECT:
+        raise HTTPException(400, "Only in the add-on (a separate data folder)")
+    incoming = config.ROOT / "code-incoming.tar"
+    part = incoming.with_suffix(".part")
+    with part.open("wb") as f:
+        async for chunk in request.stream():
+            f.write(chunk)
+    part.rename(incoming)
+    (config.ROOT / "code-revert").unlink(missing_ok=True)
+    _restart_soon()
+    return {"ok": True}
+
+
+@app.delete("/api/admin/code", dependencies=[Depends(worker_auth)])
+def admin_revert_code():
+    """Back to the released code (`music-hunter pi revert`)."""
+    from . import config
+
+    if config.ROOT == config.PROJECT:
+        raise HTTPException(400, "Only in the add-on (a separate data folder)")
+    (config.ROOT / "code-incoming.tar").unlink(missing_ok=True)
+    (config.ROOT / "code-revert").touch()
+    _restart_soon()
+    return {"ok": True}
 
 
 @app.post("/api/admin/restart", dependencies=[Depends(worker_auth)])

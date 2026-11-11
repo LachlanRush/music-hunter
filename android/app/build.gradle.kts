@@ -22,6 +22,7 @@ android {
         versionCode = 13
         versionName = "0.3.6"
         buildConfigField("String", "SERVER", "\"http://100.90.89.29:8765\"")
+        resValue("string", "app_name", "Music Hunter")
     }
     signingConfigs {
         if (keyProps.isNotEmpty()) create("release") {
@@ -35,6 +36,14 @@ android {
         release {
             isMinifyEnabled = false
             if (keyProps.isNotEmpty()) signingConfig = signingConfigs.getByName("release")
+        }
+        // A separate "Music Hunter Dev" app beside the real one, on the PC's dev preview (`music-hunter dev`): pages
+        // and the app's injected script come from the working tree, data and audio from the Pi. No in-app updates.
+        debug {
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            buildConfigField("String", "SERVER", "\"http://100.68.159.86:8766\"")
+            resValue("string", "app_name", "Music Hunter Dev")
         }
     }
     buildFeatures { buildConfig = true }

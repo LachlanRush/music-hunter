@@ -430,3 +430,36 @@ def test_a_playlist_takes_a_picture_of_my_own(lib, tmp_path):
     assert client.post(f"/api/playlists/{pid}/cover", content=b"\xff\xd8\xff broken").status_code == 400
     assert client.get(f"/api/playlists/{pid}").json()["image"] == second
 
+
+
+def test_similar_playlist(lib, monkeypatch):
+    """Find similar (feedback #39): the track at 5 stars, the closest tracks of my playlists in To rate, closest on
+    top; better-starred tracks win a near tie; other versions of the same song and fingerprint-less tracks left out."""
+    import numpy as np
+
+    conn, track, _ = lib
+    monkeypatch.setitem(config.CONFIG["library"], "similar_count", 3)
+    pid = library.create_playlist(conn, "pump")
+
+    def fp(t, angle):
+        v = np.zeros(8, np.float32)
+        v[0], v[1] = np.cos(angle), np.sin(angle)
+        conn.execute("INSERT INTO track_embeddings (track_id, model, dim, n_chunks, embedding) VALUES (?, 'm', 8, 1, ?)",
+                     (t, db.to_blob(v)))
+
+    me = track("Seed")
+    near, near_low, mid, far = track("Near"), track("Near too"), track("Mid"), track("Far")
+    version, bare = track("Seed (Extended Mix)"), track("No fingerprint")
+    for t, a in [(me, 0), (near, .10), (near_low, .09), (mid, .5), (far, 1.4), (version, 0)]:
+        fp(t, a)
+    for t in (me, near, near_low, mid, far, version, bare):
+        library.add_to_playlist(conn, pid, t)
+    library.set_stars(conn, pid, near, 5)
+    library.set_stars(conn, pid, near_low, 1)
+
+    new = library.similar_playlist(conn, me)
+    rows = library.playlist_tracks(conn, new)
+    assert [(r["id"], r["status"]) for r in rows] == [(near, "added"), (near_low, "added"), (mid, "added"),
+                                                       (me, "member")]
+    assert rows[-1]["stars"] == 5
+    assert library.list_playlists(conn)[-1]["name"] == "Like Seed"

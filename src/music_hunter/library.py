@@ -134,6 +134,48 @@ def delete_forever(conn: sqlite3.Connection, playlist_id: int, track_id: int) ->
     _drop_if_orphaned(conn, track_id)
 
 
+def similar_playlist(conn: sqlite3.Connection, track_id: int) -> int:
+    """"Find similar" (feedback #39): a new playlist "Like <title>" with this track at 5 stars, and the closest-sounding
+    tracks from my playlists in its To rate section. Closeness is the MAEST fingerprint's cosine similarity, with the
+    veto's star handicap: a track's best stars in any playlist (unstarred: [find] add_seed_stars) count as being
+    star_handicap_sd × (5 − stars) / 4 robust SDs further away, so better-starred tracks come first."""
+    import numpy as np
+
+    t = conn.execute("SELECT t.artist, t.title, t.art_path, e.embedding FROM tracks t"
+                     " LEFT JOIN track_embeddings e ON e.track_id = t.id WHERE t.id = ?", (track_id,)).fetchone()
+    if not t:
+        raise ValueError("No such track")
+    rows = conn.execute(
+        "SELECT t.id, t.artist, t.title, max(pt.stars) AS stars, e.embedding FROM playlist_tracks pt"
+        " JOIN tracks t ON t.id = pt.track_id JOIN track_embeddings e ON e.track_id = t.id"
+        " WHERE t.id != ? GROUP BY t.id", (track_id,)).fetchall() if t["embedding"] else []
+    me = names.song(t["artist"], t["title"])
+    rows = [r for r in rows if not names.song(r["artist"], r["title"]).same_song(me)]   # not another version of it
+    picks = []
+    if rows:
+        sims = np.stack([db.from_blob(r["embedding"]) for r in rows]) @ db.from_blob(t["embedding"])
+        spread = 1.4826 * np.median(np.abs(sims - np.median(sims))) or sims.std() or 1.0
+        stars = np.array([r["stars"] or CONFIG["find"]["add_seed_stars"] for r in rows], float)
+        score = sims - CONFIG["veto"]["star_handicap_sd"] * spread * (5 - np.clip(stars, 1, 5)) / 4
+        picks = [rows[i]["id"] for i in np.argsort(-score)[:CONFIG["library"]["similar_count"]]]
+
+    pid = create_playlist(conn, f"Like {t['title']}")
+    add_to_playlist(conn, pid, track_id)
+    set_stars(conn, pid, track_id, 5)
+    for rank, i in enumerate(picks):             # To rate shows the newest first: the closest at the top
+        add_to_playlist(conn, pid, i, "added")
+        with conn:
+            conn.execute("UPDATE playlist_tracks SET added_at = strftime('%Y-%m-%d %H:%M:%f', 'now', ?)"
+                         " WHERE playlist_id = ? AND track_id = ?", (f"-{rank} seconds", pid, i))
+    if t["art_path"] and resolve(t["art_path"]).exists():
+        try:
+            set_cover(conn, pid, resolve(t["art_path"]).read_bytes())
+        except (subprocess.SubprocessError, OSError):
+            pass                                 # the playlist works without a picture
+    db.log_event(conn, "similar_playlist", playlist_id=pid, track_id=track_id, picks=picks)
+    return pid
+
+
 def deleted_tracks(conn: sqlite3.Connection, playlist_id: int) -> list[dict]:
     purge_deleted(conn)
     return [dict(r) for r in conn.execute(

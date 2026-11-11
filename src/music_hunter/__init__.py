@@ -428,6 +428,9 @@ def main() -> None:
 
     sub.add_parser("serve", help="Start the localhost player")
 
+    p = sub.add_parser("dev", help="Preview page changes: pages from this working tree, everything else from the Pi")
+    p.add_argument("--server", help="The app on the Pi (default: [worker] server)")
+
     p = sub.add_parser("feedback", help="Notes sent from the feedback box (use with MUSIC_HUNTER_ROOT on a snapshot)")
     p.add_argument("--all", action="store_true", help="Include notes already marked as seen")
     p.add_argument("--mark-seen", action="store_true", help="Mark the listed notes as seen")
@@ -444,8 +447,9 @@ def main() -> None:
     p.add_argument("--send", action="store_true")
     p.add_argument("--server", default=None)
     p = sub.add_parser("pi", help="The app on the Pi: show its log, restart it, or install an update")
-    p.add_argument("action", choices=["log", "restart", "update", "feedback", "app"],
-                   help="app: send the latest signed Android build to the Pi")
+    p.add_argument("action", choices=["log", "restart", "update", "feedback", "app", "push", "revert", "code"],
+                   help="app: send the latest signed Android build to the Pi; push: run this working tree's code on"
+                   " the Pi without a release; revert: back to the released code; code: which code runs")
     p.add_argument("--server", help="The app on the Pi (default: [worker] server)")
     p.add_argument("--lines", type=int, default=200)
 
@@ -462,7 +466,7 @@ def main() -> None:
     db.setup_logging()
     if args.playlist is not None:
         from . import find
-        if args.command in ("add-seeds", "embed-seeds", "serve", "worker", "migrate", "snapshot", "pi", "feedback",
+        if args.command in ("add-seeds", "embed-seeds", "serve", "dev", "worker", "migrate", "snapshot", "pi", "feedback",
                             "artist-history"):
             sys.exit(f"{args.command} doesn't take --playlist (seeds come from the playlist's stars)")
         if not find.started(args.playlist):
@@ -497,6 +501,9 @@ def main() -> None:
     elif args.command == "serve":
         from .web import serve
         serve()
+    elif args.command == "dev":
+        from .dev import serve as dev_serve
+        dev_serve(args.server)
     elif args.command == "feedback":
         show_feedback(args.all, args.mark_seen)
     elif args.command == "migrate":
