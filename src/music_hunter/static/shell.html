@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Music Hunter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400..800&display=swap">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/colour.js"></script>
+<script src="/static/shell.js"></script>
+<style>
+/* The browser shell (static/shell.js): pages in frames, the playing one kept alive behind. */
+html, body { height: 100%; overflow: hidden; }
+body { padding: 0; min-height: 0; }
+body::before { display: none; }
+iframe.page { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: var(--bg); }
+iframe.page.behind { visibility: hidden; pointer-events: none; z-index: -1; }
+#mh-bar { position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); z-index: 10;
+  background: var(--tint); border-radius: 10px; padding: 8px 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  transition: background .6s; }
+#mh-bar .in { max-width: 860px; margin: 0 auto; display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+#mh-bar .art { width: 48px; height: 48px; border-radius: 5px; object-fit: cover; background: var(--raised); cursor: pointer; }
+#mh-bar .t { min-width: 0; cursor: pointer; }
+#mh-bar .t b { display: block; font: 700 15px/1.3 var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#mh-bar .t span { display: block; font-size: 13px; color: rgba(255, 255, 255, 0.72); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#mh-bar .controls { display: flex; gap: 2px; align-items: center; }
+#mh-bar .round { width: 40px; height: 40px; border-radius: 50%; border: 0; background: transparent; color: var(--fg);
+  display: grid; place-items: center; padding: 0; }
+#mh-bar .round svg { width: 18px; height: 18px; fill: currentColor; }
+#mh-bar .round.primary { background: var(--fg); color: #111; }
+#mh-bar .round.on { color: var(--accent); }
+#mh-bar .seek { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
+  font: 400 11px var(--body); color: rgba(255, 255, 255, 0.7); }
+</style>
+</head>
+<body></body>
+</html>

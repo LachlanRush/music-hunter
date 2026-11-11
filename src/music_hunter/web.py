@@ -307,7 +307,7 @@ def track_info(conn, play) -> dict:
             "audio": f"{_base()}/audio/{t['id']}"}
 
 
-def _page(name: str) -> HTMLResponse:
+def _page(name: str, request: Request | None = None) -> HTMLResponse:
     """A page, with its /static/ files' addresses carrying their version: a browser kept an old style.css (no cache
     rules were sent, so it guessed) under a new page, and every button looked broken on the computer (2026-11-11)."""
     import re
@@ -315,25 +315,30 @@ def _page(name: str) -> HTMLResponse:
     def versioned(m):
         f = STATIC / m.group(2)
         return f'{m.group(1)}="/static/{m.group(2)}?v={f.stat().st_mtime_ns if f.exists() else 0}"'
+    # In a browser, a page opened directly (not in a frame) gets the shell, which shows it in a frame and keeps the
+    # playing page alive while I move around (static/shell.js); the phone app is its own shell.
+    if request is not None and request.headers.get("sec-fetch-dest") == "document" \
+            and "MusicHunterApp" not in request.headers.get("user-agent", ""):
+        name = "shell.html"
     html = re.sub(r'(src|href)="/static/([^"?]+)"', versioned, (STATIC / name).read_text())
-    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache", "Vary": "Sec-Fetch-Dest, User-Agent"})
 
 
 @app.get("/", response_class=HTMLResponse)
-def home() -> str:
+def home(request: Request) -> str:
     """v5: the playlist library (SPEC.md §18.1)."""
-    return _page("home.html")
+    return _page("home.html", request)
 
 
 @app.get("/playlist/{playlist_id}", response_class=HTMLResponse)
-def playlist_page(playlist_id: int) -> str:
-    return _page("playlist.html")
+def playlist_page(playlist_id: int, request: Request) -> str:
+    return _page("playlist.html", request)
 
 
 @app.get("/listen", response_class=HTMLResponse)
-def index() -> str:
+def index(request: Request) -> str:
     """The listening interface (Find music; per playlist from milestone 2)."""
-    return _page("index.html")
+    return _page("index.html", request)
 
 
 # --- v5: playlists and the library (SPEC.md §18.1) -------------------------------------------
@@ -415,9 +420,9 @@ def send_feedback(body: FeedbackBody) -> dict:
 
 
 @app.get("/playlist/{playlist_id}/results", response_class=HTMLResponse)
-def overview_page(playlist_id: int) -> str:
+def overview_page(playlist_id: int, request: Request) -> str:
     """A playlist's Find music results: Off and Add by score (SPEC.md §18.30)."""
-    return _page("overview.html")
+    return _page("overview.html", request)
 
 
 @app.get("/api/playlists/{playlist_id}/results")
@@ -1198,12 +1203,12 @@ def admin_log(lines: int = 200):
 
 
 @app.get("/find/{playlist_id}", response_class=HTMLResponse)
-def find_page(playlist_id: int):
+def find_page(playlist_id: int, request: Request):
     from fastapi.responses import RedirectResponse
 
     if not find.started(playlist_id):
         return RedirectResponse(f"/playlist/{playlist_id}")
-    return _page("index.html")
+    return _page("index.html", request)
 
 
 @app.get("/cover/{playlist_id}")

@@ -121,6 +121,8 @@ dialog .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6p
 .feedback-send { justify-self: start; padding: 7px 16px; border-radius: 999px; border: 0; background: var(--fg);
   color: #111; font: 700 13px var(--body); }
 
+body.mh-now-on { padding-bottom: 150px !important; }   /* room for the player bar of a page playing elsewhere */
+
 /* The app's now playing bar on other pages (drawn by the app): the same look as a playlist's player */
 #mh-now { left: 8px !important; right: 8px !important; bottom: 8px !important; border: 0 !important;
   border-radius: 10px !important; background: var(--tint) !important;

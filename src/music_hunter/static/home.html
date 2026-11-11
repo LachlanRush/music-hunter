@@ -11,6 +11,7 @@
 <link rel="apple-touch-icon" href="/static/icon-192.png">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/nav.js"></script>
 <style>
 h1 { font: 800 clamp(28px, 6vw, 40px)/1.1 var(--display); letter-spacing: -0.02em; margin: 8px 0 0; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
@@ -200,7 +201,7 @@ $("import-form").addEventListener("submit", async (e) => {
   const btn = e.target.querySelector("button"); btn.disabled = true; btn.textContent = "Reading…";
   try {
     const r = await api("/api/playlists", {spotify_url: $("spotify").value.trim()});
-    location.href = `/playlist/${r.playlist_id}`;
+    go(`/playlist/${r.playlist_id}`);
   } catch (err) { showError(`Couldn't import: ${err.message}`); }
   btn.disabled = false; btn.textContent = "Import";
 });
@@ -213,7 +214,7 @@ $("new-form").addEventListener("submit", async (e) => {
       const res = await fetch(`/api/playlists/${r.playlist_id}/cover`, {method: "POST", body: await picture.arrayBuffer()});
       if (!res.ok) alert("The playlist is made, but that picture couldn't be read.");
     }
-    location.href = `/playlist/${r.playlist_id}`;
+    go(`/playlist/${r.playlist_id}`);
   } catch (err) { showError(`Couldn't create it: ${err.message}`); }
 });
 $("new-picture").addEventListener("change", () => {

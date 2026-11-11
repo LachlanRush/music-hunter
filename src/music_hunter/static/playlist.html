@@ -11,6 +11,7 @@
 <link rel="apple-touch-icon" href="/static/icon-192.png">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/nav.js"></script>
 <script src="/static/colour.js"></script>
 <script src="/static/tempo.js"></script>
 <script src="/static/media.js"></script>
@@ -374,7 +375,7 @@ async function loadFind() {
 }
 $("find").addEventListener("click", async () => {
   if (!find) return;
-  if (find.state === "ready") { location.href = `/find/${PID}`; return; }
+  if (find.state === "ready") { go(`/find/${PID}`); return; }
   if (find.state === "none" && !confirm(`Find music for "${data.name}"?\n\nThis finds and downloads new tracks from your ${find.seeds} starred `
       + `track${find.seeds > 1 ? "s" : ""} and analyses them — a few minutes before the first ${find.early_start} are ready; `
       + "the rest keep coming in the background.")) return;
@@ -489,7 +490,7 @@ document.addEventListener("click", async (e) => {
   if (similar) {
     try {
       const r = await api(`/api/tracks/${similar.dataset.similar}/similar`, {});
-      location.href = `/playlist/${r.playlist_id}`;
+      go(`/playlist/${r.playlist_id}`);
     } catch (err) { showError(`Couldn't make it: ${err.message}`); }
     return;
   }
@@ -553,7 +554,7 @@ document.addEventListener("click", (e) => {
   }
   ({details: editDetails, delete: deletePlaylist, refresh: refreshPlaylist,
     picture: () => $("picture").click(),
-    results: () => { location.href = `/playlist/${PID}/results`; }})[a.dataset.plAction]();
+    results: () => { go(`/playlist/${PID}/results`); }})[a.dataset.plAction]();
 });
 $("picture").addEventListener("change", async () => {
   const f = $("picture").files[0];
@@ -592,7 +593,7 @@ async function refreshPlaylist() {
 async function deletePlaylist() {
   if (!confirm(`Delete "${data.name}" for good?\n\nThis can't be undone: the playlist, its stars, its Find music and `
       + "its Recently deleted list are removed, and tracks that are in no other playlist lose their audio.")) return;
-  await api(`/api/playlists/${PID}`, undefined, "DELETE"); location.href = "/";
+  await api(`/api/playlists/${PID}`, undefined, "DELETE"); go("/");
 }
 
 // --- player: a normal player (not blind), with shuffle -----------------------------------
@@ -692,6 +693,17 @@ $("play").addEventListener("click", () => {
   audio.paused ? audio.play() : audio.pause();
 });
 $("next").addEventListener("click", () => { if (pos + 1 < queue.length) playAt(pos + 1); });
+// For the browser shell's player bar on other pages (static/shell.js): what's playing here, and its controls.
+window.__audio = audio;
+window.__nowPlaying = () => {
+  const t = queue[pos];
+  return t ? {title: t.title, artist: t.artist, art: t.art, playing: !audio.paused, t: audio.currentTime,
+              d: audio.duration || t.duration_s, shuffle} : null;
+};
+window.__control = (action, value) => ({
+  toggle: () => $("play").click(), next: () => $("next").click(), prev: () => $("prev").click(),
+  shuffle: () => $("shuffle").click(), seek: () => { audio.currentTime = value; },
+})[action]?.();
 // Tapping the playing track (cover or names) shows it in the list (feedback #38).
 $("p-art").onclick = $("p-open").onclick = () => {
   const t = queue[pos], row = t && document.querySelector(`li[data-row="${t.id}"]`);

@@ -11,6 +11,7 @@
 <link rel="apple-touch-icon" href="/static/icon-192.png">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/nav.js"></script>
 <script src="/static/colour.js"></script>
 <script src="/static/tempo.js"></script>
 <script src="/static/media.js"></script>
@@ -212,6 +213,19 @@ let played = 0, lastPos = 0, seeking = false, started = false;
 let loadStart = 0, awaitingFirstPlay = false, stallStart = null;
 
 function onAir() { return viewing === "previous" ? prev : current; }
+// For the browser shell's player bar on other pages (static/shell.js): names only once rated, as here.
+window.__audio = audio;
+window.__nowPlaying = () => {
+  const t = onAir();
+  if (!t) return null;
+  const hidden = t.title == null;
+  return {title: hidden ? "Hidden until rated" : t.title, artist: hidden ? "Find music" : t.artist,
+          art: hidden ? null : t.art, playing: !audio.paused, t: audio.currentTime, d: audio.duration || t.duration_s,
+          shuffle: null};
+};
+window.__control = (action, value) => ({
+  toggle: () => togglePlay(), next: () => skip(), prev: () => goBack(), seek: () => { audio.currentTime = value; },
+})[action]?.();
 
 // Operational log: start latency, stalls, audio errors, track ends, script errors.
 function report(kind, data = {}) {
