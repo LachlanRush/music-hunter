@@ -58,37 +58,73 @@ class Embedding:
     spans: list
 
 
-class Local:
-    """Does the work here. One track at a time per process (GPU, and paced downloads: no parallel bursts)."""
+HOME = {"name": "home", "proxy": None}
 
-    lock = threading.Lock()
-    last_download = 0.0
+
+def lanes() -> list[dict]:
+    """Where the PC worker downloads from (2026-11-11): my home connection, and — when PIA's proxy login is in .env —
+    PIA's Netherlands SOCKS5 proxy as a second address, each at its own pace, so twice the downloads without either
+    address seeing more than before. Signed-in fetches (256 kbps) always use home."""
+    out = [HOME]
+    user, pw = os.environ.get("PIA_SOCKS_USER"), os.environ.get("PIA_SOCKS_PASS")
+    if user and pw and "pia" in CFG.get("lanes", ["home", "pia"]):
+        out.append({"name": "pia", "proxy": f"socks5://{user}:{pw}@{CFG.get('pia_proxy', 'proxy-nl.privateinternetaccess.com:1080')}"})
+    return [x for x in out if x["name"] in CFG.get("lanes", ["home", "pia"])]
+
+
+class Local:
+    """Does the work here. Downloads are paced per address (no bursts); the analysis (GPU) runs one track at a time,
+    so with two addresses one track downloads while another is analysed."""
+
+    gpu = threading.Lock()
+    pace: dict[str, threading.Lock] = {}
+    last_start: dict[str, float] = {}
+    last_end: dict[str, float] = {}
 
     def __init__(self, folder: Path | None = None):
         self.embedder = None
-        self.yt = None
+        self.yts = {}
         self.folder = folder        # the PC worker's own folder: its files are deleted once sent, so never cache/
 
-    def analyse(self, video_id: str, bpm_prior: float | None = None, status=None) -> Result:
+    @staticmethod
+    def paced(lane: dict, fn):
+        """Run one download from this address, keeping its gap after the last one ends and its minimum interval
+        between starts (`[worker] lane_interval_seconds`: at most 3600/interval downloads an hour per address)."""
+        name = lane["name"]
+        lock = Local.pace.setdefault(name, threading.Lock())
+        with lock:
+            now = time.monotonic()
+            wait = max(CONFIG["pool"]["download_delay_seconds"] - (now - Local.last_end.get(name, -1e9)),
+                       CFG.get("lane_interval_seconds", 0) - (now - Local.last_start.get(name, -1e9)), 0)
+            if wait > 0:
+                time.sleep(wait)
+            Local.last_start[name] = time.monotonic()
+            try:
+                return fn(), wait
+            finally:
+                Local.last_end[name] = time.monotonic()
+
+    def analyse(self, video_id: str, bpm_prior: float | None = None, status=None, lane: dict | None = None) -> Result:
         from . import artwork, audio
         from .bpm import estimate
         from .pool import download, loudness
 
-        with Local.lock:
+        lane = lane or HOME
+        t0 = time.monotonic()
+        try:
+            file, wait = Local.paced(lane, lambda: download(video_id, self.folder,
+                                                             {"proxy": lane["proxy"]} if lane["proxy"] else None))
+        except Exception as e:  # yt-dlp raises DownloadError and friends
+            raise DownloadFailed(str(e), download_s=time.monotonic() - t0) from e
+        download_s = time.monotonic() - t0 - wait      # without the pacing wait
+        with Local.gpu:
             if self.embedder is None:
                 from .embedding import Embedder
+                self.embedder = Embedder()
+            if lane["name"] not in self.yts:
                 from .sources import YouTubeMusic
-                self.embedder, self.yt = Embedder(), YouTubeMusic()
-            wait = CONFIG["pool"]["download_delay_seconds"] - (time.monotonic() - Local.last_download)
-            if wait > 0:
-                time.sleep(wait)
-            t0 = time.monotonic()
-            try:
-                file = download(video_id, self.folder)
-            except Exception as e:  # yt-dlp raises DownloadError and friends
-                raise DownloadFailed(str(e), download_s=time.monotonic() - t0) from e
-            finally:
-                Local.last_download = time.monotonic()
+                self.yts[lane["name"]] = YouTubeMusic(lane["proxy"])
+            self.yt = self.yts[lane["name"]]
             t1 = time.monotonic()
             try:
                 lufs, peak, gain = loudness(file)
@@ -96,7 +132,7 @@ class Local:
                 samples = audio.decode(file, sr)
                 emb = self.embedder.embed_track(samples)
             except Exception as e:
-                raise AnalysisFailed(str(e), download_s=t1 - t0, analysis_s=time.monotonic() - t1) from e
+                raise AnalysisFailed(str(e), download_s=download_s, analysis_s=time.monotonic() - t1) from e
             notes, tempo = {}, None
             try:
                 bpm_sr = CONFIG["bpm"]["analysis_sample_rate"]
@@ -113,7 +149,8 @@ class Local:
             except Exception as e:
                 notes["art_failed"] = str(e)[:200]
             return Result(file, len(samples) / sr, lufs, peak, gain, emb, self.embedder.model_name, tempo, art,
-                          published, {"download_s": t1 - t0, "analysis_s": t2 - t1, "waited_s": max(wait, 0)}, notes)
+                          published, {"download_s": download_s, "analysis_s": t2 - t1, "waited_s": max(wait, 0),
+                                     "lane": lane["name"]}, notes)
 
 
 class Quality:
@@ -173,29 +210,27 @@ class Quality:
         from .pool import download
 
         q, why = CONFIG["quality"], "the sign-in file or token tool isn't there"
-        with Local.lock:
-            wait = CONFIG["pool"]["download_delay_seconds"] - (time.monotonic() - Local.last_download)
-            if wait > 0:
-                time.sleep(wait)
-            try:
-                if Quality.premium_ready() and not Quality.signed_in():
-                    why = "signed out of YouTube Music: export the cookies again"
-                elif Quality.premium_ready():
-                    try:
-                        return download(video_id, folder, {
-                            "format": q["format"], "cookiefile": str(Quality.cookies()),
-                            "extractor_args": {"youtube": {"player_client": ["web_music"]}},
-                            # YouTube's web player needs its JavaScript challenge solved; yt-dlp only tries Deno by
-                            # default, which this PC hasn't got (2026-11-11: every premium fetch failed on it).
-                            "js_runtimes": {"node": {}, "deno": {}},
-                        }), 2, None
-                    except Exception as e:
-                        if refusal(str(e)) == "blocked":
-                            raise
-                        why = str(e)[:200]
-                return download(video_id, folder, {"format": q["free_format"]}), 1, why
-            finally:
-                Local.last_download = time.monotonic()
+
+        def fetch():
+            nonlocal why
+            if Quality.premium_ready() and not Quality.signed_in():
+                why = "signed out of YouTube Music: export the cookies again"
+            elif Quality.premium_ready():
+                try:
+                    return download(video_id, folder, {
+                        "format": q["format"], "cookiefile": str(Quality.cookies()),
+                        "extractor_args": {"youtube": {"player_client": ["web_music"]}},
+                        # YouTube's web player needs its JavaScript challenge solved; yt-dlp only tries Deno by
+                        # default, which this PC hasn't got (2026-11-11: every premium fetch failed on it).
+                        "js_runtimes": {"node": {}, "deno": {}},
+                    }), 2, None
+                except Exception as e:
+                    if refusal(str(e)) == "blocked":
+                        raise
+                    why = str(e)[:200]
+            return download(video_id, folder, {"format": q["free_format"]}), 1, why
+
+        return Local.paced(HOME, fetch)[0]          # my sign-in only ever from home
 
 
 class Vocals:
@@ -439,18 +474,45 @@ class Inhibitor:
 
 
 def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
-    """The PC side: ask the app for work, do it, send the results back. Never exits on its own unless `once` (then:
-    when the queue has stayed empty for once_grace_seconds — jobs queue one track at a time). Returns the number of tracks done. `http` (a requests.Session-like object) and
-    `local` are for tests."""
+    """The PC side: ask the app for work, do it, send the results back. One loop per download address (lanes(): home,
+    and PIA's proxy when set up), so one track downloads while another is analysed. Never exits on its own unless
+    `once` (then: when the queue has stayed empty for once_grace_seconds — jobs queue one track at a time). Returns the
+    number of tracks done. `http` (a requests.Session-like object) and `local` are for tests."""
     token = worker_token()
     if not token:
         raise SystemExit("WORKER_TOKEN isn't set (in .env, the same on the PC and the Pi)")
-    http = http or requests.Session()
-    http.headers["Authorization"] = f"Bearer {token}"
+    given = http
+
+    def session():
+        h = given or requests.Session()                # each address its own connection pool
+        h.headers["Authorization"] = f"Bearer {token}"
+        return h
+    http = session()
     local = local or Local(path("cache") / "worker")
     base = server.rstrip("/") + "/api/worker"
-    inhibitor, done, last_work, announced = Inhibitor(), 0, time.monotonic(), False
-    blocked_streak, attempts, quality_next = 0, {}, 0.0
+    shared = {"inhibitor": Inhibitor(), "done": 0, "last_work": time.monotonic(), "announced": False,
+              "lock": threading.Lock()}
+    ls = lanes()
+    if len(ls) > 1:
+        print(f"Downloading from {len(ls)} addresses: " + ", ".join(x["name"] for x in ls), flush=True)
+    threads = [threading.Thread(target=_lane, args=(lane, server, base, session(), local, once, shared), daemon=True,
+                                name=f"lane-{lane['name']}") for lane in ls[1:]]
+    for t in threads:
+        t.start()
+    _lane(ls[0], server, base, http, local, once, shared)
+    for t in threads:
+        t.join()
+    return shared["done"]
+
+
+def _lane(lane: dict, server: str, base: str, http, local, once: bool, shared: dict) -> None:
+    home = lane["name"] == "home"
+    blocked_streak, attempts, quality_next, idle_since = 0, {}, 0.0, time.monotonic()
+
+    def worked():
+        nonlocal idle_since
+        idle_since = shared["last_work"] = time.monotonic()
+
     while True:
         try:
             r = http.post(f"{base}/claim", timeout=60)
@@ -459,29 +521,31 @@ def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
             time.sleep(CFG["idle_poll_seconds"])
             continue
         if r.status_code == 204:
-            if time.monotonic() >= quality_next:
+            if home and time.monotonic() >= quality_next:
                 pause = _quality_one(http, base, local)       # nothing to analyse: playlist tracks' M4A files
                 if pause == 0:
-                    last_work = time.monotonic()
+                    worked()
                     continue
                 quality_next = time.monotonic() + pause
-            idle = time.monotonic() - last_work
-            if idle > CFG["idle_minutes"] * 60 and inhibitor.proc is not None:
-                inhibitor.release()
+            idle = time.monotonic() - shared["last_work"]
+            if home and idle > CFG["idle_minutes"] * 60 and shared["inhibitor"].proc is not None:
+                shared["inhibitor"].release()
                 print("Queue empty: the PC may sleep again", flush=True)
-            if once and idle > CFG["once_grace_seconds"]:
-                return done
-            if not announced:
+            if once and time.monotonic() - idle_since > CFG["once_grace_seconds"]:
+                return
+            if home and not shared["announced"]:
                 print(f"Connected to {server}; waiting for work", flush=True)
-                announced = True
+                shared["announced"] = True
             time.sleep(CFG["poll_seconds"] if idle < CFG["idle_minutes"] * 60 else CFG["idle_poll_seconds"])
             continue
         r.raise_for_status()
         item = r.json()
-        inhibitor.hold()
+        with shared["lock"]:
+            shared["inhibitor"].hold()
         wid = item["id"]
         try:
-            res = local.analyse(item["video_id"], item.get("bpm_prior"))
+            res = (local.analyse(item["video_id"], item.get("bpm_prior"), lane=lane) if not home
+                   else local.analyse(item["video_id"], item.get("bpm_prior")))
         except DownloadFailed as e:
             stage = "analysis" if isinstance(e, AnalysisFailed) else "download"
             kind = None if stage == "analysis" else refusal(str(e))
@@ -489,29 +553,32 @@ def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
             if kind == "blocked" or (kind == "temporary" and attempts[wid] <= CFG["retry_attempts"]):
                 pauses = CFG["blocked_pause_minutes"]
                 pause = pauses[min(blocked_streak, len(pauses) - 1)] * 60 if kind == "blocked" else 30
-                if _release(http, base, wid, pause):           # back in the queue; nothing fails
+                # Only my home address's pause holds back the app's own downloads (they share that address).
+                if _release(http, base, wid, pause if home else 0):   # back in the queue; nothing fails
                     blocked_streak += kind == "blocked"
-                    print(f"  {item['video_id']}: YouTube refused ({kind}); handed back, pausing {pause // 60 or 0.5} min",
-                          flush=True)
-                    last_work = time.monotonic()
+                    print(f"  {item['video_id']}: YouTube refused ({kind}, {lane['name']}); handed back, pausing "
+                          f"{pause // 60 or 0.5} min", flush=True)
+                    worked()
                     time.sleep(pause)
                     continue
             print(f"  {item['video_id']}: {stage} failed: {str(e)[:120]}", flush=True)
             _post(http, f"{base}/{wid}/failed", json={"stage": stage, "error": str(e)[:500], "timings": e.timings})
-            last_work = time.monotonic()
+            worked()
             continue
         blocked_streak = 0
         try:
             _send(http, base, wid, res)
-            done += 1
-            print(f"  [{done}] {item['video_id']} sent ({res.duration_s / 60:.1f} min)", flush=True)
+            with shared["lock"]:
+                shared["done"] += 1
+                n = shared["done"]
+            print(f"  [{n}] {item['video_id']} sent ({res.duration_s / 60:.1f} min, {lane['name']})", flush=True)
         except requests.RequestException as e:
             print(f"  {item['video_id']}: couldn't send ({e}); the app will ask again", flush=True)
         finally:
             for f in (res.file, res.art):
                 if f is not None:
                     Path(f).unlink(missing_ok=True)       # the app keeps the copies
-        last_work = time.monotonic()
+        worked()
 
 
 def _quality_one(http, base: str, local) -> float:
@@ -669,7 +736,8 @@ def release(lib, wid: int, pause_s: float) -> bool:
         n = lib.execute("UPDATE work SET state = 'queued', claimed_at = NULL, updated_at = datetime('now')"
                         " WHERE id = ? AND state = 'claimed'", (wid,)).rowcount
     if n:
-        db.set_setting(lib, "worker_paused_until", time.time() + max(0.0, pause_s), log=False)
+        until = max(time.time() + max(0.0, pause_s), float(db.get_setting(lib, "worker_paused_until", 0) or 0))
+        db.set_setting(lib, "worker_paused_until", until, log=False)   # (a PIA refusal never shortens home's pause)
         db.log_event(lib, "work_released", work_id=wid, pause_s=pause_s)
     return bool(n)
 

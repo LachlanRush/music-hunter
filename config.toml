@@ -370,6 +370,12 @@ item_timeout_minutes = 15            # app: a claimed track with no result after
 # fill simply waits. Other temporary refusals (HTTP 403/429) are retried a few times before the track fails.
 blocked_pause_minutes = [5, 10, 20, 40, 60]
 retry_attempts = 3                   # HTTP 403/429 on one track: hand it back this many times, then fail it
+# Download addresses (2026-11-11): home, plus PIA's Netherlands SOCKS5 proxy when PIA_SOCKS_USER / PIA_SOCKS_PASS are
+# in .env. Each runs its own loop at its own pace; the analysis (GPU) takes one track at a time, so one downloads while
+# another is analysed. Signed-in (256 kbps) fetches always go from home. Tested: 20 of 20 pool songs through PIA.
+lanes = ["home", "pia"]
+pia_proxy = "proxy-nl.privateinternetaccess.com:1080"
+lane_interval_seconds = 18           # at least this long between download starts per address (≤ 200 an hour each)
 
 [worker.wake]
 # Home Assistant's Wake-on-LAN switch for the PC (turned on to wake it; a button entity is pressed instead). Empty

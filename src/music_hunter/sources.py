@@ -77,10 +77,10 @@ def _seconds(length: str | None) -> float | None:
 
 
 class YouTubeMusic:
-    def __init__(self):
+    def __init__(self, proxy: str | None = None):
         from ytmusicapi import YTMusic
 
-        self.api = YTMusic()
+        self.api = YTMusic(proxies={"http": proxy, "https": proxy} if proxy else None)
         self.stats = CallStats()
 
     @staticmethod

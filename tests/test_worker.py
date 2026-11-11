@@ -30,8 +30,9 @@ class FakePC:
         self.folder, self.fail, self.calls = folder, fail, []
         folder.mkdir(exist_ok=True)
 
-    def analyse(self, video_id, bpm_prior=None, status=None):
+    def analyse(self, video_id, bpm_prior=None, status=None, lane=None):
         self.calls.append((video_id, bpm_prior))
+        self.lanes = getattr(self, "lanes", []) + [(lane or analysis.HOME)["name"]]
         if self.fail:
             raise self.fail
         audio, art = self.folder / f"{video_id}.webm", self.folder / f"{video_id}.jpg"
@@ -53,6 +54,8 @@ def remote(tmp_path, monkeypatch):
     monkeypatch.setitem(CONFIG["worker"], "mode", "remote")
     monkeypatch.setitem(CONFIG["worker"], "wait_poll_seconds", 0.02)
     monkeypatch.setitem(CONFIG["worker"], "once_grace_seconds", -1)
+    monkeypatch.setitem(CONFIG["worker"], "lanes", ["home"])
+    monkeypatch.setattr(analysis.Quality, "announced", True)            # no sign-in check against YouTube
     monkeypatch.setenv("WORKER_TOKEN", "secret")
     wakes = []
     monkeypatch.setattr(analysis, "wake", lambda: wakes.append(time.time()))
@@ -256,3 +259,28 @@ def test_worker_fetches_a_playlist_track_when_idle(remote, tmp_path, monkeypatch
     assert lib.execute("SELECT quality FROM tracks WHERE id = ?", (tid,)).fetchone()[0] == 2
     assert analysis._quality_one(http, "/api/worker", analysis.Local(tmp_path)) == 60           # nothing left
     assert not f.exists()                                             # the worker keeps no copy
+
+
+def test_two_addresses_share_the_queue(remote, monkeypatch):
+    """With PIA's proxy login in .env the worker runs a second loop through it; both take tracks from the queue."""
+    http, _, root = remote
+    monkeypatch.setitem(CONFIG["worker"], "lanes", ["home", "pia"])
+    monkeypatch.setenv("PIA_SOCKS_USER", "x1")
+    monkeypatch.setenv("PIA_SOCKS_PASS", "pw")
+    assert [x["name"] for x in analysis.lanes()] == ["home", "pia"]
+    assert analysis.lanes()[1]["proxy"] == "socks5://x1:pw@proxy-nl.privateinternetaccess.com:1080"
+    pc = FakePC(root / "pc")
+    real = pc.analyse
+
+    def slow(*a, **kw):                                               # long enough for the other loop to claim one
+        time.sleep(0.3)
+        return real(*a, **kw)
+    pc.analyse = slow
+    jobs = [queue(v) for v in ("vidL1", "vidL2")]
+    assert analysis.run_worker("http://testserver", once=True, http=http, local=pc) == 2
+    for t, box in jobs:
+        t.join(5)
+        assert "result" in box
+    assert sorted(pc.lanes) == ["home", "pia"]
+    monkeypatch.delenv("PIA_SOCKS_USER")
+    assert [x["name"] for x in analysis.lanes()] == ["home"]           # no login: home only

@@ -102,9 +102,29 @@ def download(video_id: str, folder: Path | None = None, extra: dict | None = Non
         "noprogress": True,
     }
     opts.update(extra or {})
+    if opts.get("proxy"):
+        _socks_local_dns()
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(f"https://music.youtube.com/watch?v={video_id}", download=True)
     return Path(info["requested_downloads"][0]["filepath"])
+
+
+def _socks_local_dns() -> None:
+    """yt-dlp always asks a SOCKS5 proxy to look names up (it treats socks5:// as socks5h://), and PIA's proxy can't
+    (every request: "Host unreachable", 2026-11-11). Names are looked up here instead and the proxy is given the
+    address. Only matters for downloads through a proxy (the PIA lane)."""
+    from yt_dlp.networking import _requests
+
+    if getattr(_requests.make_socks_proxy_opts, "local_dns", False):
+        return
+    orig = _requests.make_socks_proxy_opts
+
+    def local(url):
+        o = orig(url)
+        o["rdns"] = False
+        return o
+    local.local_dns = True
+    _requests.make_socks_proxy_opts = local
 
 
 def loudness(file: Path) -> tuple[float, float, float]:
