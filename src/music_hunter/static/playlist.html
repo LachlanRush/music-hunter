@@ -102,8 +102,6 @@ li.found { animation: found 1.4s ease-out; }
 .round.on { color: var(--accent); }
 .round[hidden] { display: none; }
 /* Find music's − / + beside the song's name (2026-11-11; like Spotify's +): outlined, filled once chosen */
-.player .info { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.player .info .t { flex: 0 1 auto; }
 .vote { flex: none; width: 34px; height: 34px; border: 0; padding: 0; background: none; color: rgba(255, 255, 255, 0.75); display: grid; place-items: center; cursor: pointer; }
 .vote[hidden] { display: none; }
 .vote svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
@@ -251,10 +249,10 @@ li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba
 <div class="player" id="player" hidden>
   <div class="player-in">
     <img class="art" id="p-art" alt="">
-    <div class="info"><div class="t" id="p-open"><b id="p-title"></b><span id="p-artist"></span><span class="meta" id="p-tempo"></span></div>
-      <button class="vote" id="down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
-      <button class="vote" id="up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></button></div>
+    <div class="t" id="p-open"><b id="p-title"></b><span id="p-artist"></span><span class="meta" id="p-tempo"></span></div>
     <div class="controls">
+      <button class="vote" id="up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></button>
+      <button class="vote" id="down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
       <button class="round" id="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg></button>
       <button class="round primary" id="play" aria-label="Play"><svg viewBox="0 0 24 24" id="play-icon"><path d="M7 4l13 8-13 8z"/></svg></button>
       <button class="round" id="next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg></button>
@@ -1205,34 +1203,14 @@ const Find = (() => {
           step: 0, hist: null};
     paint();
     await syncTempo();
-    const r = saved();
-    if (r && r.t.rating != null && r.t.rating !== DOWN) {   // left on a song already rated: back to it, same place
-      fm.cur = r.t;
-      return load(fm.cur, r.pos, r.played).then(prefetch);
-    }
-    await next();
+    await next("/api/resume");
   }
   // Leaving (Play, a song, Find music again) only pauses Find music: the pick on air stays where it was, and coming
   // back carries on from there (it used to count the pick as heard and move on: 2026-11-11).
-  // The song on air and the place in it are kept on this device every few seconds (a page closed by the browser or
-  // the app doesn't always get to say goodbye), rated or not; coming back within 12 hours carries on there.
-  const RESUME = `fmResume:${PID}`;
-  let lastSaved = 0;
-  function remember() {
-    if (!fm || !fm.cur || !fm.cur.play_id) return;
-    const pos = fm.viewing === "current" ? audio.currentTime * fmTempo.rate() : (fm.resume ? fm.resume.pos : 0);
-    try { localStorage.setItem(RESUME, JSON.stringify({t: fm.cur, pos, played: fm.played, at: Date.now()})); } catch (e) {}
-    lastSaved = Date.now();
-  }
-  function saved() {
-    try { const r = JSON.parse(localStorage.getItem(RESUME) || "null");
-          return r && r.t && Date.now() - r.at < 12 * 3600e3 ? r : null; } catch (e) { return null; }
-  }
-  window.addEventListener("pagehide", remember);
-  audio.addEventListener("pause", () => { if (fm) remember(); });
+  // Leaving only pauses Find music; coming back plays the song that was on air (the server knows it: the latest
+  // pick), from its start.
   async function leave() {
     if (!fm) return;
-    remember();
     fm = null;
     fmTempo.start(null, "", 1);                           // (cancels a copy still being followed)
     audio.pause();
@@ -1266,10 +1244,10 @@ const Find = (() => {
     load(shown, 0, 0);
     return true;
   }
-  async function next() {
+  async function next(path = "/api/next") {
     let err = null;
     for (let i = 0; i < 3 && fm; i++) {
-      try { const got = await call("/api/next", {});
+      try { const got = await call(path, {});
             if (shown && got.track_id === shown.track_id && onAir() === shown) { Object.assign(shown, got); fm.cur = shown; }
             else { shown = null; fm.cur = got; }
             err = null; break; }
@@ -1278,11 +1256,9 @@ const Find = (() => {
     if (!fm) return;
     if (err) { toast(`Find music: ${err.message}`); return leave(); }
     fm.viewing = "current"; fm.prev = null; fm.resume = null; fm.step = 0; fm.hist = null;
-    const r = saved(), same = r && fm.cur.rating == null && r.t.play_id === fm.cur.play_id;   // the pick left on air
-    if (!(shown && shown.track_id === fm.cur.track_id && onAir() === fm.cur)) await load(fm.cur, same ? r.pos : 0, same ? r.played : 0);
+    if (!(shown && shown.track_id === fm.cur.track_id && onAir() === fm.cur)) await load(fm.cur, 0, 0);
     else paint();
     shown = null;
-    remember();
     prefetch();
   }
   async function load(t, startAt, played) {
@@ -1309,7 +1285,6 @@ const Find = (() => {
     const d = audio.currentTime - fm.lastPos;
     if (!audio.paused && d > 0 && d < 1.5) fm.played += d;
     fm.lastPos = audio.currentTime;
-    if (Date.now() - lastSaved > 3000) remember();
   });
   const tempoReport = () => {
     const t = onAir(), r = fmTempo.rate();

@@ -1467,6 +1467,17 @@ def next_track() -> dict:
     return track_info(conn, play)
 
 
+@router.post("/api/resume")
+def resume() -> dict:
+    """Coming back to Find music (2026-11-11): the song that was on air — the latest pick, rated or not — unless it
+    got a −; then a new pick, as next does."""
+    conn = db.connect()
+    last = conn.execute("SELECT * FROM plays ORDER BY id DESC LIMIT 1").fetchone()
+    if last is not None and last["rating"] != 1:
+        return track_info(conn, last)
+    return next_track()
+
+
 @router.get("/api/upcoming")
 def upcoming() -> dict:
     """The track most likely to play next (never names or anything else), for fetching its audio early."""
