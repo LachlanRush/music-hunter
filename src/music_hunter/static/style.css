@@ -91,6 +91,11 @@ input[type=checkbox] { accent-color: var(--accent); }
 /* Progress bars */
 .bar { height: 4px; background: rgba(255, 255, 255, 0.12); border-radius: 2px; overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+/* Work in progress: a light sweeping along the bar shows the page is following it */
+.bar.live { position: relative; }
+.bar.live::after { content: ""; position: absolute; inset: 0; width: 30%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent); animation: sweep 1.6s linear infinite; }
+@keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 
 /* Menus (⋯): a raised card */
 .menu { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 220px; max-height: 70vh; overflow: auto;

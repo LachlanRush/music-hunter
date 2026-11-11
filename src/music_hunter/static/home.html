@@ -121,7 +121,7 @@ function jobLine(job) {
   if (!job || job.state === "done" || job.state === "failed") return "";
   const p = job.progress || {};
   const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
-  return `<div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
+  return `<div class="bar live" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
     <div class="meta">${job.state === "queued" ? "Waiting to import…" : `Importing ${p.done || 0} of ${p.total || "?"}`}</div>`;
 }
 const card = (p) => `

@@ -246,6 +246,8 @@ class Remote:
                     paused = db.get_setting(lib, "worker_paused_until") or 0
                     say(f"YouTube is refusing downloads for now; trying again in {max(1, round((paused - time.time()) / 60))} min"
                         if paused > time.time() else "waiting for the PC")
+                elif w["state"] == "claimed":
+                    say("downloading and analysing on the PC")      # (so a slow track shows it's being worked on)
                 time.sleep(CFG["wait_poll_seconds"])
         except BaseException:
             # Not collected (stopped, or failed above): the worker's upload is refused, the item dropped.
