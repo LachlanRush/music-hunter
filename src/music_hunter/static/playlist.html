@@ -22,8 +22,12 @@ else if (window.top !== window) document.documentElement.classList.add("framed")
 <style>
 body { padding-bottom: 150px; }
 main { overflow-anchor: none; }                   /* the page keeps its own place when rows move (keepView) */
-main > header + .head { margin-top: -14px; padding-top: 0; }   /* the back arrow's row, close above the cover */
-.head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 22px; align-items: end; padding-top: 8px; }
+.head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 22px; align-items: end; padding-top: 8px; position: relative; }
+/* The back arrow, level with the top of the cover: in the margin to its left on a computer; at the left edge on a
+   phone, beside the centred cover */
+.head .backlink { position: absolute; top: 8px; left: -54px; }
+.status:empty { display: none; }
+@media (max-width: 980px) and (min-width: 601px) { .head { padding-left: 50px; } .head .backlink { left: 0; } }
 .cover { width: 200px; height: 200px; border-radius: 6px; background: var(--raised); display: grid; place-items: center;
   overflow: hidden; font: 800 64px var(--display); color: var(--faint); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); }
 .cover img { width: 100%; height: 100%; object-fit: cover; }
@@ -111,6 +115,7 @@ li.found { animation: found 1.4s ease-out; }
 @media (hover: hover) and (pointer: fine) { .volume { display: block; } }
 @media (max-width: 600px) {
   .head { grid-template-columns: 1fr; justify-items: center; gap: 18px; }
+  .head .backlink { left: 0; }
   .head-text { justify-self: stretch; }
   .cover { width: min(62vw, 240px); height: min(62vw, 240px); }
   h1 { font-size: clamp(26px, 8vw, 34px); }
@@ -122,12 +127,10 @@ li.found { animation: found 1.4s ease-out; }
 </head>
 <body>
 <main>
-  <header>
-    <nav><a class="backlink" href="/" aria-label="Back to playlists">‹</a></nav>
-    <div class="status" id="status"></div>
-  </header>
+  <div class="status" id="status"></div>
 
   <section class="head">
+    <a class="backlink" href="/" aria-label="Back to playlists">‹</a>
     <div class="cover" id="cover">?</div>
     <div class="head-text">
       <h1 id="name">Loading…</h1>
