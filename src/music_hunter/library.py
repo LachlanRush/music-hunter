@@ -240,7 +240,8 @@ def similar_playlist(conn: sqlite3.Connection, track_id: int) -> int:
 def deleted_tracks(conn: sqlite3.Connection, playlist_id: int) -> list[dict]:
     purge_deleted(conn)
     return [dict(r) for r in conn.execute(
-        "SELECT t.id, t.artist, t.title, t.duration_s, t.art_path IS NOT NULL AS has_art, d.stars, d.deleted_at"
+        "SELECT t.id, t.artist, t.title, t.duration_s, t.gain_db, t.art_path IS NOT NULL AS has_art,"
+        " t.file_path IS NOT NULL AS has_audio, d.stars, d.deleted_at"
         " FROM deleted_tracks d JOIN tracks t ON t.id = d.track_id WHERE d.playlist_id = ? ORDER BY d.deleted_at DESC",
         (playlist_id,))]
 

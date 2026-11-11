@@ -551,7 +551,8 @@ def get_playlist(playlist_id: int) -> dict:
     return {"id": p["id"], "name": p["name"], "description": p["description"],
             "image": library.cover_url(p["id"], p["image_path"]),
             "job": _job_view(jobs.latest_for(conn, playlist_id)),
-            "deleted": [{**d, "art": f"/art/{d['id']}" if d["has_art"] else None}
+            "deleted": [{**d, "art": f"/art/{d['id']}" if d["has_art"] else None,
+                         "audio": f"/audio/{d['id']}" if d["has_audio"] else None, "rate": 1.0}
                         for d in library.deleted_tracks(conn, playlist_id)],
             "can_refresh": bool((jobs.latest_for(conn, playlist_id, "import") or {}).get("payload", {}).get("link")),
             "tracks": [view(t) for t in tracks], "tempo": _tempo_view(s),

@@ -89,7 +89,8 @@ li.found { animation: found 1.4s ease-out; }
 .add-song { display: flex; gap: 8px; }
 .add-song input { flex: 1 1 auto; min-width: 0; border-radius: 999px; }
 .deleted ol { margin-top: 8px; }
-.deleted li { grid-template-columns: 44px minmax(0, 1fr) auto; cursor: default; }
+.deleted li { grid-template-columns: 44px minmax(0, 1fr) auto; cursor: pointer; }
+@media (hover: hover) { .deleted li:not(.unavailable):hover { background: rgba(255, 255, 255, 0.07); } }
 .deleted .acts { display: flex; gap: 6px; }
 .deleted .acts button { padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.28);
   background: none; font: 600 12px var(--body); color: var(--fg); }
@@ -270,7 +271,9 @@ function render() {
   $("deleted-label").textContent = `Recently deleted (${del.length})`;
   $("deleted").innerHTML = del.map((t) => {
     const days = Math.floor((Date.now() - Date.parse(t.deleted_at.replace(" ", "T") + "Z")) / 864e5);
-    return `<li><div class="art">${t.art ? `<img class="art" src="${t.art}" alt="">` : ""}</div>
+    const playing = queue[pos] && queue[pos].id === t.id && queue[pos].deleted;
+    return `<li data-deleted-play="${t.id}" class="${playing ? "playing" : ""} ${t.audio ? "" : "unavailable"}">
+      <div class="art">${t.art ? `<img class="art" src="${t.art}" alt="">` : ""}</div>
       <div class="t"><b>${esc(t.title)}</b><span>${esc(t.artist)}</span>
         <span class="sub">${t.stars ? "★".repeat(t.stars) + " • " : ""}${days ? `${days} day${days > 1 ? "s" : ""} ago` : "today"}</span></div>
       <div class="acts"><button data-restore="${t.id}">Restore</button>
@@ -358,6 +361,15 @@ document.addEventListener("click", async (e) => {
     t.stars = stars; render();                          // shown at once; the list re-orders when the server answers
     try { await api(`/api/playlists/${PID}/tracks/${tid}`, {stars}, "PUT"); await load(); loadFind(); }
     catch (err) { showError(`Couldn't save the stars: ${err.message}`); load(); }
+    return;
+  }
+  const delRow = e.target.closest("[data-deleted-play]");
+  if (delRow && !e.target.closest(".acts")) {
+    const list = (data.deleted || []).filter((t) => t.audio).map((t) => ({...t, deleted: true}));
+    const i = list.findIndex((t) => t.id === Number(delRow.dataset.deletedPlay));
+    if (i < 0) return;
+    if (queue[pos] && queue[pos].deleted && queue[pos].id === list[i].id) { if (audio.paused) audio.play().catch(() => {}); return; }
+    queue = list.slice(i); pos = 0; playAt(0);
     return;
   }
   const play = e.target.closest("[data-play]");
