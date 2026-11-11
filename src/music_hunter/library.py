@@ -136,9 +136,8 @@ def delete_forever(conn: sqlite3.Connection, playlist_id: int, track_id: int) ->
 
 def similar_playlist(conn: sqlite3.Connection, track_id: int) -> int:
     """"Find similar" (feedback #39): a new playlist "Like <title>" with this track at 5 stars, and the closest-sounding
-    tracks from my playlists in its To rate section. Closeness is the MAEST fingerprint's cosine similarity, with the
-    veto's star handicap: a track's best stars in any playlist (unstarred: [find] add_seed_stars) count as being
-    star_handicap_sd × (5 − stars) / 4 robust SDs further away, so better-starred tracks come first."""
+    tracks from my playlists in its To rate section. Closeness is the MAEST fingerprint's cosine similarity alone
+    (stars play no part, 2026-11-11)."""
     import numpy as np
 
     t = conn.execute("SELECT t.artist, t.title, t.art_path, e.embedding FROM tracks t"
@@ -146,7 +145,7 @@ def similar_playlist(conn: sqlite3.Connection, track_id: int) -> int:
     if not t:
         raise ValueError("No such track")
     rows = conn.execute(
-        "SELECT t.id, t.artist, t.title, max(pt.stars) AS stars, e.embedding FROM playlist_tracks pt"
+        "SELECT t.id, t.artist, t.title, e.embedding FROM playlist_tracks pt"
         " JOIN tracks t ON t.id = pt.track_id JOIN track_embeddings e ON e.track_id = t.id"
         " WHERE t.id != ? GROUP BY t.id", (track_id,)).fetchall() if t["embedding"] else []
     me = names.song(t["artist"], t["title"])
@@ -154,10 +153,7 @@ def similar_playlist(conn: sqlite3.Connection, track_id: int) -> int:
     picks = []
     if rows:
         sims = np.stack([db.from_blob(r["embedding"]) for r in rows]) @ db.from_blob(t["embedding"])
-        spread = 1.4826 * np.median(np.abs(sims - np.median(sims))) or sims.std() or 1.0
-        stars = np.array([r["stars"] or CONFIG["find"]["add_seed_stars"] for r in rows], float)
-        score = sims - CONFIG["veto"]["star_handicap_sd"] * spread * (5 - np.clip(stars, 1, 5)) / 4
-        picks = [rows[i]["id"] for i in np.argsort(-score)[:CONFIG["library"]["similar_count"]]]
+        picks = [rows[i]["id"] for i in np.argsort(-sims)[:CONFIG["library"]["similar_count"]]]
 
     pid = create_playlist(conn, f"Like {t['title']}")
     add_to_playlist(conn, pid, track_id)

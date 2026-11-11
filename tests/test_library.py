@@ -434,7 +434,7 @@ def test_a_playlist_takes_a_picture_of_my_own(lib, tmp_path):
 
 def test_similar_playlist(lib, monkeypatch):
     """Find similar (feedback #39): the track at 5 stars, the closest tracks of my playlists in To rate, closest on
-    top; better-starred tracks win a near tie; other versions of the same song and fingerprint-less tracks left out."""
+    top, whatever their stars; other versions of the same song and fingerprint-less tracks left out."""
     import numpy as np
 
     conn, track, _ = lib
@@ -459,7 +459,7 @@ def test_similar_playlist(lib, monkeypatch):
 
     new = library.similar_playlist(conn, me)
     rows = library.playlist_tracks(conn, new)
-    assert [(r["id"], r["status"]) for r in rows] == [(near, "added"), (near_low, "added"), (mid, "added"),
+    assert [(r["id"], r["status"]) for r in rows] == [(near_low, "added"), (near, "added"), (mid, "added"),
                                                        (me, "member")]
     assert rows[-1]["stars"] == 5
     assert library.list_playlists(conn)[-1]["name"] == "Like Seed"

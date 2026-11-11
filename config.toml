@@ -384,5 +384,5 @@ cover_max_mb = 30    # the largest picture accepted for a playlist
 cover_size = 600     # stored square, this many pixels a side
 # "Find similar" on a track (feedback #39, 2026-11-11): a new playlist with that track at 5 stars, and the closest-
 # sounding tracks from my other playlists in its To rate section, to keep or remove before starting Find music.
-# Closeness uses the veto's star handicap ([veto] star_handicap_sd), so better-starred tracks come first.
+# Closeness is sound alone (MAEST fingerprint); stars play no part.
 similar_count = 10
