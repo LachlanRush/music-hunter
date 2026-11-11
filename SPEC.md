@@ -967,7 +967,7 @@ All 297 rated plays on the Pi (289 tracks) re-downloaded (256; YouTube refused t
 
 **Feedback round 5 (2026-11-11)**
 - **Tapping the playing track shows it in the list** (#38): on a playlist page, tapping the player's cover or names scrolls to the track's row and highlights it briefly. On other pages in the app, the now playing bar already goes back to where the music is playing.
-- **Find similar** (#39; in a track's ⋯ menu): makes a new playlist "<title> radio" (was "Like <title>" until 2026-11-11: in a track's "Add to" menu it read like a statement about the track; that heading is now "Add to playlist") with that track at 5 stars and the track's cover as its picture. Its To rate section holds the 10 closest-sounding tracks from my playlists (`[library] similar_count`), closest first, by sound alone (MAEST fingerprint; stars play no part, changed 2026-11-11 at my request). Other versions of the same song are left out. I keep or remove them, then start Find music as usual. Takes effect with the next add-on version.
+- **Find similar** (#39; in a track's ⋯ menu): makes a new playlist named after the song (was "Like <title>", then "<title> radio", both changed 2026-11-11) with that track at 5 stars and the track's cover as its picture. Its To rate section holds the 10 closest-sounding tracks from my playlists (`[library] similar_count`), closest first, by sound alone (MAEST fingerprint; stars play no part, changed 2026-11-11 at my request). Other versions of the same song are left out. I keep or remove them, then start Find music as usual. Takes effect with the next add-on version.
 
 **Released as add-on 0.5.12 (2026-11-11)**: pushing code to the Pi, Find similar, tapping the playing track to find it in the list;.
 

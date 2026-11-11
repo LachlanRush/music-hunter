@@ -239,7 +239,7 @@ def sound_order(conn: sqlite3.Connection, playlist_id: int, track_id: int) -> li
 
 
 def similar_playlist(conn: sqlite3.Connection, track_id: int) -> int:
-    """"Find similar" (feedback #39): a new playlist "<title> radio" with this track at 5 stars, and the closest-sounding
+    """"Find similar" (feedback #39): a new playlist named after the track with this track at 5 stars, and the closest-sounding
     tracks from my playlists in its To rate section. Closeness is the MAEST fingerprint's cosine similarity alone
     (stars play no part, 2026-11-11)."""
     import numpy as np
@@ -259,7 +259,7 @@ def similar_playlist(conn: sqlite3.Connection, track_id: int) -> int:
         sims = np.stack([db.from_blob(r["embedding"]) for r in rows]) @ db.from_blob(t["embedding"])
         picks = [rows[i]["id"] for i in np.argsort(-sims)[:CONFIG["library"]["similar_count"]]]
 
-    pid = create_playlist(conn, f"{t['title']} radio")
+    pid = create_playlist(conn, t["title"])
     add_to_playlist(conn, pid, track_id)
     set_stars(conn, pid, track_id, 5)
     for rank, i in enumerate(picks):             # To rate shows the newest first: the closest at the top
