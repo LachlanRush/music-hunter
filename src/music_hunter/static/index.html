@@ -225,10 +225,11 @@ window.__playerState = () => {
   const hidden = t.title == null;
   return {title: hidden ? "Hidden until rated" : t.title, artist: hidden ? "Find music" : t.artist,
           art: hidden ? null : t.art, playing: !audio.paused, t: audio.currentTime, d: audio.duration || t.duration_s,
-          shuffle: null};
+          shuffle: null, volume: Media.desktop ? Number($("volume").value) / 100 : undefined};
 };
 window.__playerControl = (action, value) => ({
   toggle: () => togglePlay(), next: () => skip(), prev: () => goBack(), seek: () => { audio.currentTime = value; },
+  volume: () => { $("volume").value = Math.round(value * 100); $("volume").dispatchEvent(new Event("input")); },
 })[action]?.();
 
 // Operational log: start latency, stalls, audio errors, track ends, script errors.

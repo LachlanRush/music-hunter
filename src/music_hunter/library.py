@@ -51,6 +51,14 @@ def list_folders(conn: sqlite3.Connection) -> list[dict]:
                                           " ORDER BY position IS NULL, position, created_at, id")]
 
 
+def folder_totals(conn: sqlite3.Connection) -> dict[int, dict]:
+    """Each folder's songs (one count per song, however many of its playlists have it) and their total length."""
+    return {r["folder_id"]: {"tracks": r["tracks"], "duration_s": r["duration_s"] or 0} for r in conn.execute(
+        "SELECT folder_id, count(*) AS tracks, sum(duration_s) AS duration_s FROM (SELECT DISTINCT p.folder_id,"
+        " t.id, t.duration_s FROM playlists p JOIN playlist_tracks pt ON pt.playlist_id = p.id JOIN tracks t"
+        " ON t.id = pt.track_id WHERE p.folder_id IS NOT NULL) GROUP BY folder_id")}
+
+
 def create_folder(conn: sqlite3.Connection, name: str) -> int:
     with conn:
         return conn.execute("INSERT INTO folders (name) VALUES (?)",

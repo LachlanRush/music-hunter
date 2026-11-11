@@ -525,7 +525,8 @@ def get_playlists() -> list[dict]:
 def get_folders() -> list[dict]:
     """The home page's sections: my folders and the built-in Playlists (id 0: playlists in no folder), in order."""
     conn = db.connect()
-    return [*library.list_folders(conn),
+    totals = library.folder_totals(conn)
+    return [*({**f, **totals.get(f["id"], {"tracks": 0, "duration_s": 0})} for f in library.list_folders(conn)),
             {"id": 0, "name": "Playlists", "builtin": True, "position": db.get_setting(conn, "home_loose_position")}]
 
 
