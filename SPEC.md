@@ -1014,3 +1014,4 @@ All 297 rated plays on the Pi (289 tracks) re-downloaded (256; YouTube refused t
 - **Total time** under a playlist's name: "40 tracks · 3 hr 12 min · 142 BPM".
 - The star filter ("All tracks", "★ 3+"…) is always in the playlist's colour.
 - The star filter sits next to Find music (left), Shuffle and Play on the right.
+- **Add to queue** (a song's ⋯, under Add to playlist…): it plays after the current song, ahead of the rest of the playlist; several stack, first added first. While nothing plays they wait and play first when something starts. Shuffle or the star filter changing keeps them first. A short note confirms it.

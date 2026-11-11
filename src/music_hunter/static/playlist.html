@@ -130,6 +130,11 @@ li.found { animation: found 1.4s ease-out; }
 li[data-row] { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 li.held { background: rgba(255, 255, 255, 0.1); }
 li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5); position: relative; z-index: 3; }
+#toast { position: fixed; left: 50%; bottom: 120px; transform: translate(-50%, 20px); z-index: 30; opacity: 0;
+  background: var(--fg); color: #111; font: 600 13px var(--body); padding: 8px 14px; border-radius: 999px;
+  pointer-events: none; transition: opacity .2s, transform .2s; max-width: calc(100vw - 32px); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+#toast.show { opacity: 1; transform: translate(-50%, 0); }
 #mh-download { display: none; }                           /* (the button an older app adds; it's in the ⋯ menu now) */
 .menu button.off { color: var(--muted); }                 /* Download and Sync while they're off */
 .volume { display: none; width: 90px; }
@@ -560,6 +565,7 @@ document.addEventListener("click", async (e) => {
     menu.className = "menu";
     const tt = data.tracks.find((x) => x.id === tid);
     menu.innerHTML = `<button data-sheet="${tid}">Add to playlist…</button>`
+      + `<button data-queue="${tid}">Add to queue</button>`
       + `<button data-sound="${tid}">Sort by sound like this</button>`
       + `<button data-similar="${tid}">Find similar</button>`
       + (tt && tt.art ? `<button data-cover-from="${tid}">Use as playlist cover</button>` : "")
@@ -569,6 +575,8 @@ document.addEventListener("click", async (e) => {
     placeMenu(menu);
     return;
   }
+  const q = e.target.closest("[data-queue]");
+  if (q) { const t = data.tracks.find((x) => x.id === Number(q.dataset.queue)); if (t && t.audio) addToQueue(t); return; }
   const sheet = e.target.closest("[data-sheet]");
   if (sheet) { openSheet(Number(sheet.dataset.sheet)); return; }
   const sound = e.target.closest("[data-sound]");
@@ -818,10 +826,7 @@ $("min-stars").addEventListener("change", async () => {
   data.min_stars = v; render();
   try { await api(`/api/playlists/${PID}/play-filter`, {min_stars: v}, "PUT"); }
   catch (e) { showError(`Couldn't save: ${e.message}`); }
-  if (pos >= 0) {                                        // the queue follows: keep the current track, filter the rest
-    const cur = queue[pos], rest = playable().filter((t) => t.id !== cur.id);
-    queue = [cur, ...(shuffle ? round.order(rest) : rest)]; pos = 0;
-  }
+  if (pos >= 0) rebuildRest();                           // the queue follows: keep the current track, filter the rest
 });
 async function refreshPlaylist() {
   try { await api(`/api/playlists/${PID}/import`, {}); } catch (e) { showError(`Couldn't refresh: ${e.message}`); }
@@ -848,6 +853,28 @@ function playTrack(id) {                               // the track already play
   if (queue[pos] && queue[pos].id === id) { if (audio.paused) audio.play().catch(() => {}); return; }
   startQueue(id);
 }
+// Up next (2026-11-11): songs added with "Add to queue" play after the current one, first added first, before the
+// playlist carries on. While nothing plays they wait, and play first once something starts.
+let upNext = [];                                       // waiting while nothing plays
+const pendingQueued = () => { let n = 0; while (queue[pos + 1 + n] && queue[pos + 1 + n].queued) n++; return n; };
+function addToQueue(t) {
+  const item = {...t, queued: true};
+  if (pos >= 0) queue.splice(pos + 1 + pendingQueued(), 0, item);
+  else upNext.push(item);
+  toast(`Added to queue: ${t.title}`);
+}
+// The rest of the queue rebuilt (shuffle switched, star filter changed): queued songs still come first.
+function rebuildRest() {
+  const cur = queue[pos], waiting = queue.slice(pos + 1, pos + 1 + pendingQueued());
+  const rest = playable().filter((t) => t.id !== cur.id);
+  queue = [cur, ...waiting, ...(shuffle ? round.order(rest) : rest)]; pos = 0;
+}
+function toast(text) {
+  let el = document.getElementById("toast");
+  if (!el) { el = document.createElement("div"); el.id = "toast"; document.body.appendChild(el); }
+  el.textContent = text; el.classList.add("show");
+  clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove("show"), 2200);
+}
 function startQueue(firstId) {
   let list = playable();
   if (shuffle) list = round.order(list);
@@ -859,6 +886,8 @@ function startQueue(firstId) {
     const i = list.findIndex((t) => t.id === firstId);
     if (i > 0) list = shuffle ? [list[i], ...list.filter((_, k) => k !== i)] : list.slice(i).concat(list.slice(0, i));
   }
+  if (upNext.length) list = firstId != null ? [list[0], ...upNext, ...list.slice(1)] : [...upNext, ...list];
+  upNext = [];
   queue = list; pos = 0;
   if (queue.length) playAt(0);
 }
@@ -963,9 +992,8 @@ function setShuffle(on) {
   $("shuffle").classList.toggle("on", on); $("shuffle").setAttribute("aria-pressed", String(on));
   paintShuffleAll(pos >= 0 && !audio.paused);
   if (pos >= 0) {                                      // keep the current track, reshuffle (or restore) the rest
-    const cur = queue[pos], rest = playable().filter((t) => t.id !== cur.id);
-    queue = [cur, ...(shuffle ? round.order(rest) : rest)]; pos = 0;
-    if (shuffle) round.mark(cur.id);
+    rebuildRest();
+    if (shuffle) round.mark(queue[0].id);
   }
 }
 if (round.on()) setShuffle(true);                      // the mode survives a reload
