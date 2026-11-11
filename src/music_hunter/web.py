@@ -414,6 +414,13 @@ def order_tracks(playlist_id: int, body: OrderBody) -> dict:
     return {"ok": True}
 
 
+@app.get("/api/playlists/{playlist_id}/job")
+def playlist_job(playlist_id: int) -> dict:
+    """The playlist's latest job (import, add): a small answer the page checks for work started elsewhere."""
+    conn = db.connect()
+    return {"job": _job_view(jobs.latest_for(conn, playlist_id))}
+
+
 @app.get("/api/tracks/{track_id}/playlists")
 def track_playlists(track_id: int) -> list[dict]:
     """The Add to playlist sheet: every playlist, ticked if the track is in it."""

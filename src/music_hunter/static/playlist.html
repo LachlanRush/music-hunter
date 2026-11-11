@@ -61,6 +61,7 @@ li { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto auto; gap: 1
 @media (hover: hover) { li[data-row]:not(.unavailable):hover { background: rgba(255, 255, 255, 0.07); } }
 li.playing .t b { color: var(--accent); }
 li.unavailable { opacity: .45; }
+.row-step { color: var(--accent); }
 li.filtered { opacity: .4; }
 li.found { animation: found 1.4s ease-out; }
 @keyframes found { from { background: var(--accent-soft); } to { background: transparent; } }
@@ -327,7 +328,7 @@ function row(t) {
     <button class="cover-btn" data-play="${t.id}" aria-label="Play ${esc(t.title)}" ${t.audio ? "" : "disabled"}>
       ${t.art ? `<img src="${t.art}" alt="" loading="lazy">` : "♪"}</button>
     <div class="t"><b>${esc(t.title)}</b><span>${esc(t.artist)}</span>
-      <span class="sub">${fmt(t.duration_s)}${t.bpm_shown ? ` • ${t.bpm_shown}` : ""}${t.bpm_override ? ` → ${t.bpm_override}` : ""}</span></div>
+      <span class="sub">${t.audio ? `${fmt(t.duration_s)}${t.bpm_shown ? ` • ${t.bpm_shown}` : ""}${t.bpm_override ? ` → ${t.bpm_override}` : ""}` : rowStatus(t)}</span></div>
     ${stars(t)}
     <div class="more"><button data-more="${t.id}" aria-label="More for ${esc(t.title)}" aria-expanded="false">⋯</button></div>
   </li>`;
@@ -342,7 +343,27 @@ function stepLine(message) {
   const s = Math.floor((Date.now() - stepSeen.at) / 1000);
   return `${message.replace(/: /, " · ")} · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
-setInterval(() => { const el = document.getElementById("import-step"); if (el && stepSeen.text) el.textContent = stepLine(stepSeen.text); }, 1000);
+// A greyed song (no audio yet) says where it is: being downloaded now (with the step and clock), waiting its turn, or
+// without audio (when nothing is fetching it).
+// An import or add started elsewhere (another device, the home page, a refresh) shows up here within a few seconds.
+setInterval(async () => {
+  const busy = (j) => j && (j.state === "queued" || j.state === "running");
+  if (!data || busy(data.job) || document.hidden) return;              // (while busy, load() keeps checking)
+  try { const r = await api(`/api/playlists/${PID}/job`); if (busy(r.job)) load(); } catch (e) {}
+}, 5000);
+function rowStatus(t) {
+  const job = data && data.job, active = job && (job.state === "queued" || job.state === "running");
+  if (!active) return "No audio";
+  const msg = (job.progress && job.progress.message) || "", name = `${t.artist} – ${t.title}`;
+  if (msg.startsWith(name)) return `<span class="row-step">${esc(stepLine(msg).slice(name.length + 3) || "Starting…")}</span>`;
+  return "Waiting to download";
+}
+setInterval(() => {
+  const el = document.getElementById("import-step");
+  if (el && stepSeen.text) el.textContent = stepLine(stepSeen.text);
+  const row = document.querySelector(".row-step"), msg = stepSeen.text;
+  if (row && msg) { const i = msg.indexOf(": "); row.textContent = stepLine(msg).slice(i >= 0 ? i + 3 : msg.length + 3) || "Starting…"; }
+}, 1000);
 function render() {
   if (typeof RowDrag !== "undefined" && RowDrag.busy()) return;   // not under a row being dragged
   const d = data;

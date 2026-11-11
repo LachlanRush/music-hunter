@@ -148,6 +148,7 @@ function prefetch(lists) {
     .then((d) => cache.set(`playlist:${p.id}`, d)).catch(() => {}), 300 + 150 * i));
 }
 let timer = null;
+setInterval(() => { if (!document.hidden && !timer) load(); }, 10000);   // imports started elsewhere show up too
 async function load() {
   try {
     const [lists, folders] = await Promise.all([api("/api/playlists"), api("/api/folders")]);
@@ -156,7 +157,7 @@ async function load() {
     prefetch(lists);
     const busy = lists.some((p) => p.job && (p.job.state === "running" || p.job.state === "queued"));
     clearTimeout(timer);
-    if (busy) timer = setTimeout(load, 3000);
+    timer = busy ? setTimeout(load, 3000) : null;
   } catch (e) { $("status").textContent = "Can't reach the music-hunter server."; }
 }
 function show(lists, folders) {

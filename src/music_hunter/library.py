@@ -445,6 +445,25 @@ def store(conn: sqlite3.Connection, res, file, artist: str, title: str, origin: 
     return tid
 
 
+def refetch_audio(conn: sqlite3.Connection, track_id: int, status=None) -> None:
+    """Download a library track's audio again (it was deleted when the track left every playlist, e.g. with a deleted
+    playlist), keeping the track, its stars and fingerprint. Raises analysis.DownloadFailed."""
+    from .analysis import backend
+    from .ratings import _safe, _unique
+
+    t = conn.execute("SELECT artist, title, video_id, art_path FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    res = backend().analyse(t["video_id"], status=status)
+    folder = path("library")
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = _unique(folder / f"{_safe(t['artist'])} - {_safe(t['title'])}{res.file.suffix}", res.file)
+    shutil.move(res.file, dest)
+    art = t["art_path"] if t["art_path"] and resolve(t["art_path"]).exists() else keep_art(res.art and relative(res.art))
+    with conn:
+        conn.execute("UPDATE tracks SET file_path = ?, loudness_lufs = ?, true_peak_db = ?, gain_db = ?, art_path = ?,"
+                     " quality = NULL WHERE id = ?", (relative(dest), res.lufs, res.peak, res.gain, art, track_id))
+    db.log_event(conn, "audio_refetched", track_id=track_id, video_id=t["video_id"])
+
+
 def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progress=None, skip_removed: bool = True,
                    status: str = "member") -> dict:
     """Import a Spotify playlist's (or track's) tracks into a playlist. Safe to re-run: tracks already in the
@@ -464,14 +483,18 @@ def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progre
         "SELECT spotify_id FROM removed_spotify WHERE playlist_id = ? UNION SELECT t.spotify_id FROM deleted_tracks d"
         " JOIN tracks t ON t.id = d.track_id WHERE d.playlist_id = ? AND t.spotify_id IS NOT NULL",
         (playlist_id, playlist_id))} if skip_removed else set()
+    refetch = []
     for i, sid in enumerate(ids):
-        report(i, len(ids), "Reading Spotify")
+        report(i - len(refetch), len(ids), "Reading Spotify")
         if sid in removed:                               # removed from this playlist: a refresh leaves it out
             out["skipped"] += 1
             continue
-        row = conn.execute("SELECT id FROM tracks WHERE spotify_id = ? ORDER BY id LIMIT 1", (sid,)).fetchone()
+        row = conn.execute("SELECT id, file_path, video_id FROM tracks WHERE spotify_id = ? ORDER BY id LIMIT 1",
+                           (sid,)).fetchone()
         if row:
             out["reused"] += add_to_playlist(conn, playlist_id, row[0], status)
+            if not row["file_path"] and row["video_id"]:
+                refetch.append(row[0])       # its audio went (e.g. with a deleted playlist): fetched again below
             continue
         try:
             t = spotify.track(sid)
@@ -505,6 +528,16 @@ def import_spotify(conn: sqlite3.Connection, link: str, playlist_id: int, progre
         out["added"] += 1
         db.log_event(conn, "track_imported", playlist_id=playlist_id, track_id=tid, spotify_id=sid,
                      video_id=best.video_id)
+    # Tracks already in the library whose audio had gone: shown in the playlist straight away (greyed), then fetched.
+    for k, tid in enumerate(refetch):
+        t = conn.execute("SELECT artist, title FROM tracks WHERE id = ?", (tid,)).fetchone()
+        name = f"{t['artist']} – {t['title']}"
+        done = len(ids) - len(refetch) + k
+        report(done, len(ids), name)
+        try:
+            refetch_audio(conn, tid, status=lambda text, d=done, n=name: report(d, len(ids), f"{n}: {text}"))
+        except DownloadFailed as e:
+            out["failures"].append({"artist": t["artist"], "title": t["title"], "reason": f"download failed ({str(e)[:120]})"})
     report(len(ids), len(ids), "Done")
     return out
 
