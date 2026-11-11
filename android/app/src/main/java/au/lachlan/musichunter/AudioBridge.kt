@@ -268,6 +268,23 @@ class PageBridge(private val app: App, private val web: WebView) {
     @JavascriptInterface fun npShuffle() = on { app.toggleOwnerShuffle() }
     @JavascriptInterface fun npOpen() = on { app.showPlaying() }
     @JavascriptInterface fun pageReady() = on { app.pageReady(web) }
+    // "Add to queue" on a page the music doesn't come from: the song joins the playing page's queue (as the browser
+    // shell does). "" when nothing plays elsewhere (the page queues it itself), "unsupported" while Find music plays.
+    @JavascriptInterface fun enqueue(trackJson: String): String {
+        val result = java.util.concurrent.atomic.AtomicReference("")
+        val done = java.util.concurrent.CountDownLatch(1)
+        main.post {
+            try {
+                val owner = audio.owner
+                if (owner != null && owner !== web && audio.hasTrack) {
+                    if (owner.url?.contains("/find/") == true) result.set("unsupported")
+                    else { owner.evaluateJavascript("window.__enqueue && __enqueue($trackJson)", null); result.set("queued") }
+                }
+            } finally { done.countDown() }
+        }
+        done.await(1, java.util.concurrent.TimeUnit.SECONDS)
+        return result.get()
+    }
     // The Download switch on a playlist page.
     @JavascriptInterface fun offlineState(pid: Int): String = app.offline.state(pid).toString()
     @JavascriptInterface fun offlineSet(pid: Int, on: Boolean) = app.offline.set(pid, on)

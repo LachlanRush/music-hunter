@@ -151,7 +151,7 @@ li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba
 }
 </style>
 </head>
-<body>
+<body class="glow">
 <main>
   <div class="status" id="status"></div>
 
@@ -861,7 +861,10 @@ function addToQueue(t, quiet = false) {
   // Music playing from another playlist (the browser shell keeps it going): the song joins that queue instead.
   if (!quiet) {
     let r = null;
-    try { if (window.parent !== window && window.parent.MHShell) r = window.parent.MHShell.enqueue(t, window); } catch (e) {}
+    try {
+      if (window.NativeAudioBridge && window.NativeAudioBridge.enqueue) r = window.NativeAudioBridge.enqueue(JSON.stringify(t)) || null;   // the app
+      else if (window.parent !== window && window.parent.MHShell) r = window.parent.MHShell.enqueue(t, window);              // the browser
+    } catch (e) {}
     if (r === "queued") { toast(`Added to queue: ${t.title}`); return; }
     if (r === "unsupported") { toast("Find music is playing: it picks its own next track"); return; }
   }
@@ -971,13 +974,13 @@ $("next").addEventListener("click", () => { if (pos + 1 < queue.length) playAt(p
 // For the browser shell's player bar on other pages (static/shell.js): what's playing here, and its controls.
 window.__audio = audio;
 window.__barOnPage = true;                                // the shell's bar stands in for this page's player
-window.__nowPlaying = () => {
+window.__playerState = () => {
   const t = queue[pos];
   return t ? {title: t.title, artist: t.artist, art: t.art, playing: !audio.paused, t: audio.currentTime,
               d: audio.duration || t.duration_s, shuffle, note: $("p-tempo").textContent, loading: $("play").classList.contains("loading"),
               volume: Number($("volume").value) / 100 } : null;
 };
-window.__control = (action, value) => ({
+window.__playerControl = (action, value) => ({
   toggle: () => $("play").click(), next: () => $("next").click(), prev: () => $("prev").click(),
   shuffle: () => $("shuffle").click(), seek: () => { audio.currentTime = value; },
   reveal: () => $("p-open").click(),

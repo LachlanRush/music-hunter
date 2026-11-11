@@ -2,7 +2,7 @@
 // runs in a frame of this one; moving to another page opens it in a new frame and keeps the playing page alive,
 // hidden, with its player bar shown over whatever page is on screen. Pressing play on another page hands the music
 // over to it (the old playing page is closed). The pages are unchanged: they ask `go()` (static/nav.js) to move, and
-// tell the bar what's playing (window.__nowPlaying / __control).
+// tell the bar what's playing (window.__playerState / __playerControl).
 const MHShell = window.MHShell = (() => {
   let current = null, owner = null, bar = null, seeking = false;
   const key = (u) => { const x = new URL(u, location.href); return (x.pathname.replace(/\/+$/, "") || "/") + x.search; };
@@ -111,18 +111,18 @@ const MHShell = window.MHShell = (() => {
     const $ = (id) => bar.querySelector("#" + id);
     bar.addEventListener("click", (e) => {
       const c = e.target.closest("[data-c]");
-      if (c) { try { win(owner).__control(c.dataset.c); } catch (err) {} setTimeout(paint, 150); return; }
+      if (c) { try { win(owner).__playerControl(c.dataset.c); } catch (err) {} setTimeout(paint, 150); return; }
       if (e.target.closest("#b-open, #b-art") && owner) {                   // back to where it's playing
-        if (owner === current) { try { win(owner).__control("reveal"); } catch (err) {} return; }   // (feedback #38)
+        if (owner === current) { try { win(owner).__playerControl("reveal"); } catch (err) {} return; }   // (feedback #38)
         try { history.pushState({}, "", win(owner).location.pathname + win(owner).location.search); } catch (err) {}
         show(owner);
       }
     });
-    $("b-volume").addEventListener("input", () => { try { win(owner).__control("volume", $("b-volume").value / 100); } catch (e) {} });
+    $("b-volume").addEventListener("input", () => { try { win(owner).__playerControl("volume", $("b-volume").value / 100); } catch (e) {} });
     const seek = $("b-seek");
     seek.addEventListener("input", () => { seeking = true; });
     seek.addEventListener("change", () => {
-      try { const s = win(owner).__nowPlaying(); if (s && s.d) win(owner).__control("seek", seek.value / 1000 * s.d); } catch (e) {}
+      try { const s = win(owner).__playerState(); if (s && s.d) win(owner).__playerControl("seek", seek.value / 1000 * s.d); } catch (e) {}
       seeking = false;
     });
   }
@@ -134,7 +134,7 @@ const MHShell = window.MHShell = (() => {
     let s = null;
     try {
       const w = win(owner);
-      if (w && w.__nowPlaying && (owner !== current || w.__barOnPage)) s = w.__nowPlaying();
+      if (w && w.__playerState && (owner !== current || w.__barOnPage)) s = w.__playerState();
     } catch (e) {}
     const on = !!(s && playing(owner));
     bar.hidden = !on;

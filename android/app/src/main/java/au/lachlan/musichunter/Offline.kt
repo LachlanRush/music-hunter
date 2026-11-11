@@ -110,7 +110,7 @@ class Offline(private val context: Context, private val server: () -> String) {
         // kept is for when the Pi doesn't answer quickly.
         if ((fonts || bare.startsWith("/art/") || bare.startsWith("/cover/")) && file.exists()) {
             if (!fonts) refresh(url, file)
-            return fromFile(file)
+            fromFile(file)?.let { return it }                 // (a damaged copy: fetched afresh below)
         }
         val quick = file.exists() && !bare.startsWith("/api/")
         if (SystemClock.elapsedRealtime() >= unreachableUntil) {
@@ -129,7 +129,7 @@ class Offline(private val context: Context, private val server: () -> String) {
                 Log.i(TAG, "Pi unreachable (${e.message}); using what's kept")
             }
         }
-        return if (file.exists()) fromFile(file) else unavailable()
+        return (if (file.exists()) fromFile(file) else null) ?: unavailable()
     }
 
     private val refreshing = java.util.concurrent.Executors.newFixedThreadPool(2)
@@ -151,14 +151,18 @@ class Offline(private val context: Context, private val server: () -> String) {
     }
 
     private fun store(file: File, type: String, body: ByteArray) {
-        val tmp = File(file.path + ".part")
+        // Its own temporary name: a refresh and a page's request saving the same file at once shared one, and the app
+        // could read a half-written copy and crash (found 2026-11-11).
+        val tmp = File(file.path + ".part" + Thread.currentThread().id + "-" + System.nanoTime())
         tmp.outputStream().use { it.write("$type\n".toByteArray()); it.write(body) }
         tmp.renameTo(file)
     }
 
-    private fun fromFile(file: File): WebResourceResponse {
-        val bytes = file.readBytes()
+    /** A kept copy, or null (and the copy dropped) if it's damaged. */
+    private fun fromFile(file: File): WebResourceResponse? {
+        val bytes = try { file.readBytes() } catch (e: IOException) { return null }
         val nl = bytes.indexOf('\n'.code.toByte())
+        if (nl <= 0) { file.delete(); return null }
         return response(200, String(bytes, 0, nl), bytes.copyOfRange(nl + 1, bytes.size))
     }
 

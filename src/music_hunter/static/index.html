@@ -218,7 +218,7 @@ let loadStart = 0, awaitingFirstPlay = false, stallStart = null;
 function onAir() { return viewing === "previous" ? prev : current; }
 // For the browser shell's player bar on other pages (static/shell.js): names only once rated, as here.
 window.__audio = audio;
-window.__nowPlaying = () => {
+window.__playerState = () => {
   const t = onAir();
   if (!t) return null;
   const hidden = t.title == null;
@@ -226,7 +226,7 @@ window.__nowPlaying = () => {
           art: hidden ? null : t.art, playing: !audio.paused, t: audio.currentTime, d: audio.duration || t.duration_s,
           shuffle: null};
 };
-window.__control = (action, value) => ({
+window.__playerControl = (action, value) => ({
   toggle: () => togglePlay(), next: () => skip(), prev: () => goBack(), seek: () => { audio.currentTime = value; },
 })[action]?.();
 
