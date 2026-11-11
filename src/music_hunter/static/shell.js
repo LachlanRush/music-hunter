@@ -4,7 +4,7 @@
 // over to it (the old playing page is closed). The pages are unchanged: they ask `go()` (static/nav.js) to move, and
 // tell the bar what's playing (window.__playerState / __playerControl).
 const MHShell = window.MHShell = (() => {
-  let current = null, owner = null, bar = null, seeking = false;
+  let current = null, owner = null, bar = null, seeking = false, lastTint = null;
   const key = (u) => { const x = new URL(u, location.href); return (x.pathname.replace(/\/+$/, "") || "/") + x.search; };
   const win = (f) => { try { return f && f.contentWindow; } catch (e) { return null; } };
   const playing = (f) => { const a = win(f) && win(f).__audio; return !!(a && a.src && !a.ended && (!a.paused || f === owner)); };
@@ -103,8 +103,8 @@ const MHShell = window.MHShell = (() => {
     bar.innerHTML = `<div class="in">
       <img class="art" id="b-art" alt="">
       <div class="info"><div class="t" id="b-open"><b id="b-title"></b><span id="b-artist"></span><span class="note" id="b-note"></span></div>
-        <button class="vote" data-c="down" id="b-down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></button>
-        <button class="vote" data-c="up" id="b-up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8M12 8v8"/></svg></button></div>
+        <button class="vote" data-c="down" id="b-down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+        <button class="vote" data-c="up" id="b-up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></button></div>
       <div class="controls">
         <button class="round" data-c="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg></button>
         <button class="round primary" data-c="toggle" aria-label="Play"><svg viewBox="0 0 24 24" id="b-icon">${PLAY}</svg></button>
@@ -152,7 +152,10 @@ const MHShell = window.MHShell = (() => {
     if (lastArt !== (s.art || "")) {
       lastArt = s.art || "";
       $("b-art").src = lastArt; $("b-art").style.visibility = lastArt ? "visible" : "hidden";
-      Tint.apply(lastArt || null, bar);                     // grey with a hint of the song's cover (none while hidden)
+    }
+    if (lastTint !== (s.tint || "")) {                       // the playing playlist's colours, not the song's (2026-11-11)
+      lastTint = s.tint || "";
+      Tint.apply(lastTint || null, bar);
     }
     $("b-note").textContent = s.note || "";
     bar.querySelector('[data-c="toggle"]').classList.toggle("loading", !!s.loading);

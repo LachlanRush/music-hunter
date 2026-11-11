@@ -44,6 +44,7 @@ def fresh_workers():
     web.worker.state, web.worker.message, web.worker.thread = "idle", "", None
     web.workers.clear()
     web.workers[None] = web.worker
+    web.AFTER_IN_BACKGROUND = False          # a rating's follow-up runs before the answer, so tests see its effects
     db.SESSION.set(None)
     yield
 

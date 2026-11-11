@@ -290,15 +290,64 @@ class ClientEvent(BaseModel):
 CLIENT_EVENTS = {"playing", "stall", "audio_error", "ended", "page_error", "back", "forward", "restart", "autoplay_stuck"}
 
 
-def _to_playlist(conn, play_id: int) -> None:
-    """v5: an Add joins the playlist's Added section; a rating changed away from Add takes it out again."""
+def _added(conn, play_id: int) -> None:
+    """A + joins the playlist's To rate section (or leaves it, changed away) straight away; its tempo copies follow
+    in the background."""
     pid = db.SESSION.get()
     if pid is not None:
-        lib = db.connect_library()
-        find.sync_add(lib, conn, pid, play_id)
-        _sync_tempo(lib, pid)                      # an Added track gets the playlist's Same BPM copy too
-        from . import tempo
-        tempo.sync_session(conn, pid)              # Find music: drop copies of tracks played a while ago
+        find.sync_add(db.connect_library(), conn, pid, play_id)
+
+
+_AFTER: dict = {}
+_AFTER_GUARD = threading.Lock()
+AFTER_IN_BACKGROUND = True                    # (tests run it inline)
+
+
+def _after_rating(seeds: bool = False) -> None:
+    """Everything a rating changes that the next song doesn't wait for (2026-11-11: the request took ~1–2 s on the
+    Pi, so − / + felt slow): tempo copies, the veto's scores, re-weighting, the other playlists' artist values, seeds
+    after a change, background work. One pass at a time per session; ratings in quick succession share the next."""
+    pid = db.SESSION.get()
+    if not AFTER_IN_BACKGROUND:
+        with _AFTER_GUARD:
+            _AFTER[pid] = {"thread": None, "again": False, "seeds": seeds}
+        return _after_loop(pid)
+    with _AFTER_GUARD:
+        a = _AFTER.setdefault(pid, {"thread": None, "again": False, "seeds": False})
+        a["seeds"] = a["seeds"] or seeds
+        if a["thread"] is not None and a["thread"].is_alive():
+            a["again"] = True
+            return
+        a["thread"] = threading.Thread(target=_after_loop, args=(pid,), daemon=True, name=f"after-rating-{pid}")
+        a["thread"].start()
+
+
+def _after_loop(pid) -> None:
+    while True:
+        with _AFTER_GUARD:
+            a = _AFTER[pid]
+            seeds, a["seeds"], a["again"] = a["seeds"], False, False
+        token = db.SESSION.set(pid)
+        try:
+            conn = db.connect()
+            if pid is not None:
+                lib = db.connect_library()
+                if seeds:
+                    find.sync_seeds(lib, conn, pid)
+                _sync_tempo(lib, pid)                  # an added track gets the playlist's Same BPM copy too
+                from . import tempo
+                tempo.sync_session(conn, pid)          # Find music: drop copies of tracks played a while ago
+            reweight.after_rating(conn)
+            veto.update(conn)                          # likes changed: re-score, move tracks across the line
+            session_worker().start_if_needed()
+            _rescore_all(skip=pid)                     # the artist's value changed in the other playlists too
+        except Exception as e:  # noqa: BLE001 — the next rating or maintenance pass tries again
+            db.log_event(db.connect_library(), "after_rating_failed", playlist_id=pid, error=str(e)[:200])
+        finally:
+            db.SESSION.reset(token)
+        with _AFTER_GUARD:
+            if not _AFTER[pid]["again"]:
+                return
 
 
 def _sync_tempo(lib, playlist_id: int) -> None:
@@ -1430,8 +1479,11 @@ def upcoming() -> dict:
     if not conn.execute("SELECT file_path FROM tracks WHERE id = ?", (track_id,)).fetchone()[0]:
         _fetch_in_background(track_id)                 # an injected vetoed track: audio fetched just in time
         raise HTTPException(404, "Audio still being fetched")
-    bpm = conn.execute("SELECT bpm FROM tracks WHERE id = ?", (track_id,)).fetchone()[0]
-    return {"track_id": track_id, "audio": f"{_base()}/audio/{track_id}", **_find_rate(conn, bpm)}
+    t = conn.execute("SELECT * FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    names = {} if UI["hide_names_until_rated"] else {     # (2026-11-11) shown at once when − / next move on
+        "artist": t["artist"], "title": t["title"], "art": f"{_base()}/art/{t['id']}" if t["art_path"] else None,
+        "duration_s": t["duration_s"], "gain_db": t["gain_db"] or 0.0, "bpm": t["bpm"], "rating": None}
+    return {"track_id": track_id, "audio": f"{_base()}/audio/{track_id}", **_find_rate(conn, t["bpm"]), **names}
 
 
 _fetching: set[tuple] = set()
@@ -1484,11 +1536,8 @@ def rate(body: RateBody) -> dict:
         ratings.rate(conn, body.play_id, body.rating, body.played_seconds, body.played_bpm, body.playback_rate)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    reweight.after_rating(conn)
-    veto.update(conn)                         # likes changed: re-score, move tracks across the line
-    _to_playlist(conn, body.play_id)
-    session_worker().start_if_needed()
-    _rescore_all(skip=db.SESSION.get())          # the artist's value changed in the other playlists too
+    _added(conn, body.play_id)                   # a + is in the playlist before the answer goes back
+    _after_rating()                              # the rest in the background (2026-11-11: − / + felt slow)
     return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone())
 
 
@@ -1511,10 +1560,9 @@ def skip(body: SkipBody) -> dict:
         except ValueError as e:
             raise HTTPException(400, str(e))
         db.log_event(conn, "auto_rated", body.play_id, rating=auto)
-        reweight.after_rating(conn)
-        veto.update(conn)                     # likes changed: re-score, move tracks across the line
-        _rescore_all(skip=db.SESSION.get())
-    session_worker().start_if_needed()
+        _after_rating()
+    else:
+        session_worker().start_if_needed()
     return {**track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (body.play_id,)).fetchone()),
             "rated": True}
 
@@ -1527,12 +1575,8 @@ def change(body: ChangeBody) -> dict:
         play_id = ratings.change_last_rating(conn, body.rating, heard, body.play_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    _to_playlist(conn, play_id)                   # an Add joins the playlist / a changed-away Add leaves it
-    if db.SESSION.get() is not None:              # …and the tracks it found follow it
-        find.sync_seeds(db.connect_library(), conn, db.SESSION.get())
-    veto.update(conn)
-    _rescore_all(skip=db.SESSION.get())
-    session_worker().start_if_needed()
+    _added(conn, play_id)                         # an Add joins the playlist / a changed-away Add leaves it
+    _after_rating(seeds=True)                     # …and the tracks it found follow it, in the background
     return track_info(conn, conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone())
 
 

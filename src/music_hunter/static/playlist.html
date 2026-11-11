@@ -106,10 +106,10 @@ li.found { animation: found 1.4s ease-out; }
 .player .info .t { flex: 0 1 auto; }
 .vote { flex: none; width: 34px; height: 34px; border: 0; padding: 0; background: none; color: rgba(255, 255, 255, 0.75); display: grid; place-items: center; cursor: pointer; }
 .vote[hidden] { display: none; }
-.vote svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.vote svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 .vote:hover { color: var(--fg); }
-.vote.on svg circle { fill: var(--accent); stroke: var(--accent); }
-.vote.on svg path { stroke: #111; }
+.vote.on { color: var(--accent); }
+.vote.on svg { stroke-width: 3; }
 .round.loading { position: relative; }
 .round.loading::after { content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 2px solid transparent;
   border-top-color: var(--fg); animation: spin .8s linear infinite; }
@@ -252,8 +252,8 @@ li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba
   <div class="player-in">
     <img class="art" id="p-art" alt="">
     <div class="info"><div class="t" id="p-open"><b id="p-title"></b><span id="p-artist"></span><span class="meta" id="p-tempo"></span></div>
-      <button class="vote" id="down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></button>
-      <button class="vote" id="up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8M12 8v8"/></svg></button></div>
+      <button class="vote" id="down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+      <button class="vote" id="up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></button></div>
     <div class="controls">
       <button class="round" id="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg></button>
       <button class="round primary" id="play" aria-label="Play"><svg viewBox="0 0 24 24" id="play-icon"><path d="M7 4l13 8-13 8z"/></svg></button>
@@ -999,7 +999,7 @@ function showNow(t) {
   $("player").hidden = false;
   $("p-title").textContent = t.title; $("p-artist").textContent = t.artist;
   $("p-art").src = t.art || ""; $("p-art").style.visibility = t.art ? "visible" : "hidden";
-  Tint.apply(t.art, $("player"));                                  // grey with a hint of the song's cover
+  Tint.apply(data.image, $("player"));                             // the playlist's colours (2026-11-11), not the song's
   $("pos").textContent = "0:00"; $("dur").textContent = fmt(t.duration_s); $("seek").value = 0;
   setLoading(true);
   render();
@@ -1049,6 +1049,7 @@ window.__playerState = () => {
   const t = queue[pos];
   return t ? {title: t.title, artist: t.artist, art: t.art, playing: !audio.paused, t: audio.currentTime,
               d: audio.duration || t.duration_s, shuffle, note: $("p-tempo").textContent, loading: $("play").classList.contains("loading"),
+              tint: data.image,
               volume: Number($("volume").value) / 100 } : null;
 };
 window.__playerControl = (action, value) => ({
@@ -1204,21 +1205,31 @@ const Find = (() => {
           step: 0, hist: null};
     paint();
     await syncTempo();
+    const r = saved();
+    if (r && r.t.rating != null && r.t.rating !== DOWN) {   // left on a song already rated: back to it, same place
+      fm.cur = r.t;
+      return load(fm.cur, r.pos, r.played).then(prefetch);
+    }
     await next();
   }
   // Leaving (Play, a song, Find music again) only pauses Find music: the pick on air stays where it was, and coming
   // back carries on from there (it used to count the pick as heard and move on: 2026-11-11).
+  // The song on air and the place in it are kept on this device every few seconds (a page closed by the browser or
+  // the app doesn't always get to say goodbye), rated or not; coming back within 12 hours carries on there.
   const RESUME = `fmResume:${PID}`;
+  let lastSaved = 0;
   function remember() {
-    if (!fm || !fm.cur || fm.cur.rating != null) return;
+    if (!fm || !fm.cur || !fm.cur.play_id) return;
     const pos = fm.viewing === "current" ? audio.currentTime * fmTempo.rate() : (fm.resume ? fm.resume.pos : 0);
-    try { localStorage.setItem(RESUME, JSON.stringify({play_id: fm.cur.play_id, pos, played: fm.played})); } catch (e) {}
+    try { localStorage.setItem(RESUME, JSON.stringify({t: fm.cur, pos, played: fm.played, at: Date.now()})); } catch (e) {}
+    lastSaved = Date.now();
   }
-  function resumeFor(t) {
-    try { const r = JSON.parse(localStorage.getItem(RESUME) || "null"); return r && r.play_id === t.play_id ? r : null; }
-    catch (e) { return null; }
+  function saved() {
+    try { const r = JSON.parse(localStorage.getItem(RESUME) || "null");
+          return r && r.t && Date.now() - r.at < 12 * 3600e3 ? r : null; } catch (e) { return null; }
   }
   window.addEventListener("pagehide", remember);
+  audio.addEventListener("pause", () => { if (fm) remember(); });
   async function leave() {
     if (!fm) return;
     remember();
@@ -1228,17 +1239,51 @@ const Find = (() => {
     paint();
     loadFind();
   }
+  // The next song is fetched while this one plays, names and all; − or next start it at once, while the server
+  // records the rating and confirms the pick behind it (2026-11-11: moving on waited ~2 s for the Pi).
+  const blobs = new Map();
+  let upcoming = null, shown = null;
+  async function prefetch() {
+    if (!fm) return;
+    try {
+      const up = await call("/api/upcoming");
+      if (!up || !up.track_id) return;
+      fmTempo.prepare(up.track_id, up.copy_rate);
+      upcoming = up;
+      if (!blobs.has(up.track_id)) {
+        const res = await fetch(up.audio);
+        if (!res.ok) return;
+        blobs.set(up.track_id, URL.createObjectURL(await res.blob()));
+        for (const [id, url] of blobs) { if (blobs.size <= 3) break; if (url !== audio.src) { URL.revokeObjectURL(url); blobs.delete(id); } }
+      }
+    } catch (e) { /* only a speed-up */ }
+  }
+  function startUpcoming() {                              // play the song that's most likely next, before the server says
+    if (!upcoming || !blobs.has(upcoming.track_id) || upcoming.title == null) return false;
+    shown = {...upcoming, play_id: null};
+    fm.viewing = "current"; fm.prev = null; fm.resume = null; fm.step = 0; fm.hist = null;
+    fm.cur = shown;
+    load(shown, 0, 0);
+    return true;
+  }
   async function next() {
     let err = null;
     for (let i = 0; i < 3 && fm; i++) {
-      try { fm.cur = await call("/api/next", {}); err = null; break; }
+      try { const got = await call("/api/next", {});
+            if (shown && got.track_id === shown.track_id && onAir() === shown) { Object.assign(shown, got); fm.cur = shown; }
+            else { shown = null; fm.cur = got; }
+            err = null; break; }
       catch (e) { err = e; await new Promise((r) => setTimeout(r, 1000)); }
     }
     if (!fm) return;
     if (err) { toast(`Find music: ${err.message}`); return leave(); }
     fm.viewing = "current"; fm.prev = null; fm.resume = null; fm.step = 0; fm.hist = null;
-    const r = fm.cur.rating == null ? resumeFor(fm.cur) : null;   // the pick left on air: carry on from there
-    await load(fm.cur, r ? r.pos : 0, r ? r.played : 0);
+    const r = saved(), same = r && fm.cur.rating == null && r.t.play_id === fm.cur.play_id;   // the pick left on air
+    if (!(shown && shown.track_id === fm.cur.track_id && onAir() === fm.cur)) await load(fm.cur, same ? r.pos : 0, same ? r.played : 0);
+    else paint();
+    shown = null;
+    remember();
+    prefetch();
   }
   async function load(t, startAt, played) {
     fm.played = played; fm.lastPos = startAt;
@@ -1247,7 +1292,7 @@ const Find = (() => {
     await level(t.gain_db);
     Media.metadata({title: t.title, artist: t.artist, album: `Finding music for ${data.name}`, art: t.art});
     fetch(`/api/playlists/${PID}/played`, {method: "POST"}).catch(() => {});
-    const src = await fmTempo.start(t.track_id, t.audio, t.rate);
+    const src = await fmTempo.start(t.track_id, blobs.get(t.track_id) || t.audio, t.rate);
     if (!fm || onAir() !== t) return;
     audio.src = src;
     const at = startAt / fmTempo.rate();
@@ -1264,45 +1309,50 @@ const Find = (() => {
     const d = audio.currentTime - fm.lastPos;
     if (!audio.paused && d > 0 && d < 1.5) fm.played += d;
     fm.lastPos = audio.currentTime;
+    if (Date.now() - lastSaved > 3000) remember();
   });
   const tempoReport = () => {
     const t = onAir(), r = fmTempo.rate();
     return {played_bpm: t && t.bpm ? (r !== 1 ? data.tempo.target : t.bpm) : null, playback_rate: r};
   };
-  // A thumb: on the current pick, or on the previous one (only while it's still the latest rated).
+  // − / +: shown at once, saved behind (a + is in To rate as soon as the server has it, a fraction of a second);
+  // − moves on at once to the song fetched ahead. Tapping the lit one again takes it back to heard.
   async function rate(r) {
     if (!fm) return;
     const t = onAir();
     if (!t) return;
-    const was = thumb(t);
-    try {
-      let res;
-      if (fm.viewing === "previous") {
-        res = await call("/api/change", {...(was === r ? {rating: HEARD, heard: true} : {rating: r}), play_id: t.play_id});
-      } else if (t.rating == null) {
-        res = await call("/api/rate", {play_id: t.play_id, rating: r, played_seconds: Math.round(fm.played), ...tempoReport()});
-      } else {
-        res = await call("/api/change", {...(was === r ? {rating: HEARD, heard: true} : {rating: r}), play_id: t.play_id});
-      }
-      Object.assign(t, res, {heard: was === r});
-      if (t.heard) t.rating = HEARD;
-      if (fm.viewing === "previous" && fm.hist && fm.step) fm.hist[fm.step - 1] = t;   // stepping back and forth keeps it
-    } catch (e) { toast(`Couldn't save: ${e.message}`); return; }
+    for (let i = 0; i < 50 && !t.play_id; i++) await new Promise((ok) => setTimeout(ok, 100));   // still being confirmed
+    if (!t.play_id || onAir() !== t) return;
+    const was = thumb(t), undo = was === r, before = {rating: t.rating, heard: t.heard};
+    const prev = fm.viewing === "previous";
+    t.rating = undo ? HEARD : r; t.heard = undo;
     paint();
-    window.load && window.load();                         // a 👍 shows up in To rate (and leaves again if taken back)
-    if (r === UP && was !== UP) toast(`Added to ${data.name}`);
-    if (r === DOWN && was !== DOWN) return fm.viewing === "previous" ? forward() : next();   // 👎 moves on at once
-    if (audio.ended) fm.viewing === "previous" ? forward() : next();
+    if (r === UP && !undo) toast(`Added to ${data.name}`);
+    const moveOn = r === DOWN && !undo;
+    const body = before.rating == null && !prev
+      ? call("/api/rate", {play_id: t.play_id, rating: r, played_seconds: Math.round(fm.played), ...tempoReport()})
+      : call("/api/change", {...(undo ? {rating: HEARD, heard: true} : {rating: r}), play_id: t.play_id});
+    if (moveOn && !prev) startUpcoming();                 // the next song starts now; the server catches up
+    let res;
+    try { res = await body; }
+    catch (e) { Object.assign(t, before); paint(); toast(`Couldn't save: ${e.message}`); return; }
+    Object.assign(t, res, {heard: undo});
+    if (undo) t.rating = HEARD;
+    if (prev && fm.hist && fm.step) fm.hist[fm.step - 1] = t;   // stepping back and forth keeps it
+    if (onAir() === t) paint();
+    window.load && window.load();                         // a + shows up in To rate (and leaves again if taken back)
+    if (moveOn) return prev ? forward() : next();
+    if (audio.ended && onAir() === t) prev ? forward() : next();
   }
   async function skip() {
     if (!fm) return;
     if (fm.viewing === "previous") return forward();
     const t = fm.cur;
-    if (t && t.rating == null) {
-      try { await call("/api/skip", {play_id: t.play_id, played_seconds: Math.round(fm.played)}); }
-      catch (e) { toast(`Couldn't skip: ${e.message}`); return; }
-    }
+    if (!t || !t.play_id) return;
+    const skipping = t.rating == null ? call("/api/skip", {play_id: t.play_id, played_seconds: Math.round(fm.played)}) : null;
     report("skipped", {});
+    startUpcoming();
+    if (skipping) { try { await skipping; } catch (e) { toast(`Couldn't skip: ${e.message}`); } }
     next();
   }
   function ended() {
@@ -1357,7 +1407,7 @@ const Find = (() => {
     return {title: t.title || "", artist: t.artist || "", art: t.art, playing: !audio.paused, t: audio.currentTime,
             d: audio.duration || t.duration_s, shuffle: null, note: $("p-tempo").textContent,
             loading: $("play").classList.contains("loading"), volume: Number($("volume").value) / 100,
-            find: true, thumb: thumb(t)};
+            find: true, thumb: thumb(t), tint: data.image};
   }
   $("up").addEventListener("click", () => rate(UP));
   $("down").addEventListener("click", () => rate(DOWN));

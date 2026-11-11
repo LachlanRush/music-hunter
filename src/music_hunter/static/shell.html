@@ -38,10 +38,10 @@ iframe.page.behind { visibility: hidden; pointer-events: none; z-index: -1; }
 #mh-bar .info .t { flex: 0 1 auto; }
 #mh-bar .vote { flex: none; width: 34px; height: 34px; border: 0; padding: 0; background: none; color: rgba(255, 255, 255, 0.75); display: grid; place-items: center; cursor: pointer; }
 #mh-bar .vote[hidden] { display: none; }
-#mh-bar .vote svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+#mh-bar .vote svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 #mh-bar .vote:hover { color: var(--fg); }
-#mh-bar .vote.on svg circle { fill: var(--accent); stroke: var(--accent); }
-#mh-bar .vote.on svg path { stroke: #111; }
+#mh-bar .vote.on { color: var(--accent); }
+#mh-bar .vote.on svg { stroke-width: 3; }
 #mh-bar .round.on { color: var(--accent); }
 #mh-bar .t .note { font-size: 12px; color: rgba(255, 255, 255, 0.55); }
 #mh-bar .t .note:empty { display: none; }
