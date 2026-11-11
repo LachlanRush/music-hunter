@@ -19,9 +19,8 @@ else if (window.top !== window) document.documentElement.classList.add("framed")
 h1 { font: 700 20px/1.2 var(--display); margin: 0; }      /* the same as "Add" below */
 .status:empty { display: none; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
-.card { display: grid; gap: 4px; align-content: start; text-decoration: none; color: inherit; padding: 12px;
-  border-radius: var(--radius); background: rgba(255, 255, 255, 0.04); transition: background .2s; min-width: 0; }
-.card:hover { background: rgba(255, 255, 255, 0.09); }
+.card { display: grid; gap: 4px; align-content: start; text-decoration: none; color: inherit; min-width: 0; }
+.card:hover .cover { filter: brightness(1.08); }
 .cover { aspect-ratio: 1; border-radius: 6px; background: var(--raised); display: grid; place-items: center;
   overflow: hidden; font: 800 42px var(--display); color: var(--faint); margin-bottom: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
@@ -32,7 +31,7 @@ h1 { font: 700 20px/1.2 var(--display); margin: 0; }      /* the same as "Add" b
 .card .bar { margin-top: 6px; }
 @media (max-width: 600px) {                       /* phones: three across */
   .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-  .card { padding: 6px; gap: 2px; }
+  .card { gap: 2px; }
   .cover { margin-bottom: 6px; font-size: 28px; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4); }
   .card b { font-size: 13px; }
   .card .meta { font-size: 11px; }
@@ -57,7 +56,7 @@ h1 { font: 700 20px/1.2 var(--display); margin: 0; }      /* the same as "Add" b
 /* Dragging a playlist (into or out of a folder, or to a new place) */
 .card { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
 .card.dragging { opacity: .25; }
-.card.held { transform: scale(.97); background: rgba(255, 255, 255, 0.1); transition: transform .15s; }
+.card.held { transform: scale(.96); transition: transform .15s; }
 .menu.fixed { position: fixed; right: auto; top: auto; }
 .ghost { position: fixed; z-index: 50; pointer-events: none; width: 120px; border-radius: 6px; overflow: hidden;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6); transform: translate(-50%, -60%) scale(1.04); opacity: .95; }
