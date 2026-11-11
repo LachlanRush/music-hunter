@@ -194,7 +194,9 @@ document.addEventListener("click", async (e) => {
   }
   const more = e.target.closest("[data-folder-more]");
   const act = e.target.closest("[data-folder-act]");
-  document.querySelectorAll(".menu").forEach((m) => m.remove());
+  // (read before the menu goes: the Delete of a removed menu couldn't find its folder, so nothing happened)
+  const actName = act && act.closest(".folder")?.querySelector(".folder-toggle b")?.textContent;
+  document.querySelectorAll(".menu:not(.fixed)").forEach((m) => m.remove());
   if (more) {
     const m = document.createElement("div");
     m.className = "menu";
@@ -204,12 +206,12 @@ document.addEventListener("click", async (e) => {
     return;
   }
   if (act) {
-    const id = Number(act.dataset.id), name = act.closest(".folder").querySelector(".folder-name b").textContent;
+    const id = Number(act.dataset.id), name = actName || "this folder";
     try {
       if (act.dataset.folderAct === "rename") {
         const n = prompt("Folder name", name);
         if (n) await api(`/api/folders/${id}`, {name: n}, "PATCH");
-      } else if (confirm(`Delete the folder "${name}"? Its playlists stay; they just leave the folder.`)) {
+      } else if (confirm(`Delete the folder "${name}"? Its playlists stay; they move to Playlists.`)) {
         await api(`/api/folders/${id}`, undefined, "DELETE");
       }
     } catch (err) { showError(err.message); }
