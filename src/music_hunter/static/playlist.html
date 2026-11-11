@@ -82,8 +82,8 @@ li.found { animation: found 1.4s ease-out; }
 .more > button:hover { color: var(--fg); }
 .menu.sub-open .main-items { display: none; }
 
-/* The player: a solid bar along the bottom, in the playlist's colour */
-.player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--tint);
+/* The player: a bar along the bottom, the page blurred behind it */
+.player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: rgba(22, 22, 24, 0.55); -webkit-backdrop-filter: blur(30px) saturate(1.4); backdrop-filter: blur(30px) saturate(1.4);
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35); transition: background .6s; }
 .framed .player { display: none !important; }       /* in the browser shell its bar plays this part (static/shell.js) */
 .player-in { max-width: 1280px; margin: 0 auto; display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 12px; align-items: center; }

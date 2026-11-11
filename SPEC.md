@@ -1020,3 +1020,4 @@ All 297 rated plays on the Pi (289 tracks) re-downloaded (256; YouTube refused t
 - A tap or click outside any open box (Add to playlist, Edit details, a question) cancels and closes it.
 - **The coloured glow only on a playlist's page** (behind its header, from its cover), nowhere else; and none for a cover without a clear colour (no grey wash).
 - **App 0.3.8**: Add to queue across playlists (the app passes the song to the playing page); fixed a crash when a kept copy of a cover was half-written (a refresh and a page saving the same file at once shared one temporary name; a damaged copy is now dropped and fetched again).
+- **The player bar is see-through, the page blurred behind it** (frosted), instead of a grey with a hint of the song's colour.

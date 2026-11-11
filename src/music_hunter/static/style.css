@@ -138,7 +138,8 @@ body.mh-now-on { padding-bottom: 150px !important; }   /* room for the player ba
 
 /* The app's now playing bar on other pages (drawn by the app): the same look as a playlist's player */
 #mh-now { left: 0 !important; right: 0 !important; bottom: 0 !important; border: 0 !important; border-radius: 0 !important;
-  background: var(--tint) !important; box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35) !important;
+  background: rgba(22, 22, 24, 0.55) !important; -webkit-backdrop-filter: blur(30px) saturate(1.4); backdrop-filter: blur(30px) saturate(1.4);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35) !important;
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom)) !important; transition: background .6s; }
 #mh-now .art { border-radius: 5px !important; }
 #mh-now .round { border: 0 !important; background: transparent !important; color: var(--fg) !important; }

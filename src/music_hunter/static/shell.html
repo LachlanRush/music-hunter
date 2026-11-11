@@ -20,8 +20,8 @@ body { padding: 0; min-height: 0; }
 body::before { display: none; }
 iframe.page { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: var(--bg); }
 iframe.page.behind { visibility: hidden; pointer-events: none; z-index: -1; }
-/* The player bar: the same on every page, solid in the playing playlist's colour, along the bottom */
-#mh-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--tint);
+/* The player bar: the same on every page, along the bottom, the page blurred behind it */
+#mh-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: rgba(22, 22, 24, 0.55); -webkit-backdrop-filter: blur(30px) saturate(1.4); backdrop-filter: blur(30px) saturate(1.4);
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35); transition: background .6s; }
 #mh-bar .in { max-width: 1280px; margin: 0 auto; display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
 #mh-bar .art { width: 48px; height: 48px; border-radius: 5px; object-fit: cover; background: var(--raised); cursor: pointer; }
