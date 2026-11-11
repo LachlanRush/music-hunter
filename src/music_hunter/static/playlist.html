@@ -385,7 +385,9 @@ function render() {
     Tint.apply(d.image);                                   // the page's glow and accent from the cover
   }
   const n = (k) => `${k} track${k === 1 ? "" : "s"}`;
-  $("counts").textContent = n(d.tracks.length) + (d.tempo && d.tempo.target ? ` · ${Math.round(d.tempo.target)} BPM` : "");
+  const secs = d.tracks.reduce((a, t) => a + (t.duration_s || 0), 0), mins = Math.round(secs / 60);
+  const total = mins >= 60 ? `${Math.floor(mins / 60)} hr ${mins % 60} min` : `${mins} min`;   // like Spotify
+  $("counts").textContent = n(d.tracks.length) + ` · ${total}` + (d.tempo && d.tempo.target ? ` · ${Math.round(d.tempo.target)} BPM` : "");
   $("min-stars").value = String(d.min_stars || 0);
   $("min-stars").classList.toggle("on", !!d.min_stars);
   const sorted = sortOrder && sortOrder.ids;
