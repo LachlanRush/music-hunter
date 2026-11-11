@@ -66,7 +66,9 @@ def undo_of(c, play_id):
     return c.execute("SELECT undo_path FROM plays WHERE id = ?", (play_id,)).fetchone()[0]
 
 
-def test_scripted_ratings(conn):
+def test_scripted_ratings(conn, monkeypatch):
+    from music_hunter import ratings as R
+    monkeypatch.setattr(R, "BACK_STEPS", 1)            # the original rule: audio held until the next rating
     c = conn
     root = config.ROOT
     gen = c.execute("SELECT max(id) FROM generations").fetchone()[0]

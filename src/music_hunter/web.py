@@ -42,6 +42,7 @@ async def lifespan(app):
         if find.started(p["id"]):
             token = db.SESSION.set(p["id"])         # re-score under the current rules (a playlist not listened to
             try:                                    # since an update would otherwise keep its old state)
+                ratings.undo_leave_skips(db.connect(p["id"]))
                 veto.update(db.connect(p["id"]))
             except Exception as e:  # noqa: BLE001 — never block start-up
                 db.log_event(conn, "startup_rescore_failed", playlist_id=p["id"], error=str(e)[:200])
@@ -272,6 +273,7 @@ class SkipBody(BaseModel):
 class ChangeBody(BaseModel):
     rating: int
     heard: bool = False          # back to "heard, no rating" (counts as a skip)
+    play_id: int | None = None   # one of the last few (back), else the most recent
 
 
 class TagsBody(BaseModel):
@@ -1468,6 +1470,13 @@ def previous(exclude: int | None = None) -> dict:
     return {**track_info(conn, play), "can_change": can_change}
 
 
+@router.get("/api/recent")
+def recent(exclude: int | None = None) -> list[dict]:
+    """Where back goes (2026-11-11): the last few rated picks, newest first, each still changeable."""
+    conn = db.connect()
+    return [{**track_info(conn, p), "can_change": True} for p in ratings.recent_rated(conn, exclude)]
+
+
 @router.post("/api/rate")
 def rate(body: RateBody) -> dict:
     conn = db.connect()
@@ -1515,7 +1524,7 @@ def change(body: ChangeBody) -> dict:
     conn = db.connect()
     try:
         heard = body.heard and body.rating == CONFIG["ratings"]["unrated_counts_as"]
-        play_id = ratings.change_last_rating(conn, body.rating, heard)
+        play_id = ratings.change_last_rating(conn, body.rating, heard, body.play_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
     _to_playlist(conn, play_id)                   # an Add joins the playlist / a changed-away Add leaves it

@@ -29,6 +29,7 @@ from . import db
 from .config import CONFIG, path, relative, resolve
 
 SOURCES = ("lastfm", "ytmusic", "ytrelated", "deezer", "tidal")
+BACK_STEPS = CONFIG["ui"].get("back_steps", 3)     # how far back Find music's back button goes (2026-11-11)
 AVG = CONFIG["averages"]
 POSITIVE_WEIGHTS = {int(k): v for k, v in CONFIG["ratings"]["positive_weights"].items()}
 NEGATIVE_WEIGHTS = {int(k): v for k, v in CONFIG["ratings"]["negative_weights"].items()}
@@ -283,16 +284,50 @@ def previous_play(conn: sqlite3.Connection, exclude: int | None = None):
                         (exclude or -1,)).fetchone()
 
 
+def undo_leave_skips(conn: sqlite3.Connection) -> int:
+    """One-off (2026-11-11): leaving Find music in the bar counted the pick on air as heard (0 s played), so leaving
+    and coming back moved on and those songs were never offered again. Those plays are removed: the songs return to
+    the pool (their audio back from data/undo/ where it's still there, else fetched again like any missing file)."""
+    if db.get_setting(conn, "leave_skips_undone"):
+        return 0
+    rows = conn.execute("SELECT * FROM plays WHERE auto_rated = 1 AND coalesce(played_seconds, 0) = 0"
+                        " AND rated_at >= '2026-11-11 18:19' AND rated_at < '2026-11-11 20:30'").fetchall()
+    with conn:
+        for r in rows:
+            t = conn.execute("SELECT file_path FROM tracks WHERE id = ?", (r["track_id"],)).fetchone()
+            back = r["undo_path"] if r["undo_path"] and resolve(r["undo_path"]).exists() else None
+            conn.execute("UPDATE tracks SET rating = NULL, file_path = coalesce(file_path, ?) WHERE id = ?",
+                         (back, r["track_id"]))
+            conn.execute("DELETE FROM plays WHERE id = ?", (r["id"],))
+    db.set_setting(conn, "leave_skips_undone", len(rows))
+    if rows:
+        db.log_event(conn, "leave_skips_undone", plays=[r["id"] for r in rows])
+    return len(rows)
+
+
+def recent_rated(conn: sqlite3.Connection, exclude: int | None = None) -> list:
+    """The last [ui] back_steps rated plays, newest first (`exclude`: the play on screen): where back goes, and
+    whose ratings can still be changed."""
+    return [r for r in conn.execute("SELECT * FROM plays WHERE rating IS NOT NULL ORDER BY rated_at DESC, id DESC"
+                                    " LIMIT ?", (BACK_STEPS,)).fetchall() if r["id"] != exclude]
+
+
 def last_rated(conn: sqlite3.Connection):
     return conn.execute("SELECT * FROM plays WHERE rating IS NOT NULL ORDER BY rated_at DESC, id DESC LIMIT 1"
                         ).fetchone()
 
 
-def change_last_rating(conn: sqlite3.Connection, rating: int, heard: bool = False) -> int:
-    """Correct the most recent rating (mis-tap). Returns the play ID. `heard`: taken back to no rating (a thumb
-    tapped again, 2026-11-11) — stored as the unrated value, marked automatic like a skip."""
+def change_last_rating(conn: sqlite3.Connection, rating: int, heard: bool = False, play_id: int | None = None) -> int:
+    """Correct a rating: the most recent, or (`play_id`) one of the last [ui] back_steps. Returns the play ID.
+    `heard`: taken back to no rating (a + or − tapped again, 2026-11-11) — stored as the unrated value, marked
+    automatic like a skip."""
     _check(rating)
-    play = last_rated(conn)
+    if play_id is None:
+        play = last_rated(conn)
+    else:
+        play = next((r for r in recent_rated(conn) if r["id"] == play_id), None)
+        if play is None:
+            raise ValueError(f"Only the last {BACK_STEPS} ratings can be changed")
     if play is None:
         raise ValueError("Nothing has been rated yet")
     db.log_event(conn, "rating_changed", play["id"], old=play["rating"], new=rating)
@@ -365,9 +400,13 @@ def _purge_skipped(conn: sqlite3.Connection) -> None:
 
 
 def _purge_undo(conn: sqlite3.Connection) -> None:
-    """A new rating makes earlier ones final: delete audio held for tracks not Added."""
+    """A new rating pushes the oldest of the last few out of reach of back ([ui] back_steps, 2026-11-11: three): its
+    audio, held for tracks not Added, is deleted. Called before the new rating is recorded."""
+    keep = [r[0] for r in conn.execute("SELECT id FROM plays WHERE rating IS NOT NULL ORDER BY rated_at DESC, id DESC"
+                                       " LIMIT ?", (max(BACK_STEPS - 1, 0),))]
     with conn:
-        for r in conn.execute("SELECT id, undo_path FROM plays WHERE undo_path IS NOT NULL").fetchall():
+        for r in conn.execute("SELECT id, undo_path FROM plays WHERE undo_path IS NOT NULL"
+                              f" AND id NOT IN ({','.join('?' * len(keep)) or '-1'})", keep).fetchall():
             conn.execute("UPDATE plays SET undo_path = NULL WHERE id = ?", (r["id"],))
             if not db.audio_in_use(r["undo_path"], skip=conn):
                 resolve(r["undo_path"]).unlink(missing_ok=True)

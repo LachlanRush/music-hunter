@@ -292,7 +292,7 @@ def test_session(conn, monkeypatch):
     added = [p for p in plays if p["rating"] == ADD]
     assert len(list((config.ROOT / "library").glob("*.*"))) == len(added) > 0
     held = c.execute("SELECT count(*) FROM plays WHERE undo_path IS NOT NULL").fetchone()[0]
-    assert held <= 1
+    assert held <= ratings.BACK_STEPS                  # the last few ratings' audio (back goes that far)
     assert all(p["target_bpm"] == 128.0 for p in plays)
     assert sum(1 for p in plays if p["playback_rate"] == 1.04) > 20
 
@@ -343,3 +343,21 @@ def test_thumb_taken_back_counts_as_heard(conn):
     assert tuple(conn.execute("SELECT rating, auto_rated FROM plays WHERE id = ?", (play_id,)).fetchone()) == (2, 1)
     ratings.change_last_rating(conn, 1)
     assert tuple(conn.execute("SELECT rating, auto_rated FROM plays WHERE id = ?", (play_id,)).fetchone()) == (1, 0)
+
+
+def test_back_three_and_change_any_of_them(conn):
+    """2026-11-11: back steps through the last three rated picks; any of them can be changed, older ones can't."""
+    ids = []
+    for r in (1, 2, 3, 1):
+        p = ratings.show_next(conn)
+        ratings.rate(conn, p, r, 5)
+        ids.append(p)
+    recent = [r["id"] for r in ratings.recent_rated(conn)]
+    assert recent == ids[::-1][:3]
+    ratings.change_last_rating(conn, 3, play_id=ids[1])
+    assert conn.execute("SELECT rating FROM plays WHERE id = ?", (ids[1],)).fetchone()[0] == 3
+    import pytest
+    with pytest.raises(ValueError):
+        ratings.change_last_rating(conn, 3, play_id=ids[0])          # four back: out of reach
+    held = {r[0] for r in conn.execute("SELECT id FROM plays WHERE undo_path IS NOT NULL")}
+    assert ids[0] not in held                                         # its audio went with it

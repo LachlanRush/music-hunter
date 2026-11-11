@@ -100,9 +100,16 @@ li.found { animation: found 1.4s ease-out; }
 .round svg { width: 18px; height: 18px; fill: currentColor; }
 .round.primary { background: var(--fg); color: #111; }
 .round.on { color: var(--accent); }
-.round.thumb svg { width: 20px; height: 20px; }
 .round[hidden] { display: none; }
-.round.thumb.on { color: #111; background: var(--accent); }
+/* Find music's − / + beside the song's name (2026-11-11; like Spotify's +): outlined, filled once chosen */
+.player .info { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.player .info .t { flex: 0 1 auto; }
+.vote { flex: none; width: 34px; height: 34px; border: 0; padding: 0; background: none; color: rgba(255, 255, 255, 0.75); display: grid; place-items: center; cursor: pointer; }
+.vote[hidden] { display: none; }
+.vote svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.vote:hover { color: var(--fg); }
+.vote.on svg circle { fill: var(--accent); stroke: var(--accent); }
+.vote.on svg path { stroke: #111; }
 .round.loading { position: relative; }
 .round.loading::after { content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 2px solid transparent;
   border-top-color: var(--fg); animation: spin .8s linear infinite; }
@@ -244,12 +251,12 @@ li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba
 <div class="player" id="player" hidden>
   <div class="player-in">
     <img class="art" id="p-art" alt="">
-    <div class="t" id="p-open"><b id="p-title"></b><span id="p-artist"></span><span class="meta" id="p-tempo"></span></div>
+    <div class="info"><div class="t" id="p-open"><b id="p-title"></b><span id="p-artist"></span><span class="meta" id="p-tempo"></span></div>
+      <button class="vote" id="down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></button>
+      <button class="vote" id="up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8M12 8v8"/></svg></button></div>
     <div class="controls">
       <button class="round" id="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg></button>
-      <button class="round thumb" id="down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg></button>
       <button class="round primary" id="play" aria-label="Play"><svg viewBox="0 0 24 24" id="play-icon"><path d="M7 4l13 8-13 8z"/></svg></button>
-      <button class="round thumb" id="up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg></button>
       <button class="round" id="next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg></button>
       <button class="round" id="shuffle" aria-label="Shuffle" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 7h3.5l7 10H18v-2l3 3-3 3v-2h-4.5l-7-10H4zm10.5 0H18V5l3 3-3 3V9h-3.5l-1.6 2.3-1.2-1.7zM4 17h3.5l1.6-2.3 1.2 1.7L8.5 19H4z"/></svg></button>
     </div>
@@ -1191,19 +1198,32 @@ const Find = (() => {
   async function start() {
     queue = []; pos = -1; upNext = [];
     audio.pause();
-    fm = {cur: null, prev: null, viewing: "current", resume: null, played: 0, lastPos: 0, loadStart: 0, waiting: false};
+    fm = {cur: null, prev: null, viewing: "current", resume: null, played: 0, lastPos: 0, loadStart: 0, waiting: false,
+          step: 0, hist: null};
     paint();
     await syncTempo();
     await next();
   }
-  async function leave() {                                // back to the playlist: an unrated pick counts as heard
+  // Leaving (Play, a song, Find music again) only pauses Find music: the pick on air stays where it was, and coming
+  // back carries on from there (it used to count the pick as heard and move on: 2026-11-11).
+  const RESUME = `fmResume:${PID}`;
+  function remember() {
+    if (!fm || !fm.cur || fm.cur.rating != null) return;
+    const pos = fm.viewing === "current" ? audio.currentTime * fmTempo.rate() : (fm.resume ? fm.resume.pos : 0);
+    try { localStorage.setItem(RESUME, JSON.stringify({play_id: fm.cur.play_id, pos, played: fm.played})); } catch (e) {}
+  }
+  function resumeFor(t) {
+    try { const r = JSON.parse(localStorage.getItem(RESUME) || "null"); return r && r.play_id === t.play_id ? r : null; }
+    catch (e) { return null; }
+  }
+  window.addEventListener("pagehide", remember);
+  async function leave() {
     if (!fm) return;
-    const t = fm.cur;
+    remember();
     fm = null;
     fmTempo.start(null, "", 1);                           // (cancels a copy still being followed)
     audio.pause();
     paint();
-    if (t && t.rating == null) call("/api/skip", {play_id: t.play_id, played_seconds: 0}).catch(() => {});
     loadFind();
   }
   async function next() {
@@ -1214,8 +1234,9 @@ const Find = (() => {
     }
     if (!fm) return;
     if (err) { toast(`Find music: ${err.message}`); return leave(); }
-    fm.viewing = "current"; fm.prev = null; fm.resume = null;
-    await load(fm.cur, 0, 0);
+    fm.viewing = "current"; fm.prev = null; fm.resume = null; fm.step = 0; fm.hist = null;
+    const r = fm.cur.rating == null ? resumeFor(fm.cur) : null;   // the pick left on air: carry on from there
+    await load(fm.cur, r ? r.pos : 0, r ? r.played : 0);
   }
   async function load(t, startAt, played) {
     fm.played = played; fm.lastPos = startAt;
@@ -1255,15 +1276,15 @@ const Find = (() => {
     try {
       let res;
       if (fm.viewing === "previous") {
-        if (!t.can_change) { toast("Only the latest pick can still be changed"); return; }
-        res = await call("/api/change", was === r ? {rating: HEARD, heard: true} : {rating: r});
+        res = await call("/api/change", {...(was === r ? {rating: HEARD, heard: true} : {rating: r}), play_id: t.play_id});
       } else if (t.rating == null) {
         res = await call("/api/rate", {play_id: t.play_id, rating: r, played_seconds: Math.round(fm.played), ...tempoReport()});
       } else {
-        res = await call("/api/change", was === r ? {rating: HEARD, heard: true} : {rating: r});
+        res = await call("/api/change", {...(was === r ? {rating: HEARD, heard: true} : {rating: r}), play_id: t.play_id});
       }
       Object.assign(t, res, {heard: was === r});
       if (t.heard) t.rating = HEARD;
+      if (fm.viewing === "previous" && fm.hist && fm.step) fm.hist[fm.step - 1] = t;   // stepping back and forth keeps it
     } catch (e) { toast(`Couldn't save: ${e.message}`); return; }
     paint();
     window.load && window.load();                         // a 👍 shows up in To rate (and leaves again if taken back)
@@ -1287,23 +1308,35 @@ const Find = (() => {
     report("ended", {rated: onAir() ? onAir().rating : null, played_s: Math.round(fm.played)});
     if (fm.viewing === "previous") forward(); else skip();
   }
+  // Back: a few seconds into a song it restarts; else it steps back through the last [ui] back_steps picks, whose
+  // + / − can still be changed. Next steps forward again, then returns to the pick on air.
   async function back() {
     if (!fm) return;
-    if (fm.viewing === "previous" || audio.currentTime >= BACK_S()) { audio.currentTime = 0; fm.lastPos = 0; return; }
-    let t;
-    try {
-      const ex = fm.cur && fm.cur.rating != null ? `?exclude=${fm.cur.play_id}` : "";
-      t = await call(`/api/previous${ex}`);
-    } catch (e) { audio.currentTime = 0; return; }
-    fm.resume = fm.cur ? {pos: audio.currentTime * fmTempo.rate(), played: fm.played} : null;
+    if (audio.currentTime >= BACK_S()) { audio.currentTime = 0; fm.lastPos = 0; return; }
+    if (!fm.hist || fm.viewing === "current") {
+      try { fm.hist = await call(`/api/recent${fm.cur ? `?exclude=${fm.cur.play_id}` : ""}`); }
+      catch (e) { fm.hist = []; }
+    }
+    if (fm.step >= fm.hist.length) { audio.currentTime = 0; return; }   // as far back as it goes
+    if (fm.viewing === "current") fm.resume = fm.cur && fm.cur.rating !== DOWN ? {pos: audio.currentTime * fmTempo.rate(), played: fm.played} : null;
+    fm.step += 1;
+    const t = fm.hist[fm.step - 1];
     fm.viewing = "previous"; fm.prev = {...t, heard: t.rating === HEARD};
-    report("back", {to: t.play_id});
+    report("back", {to: t.play_id, steps: fm.step});
     await load(fm.prev, 0, 0);
   }
   async function forward() {
     if (!fm) return;
+    fm.step = Math.max(0, fm.step - 1);
+    if (fm.step > 0 && fm.hist) {
+      const t = fm.hist[fm.step - 1];
+      fm.prev = {...t, heard: t.rating === HEARD};
+      return load(fm.prev, 0, 0);
+    }
     fm.viewing = "current"; fm.prev = null;
-    if (fm.cur && fm.cur.rating !== DOWN && fm.resume) { const r = fm.resume; fm.resume = null; await load(fm.cur, r.pos, r.played); }
+    const playOn = fm.cur && fm.cur.rating !== DOWN;     // the pick on air, unless it got a − (then the next one)
+    if (playOn && fm.resume) { const r = fm.resume; fm.resume = null; await load(fm.cur, r.pos, r.played); }
+    else if (playOn && fm.cur.rating == null) await load(fm.cur, 0, 0);
     else next();
   }
   function followTempo() {                                // the playlist's Set to BPM changed: Find music follows

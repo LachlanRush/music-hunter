@@ -49,7 +49,7 @@ h1 { font: 700 20px/1.2 var(--display); margin: 0; }      /* the same as "Add" b
 .folder-toggle b { font: 700 16px/1.3 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .folder-toggle .meta { margin-left: 4px; }
 .folder-toggle:hover b { text-decoration: underline; text-underline-offset: 3px; }
-.folder-more { position: relative; margin-left: -6px; }        /* ⋯ before the name (2026-11-11) */
+.folder-more { position: relative; margin-left: 2px; }         /* ⋯ right after the folder's info (2026-11-11) */
 .folder-more .icon-btn { width: 32px; height: 32px; display: inline-block; }
 .folder-more .menu { left: 0; right: auto; }
 .folder .grid { padding: 6px 0 18px 0; }
@@ -176,9 +176,9 @@ function show(lists, folders) {
     const key = String(f.id);
     return `<div class="folder ${closed.has(key) ? "closed" : ""}" data-folder="${f.id}">
       <div class="folder-head">
-        ${f.builtin ? `<div class="folder-more" aria-hidden="true"><span class="icon-btn"></span></div>` : `<div class="folder-more"><button class="icon-btn" data-folder-more="${f.id}" aria-label="More for ${esc(f.name)}">⋯</button></div>`}
         <span class="folder-toggle" data-toggle="${key}" role="button" tabindex="0" aria-expanded="${!closed.has(key)}">
           ${CHEV}<b>${esc(f.name)}</b>${f.builtin ? "" : `<span class="meta">${totalLine(f)}</span>`}</span>
+        ${f.builtin ? "" : `<div class="folder-more"><button class="icon-btn" data-folder-more="${f.id}" aria-label="More for ${esc(f.name)}">⋯</button></div>`}
       </div>
       <div class="grid">${inside.map(card).join("")}</div>
     </div>`;

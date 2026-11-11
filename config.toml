@@ -308,6 +308,7 @@ play_to_end = [2, 3]             # ratings that keep playing to the end (Close, 
 preload_next = true              # v3: while a track plays, fetch the likely next track's audio into memory
 stall_log_ms = 250               # v3: only log playback stalls at least this long (v2 logged ~500 of 0–20 ms)
 back_restart_s = 5               # v5: the back button restarts the track once it's this many seconds in (both players)
+back_steps = 3                   # Find music: back goes this many picks back, and their + / − can still be changed (2026-11-11)
 
 [tempo]
 # SPEC.md §16.4 — held steady during an evaluation run: a changing target changes what "top-scored" means.
