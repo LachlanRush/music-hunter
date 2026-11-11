@@ -6,64 +6,81 @@
 <title>Music Hunter</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400..800&display=swap">
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/icon-192.png">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="stylesheet" href="/static/style.css">
 <style>
-h1 { font: 800 clamp(28px, 5vw, 40px)/1.05 var(--display); font-stretch: 112%; margin: 0; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px; }
-.card { display: grid; gap: 8px; text-decoration: none; color: inherit; }
-.cover { aspect-ratio: 1; border-radius: 6px; background: var(--surface); border: 1px solid var(--line);
-  display: grid; place-items: center; overflow: hidden; font: 800 42px var(--display); color: var(--muted); }
+h1 { font: 800 clamp(28px, 6vw, 40px)/1.1 var(--display); letter-spacing: -0.02em; margin: 8px 0 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+.card { display: grid; gap: 4px; align-content: start; text-decoration: none; color: inherit; padding: 12px;
+  border-radius: var(--radius); background: rgba(255, 255, 255, 0.04); transition: background .2s; min-width: 0; }
+.card:hover { background: rgba(255, 255, 255, 0.09); }
+.cover { aspect-ratio: 1; border-radius: 6px; background: var(--raised); display: grid; place-items: center;
+  overflow: hidden; font: 800 42px var(--display); color: var(--faint); margin-bottom: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
 .cover img { width: 100%; height: 100%; object-fit: cover; }
-.card:hover .cover { border-color: var(--fg); }
-.card b { font: 700 15px/1.25 var(--display); overflow-wrap: anywhere; }
-.meta { font: 400 12px/1.4 var(--mono); color: var(--muted); }
-.bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
-.bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+.card b { font: 700 15px/1.3 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .desc { font-size: 13px; line-height: 1.35; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden; }
+.card .bar { margin-top: 6px; }
+
+/* Folders: one level, opened and closed with the arrow; the playlists inside stay one tap away */
+.folders { display: grid; gap: 6px; }
+.folder-head { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 10px; align-items: center;
+  padding: 10px 6px 10px 10px; border-radius: var(--radius); }
+.folder-head:hover { background: rgba(255, 255, 255, 0.05); }
+.folder-toggle { display: contents; cursor: pointer; }
+.folder-toggle .chev { width: 24px; height: 24px; fill: var(--muted); transition: transform .2s; }
+.folder.closed .chev { transform: rotate(-90deg); }
+.folder-icon { width: 44px; height: 44px; border-radius: 6px; background: var(--raised); display: grid; place-items: center; }
+.folder-icon svg { width: 22px; height: 22px; fill: var(--muted); }
+.folder-name { min-width: 0; }
+.folder-name b { display: block; font: 700 16px/1.3 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folder .grid { padding: 6px 0 14px 0; }
+.folder.closed .grid { display: none; }
+.folder-more { position: relative; }
+
+.add { display: grid; gap: 12px; padding-top: 12px; }
+.add h2 { font: 700 20px/1.2 var(--display); margin: 0; }
 form { display: flex; flex-wrap: wrap; gap: 8px; }
-form input { flex: 1 1 260px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px;
-  background: var(--surface); color: var(--fg); font: 400 14px var(--body); }
-form button, .btn { padding: 10px 14px; border-radius: 6px; border: 1px solid var(--fg); background: var(--fg);
-  color: var(--bg); font: 600 14px var(--body); }
-form button.secondary, .btn.secondary { background: var(--surface); color: var(--fg); border-color: var(--line); }
-.add { display: grid; gap: 14px; border-top: 1px solid var(--line); padding-top: 22px; }
-.error { color: var(--bad); font-size: 14px; }
-.empty { color: var(--muted); }
+form input { flex: 1 1 260px; min-width: 0; }
+.add .btn { padding: 9px 18px; }
 </style>
 </head>
 <body>
 <main>
   <header>
-    <nav><a class="brand" href="/">MUSIC HUNTER</a></nav>
+    <nav><a class="brand" href="/">Music Hunter</a></nav>
     <div class="status" id="status"></div>
   </header>
 
-  <section>
-    <h1>Playlists</h1>
-  </section>
+  <h1>Your playlists</h1>
 
+  <section class="folders" id="folders" aria-label="Folders"></section>
   <section class="grid" id="grid" aria-label="Your playlists"><div class="empty">Loading…</div></section>
 
   <section class="add" aria-labelledby="h-add">
-    <div class="label" id="h-add">Add a playlist</div>
+    <h2 id="h-add">Add</h2>
     <form id="import-form">
       <input id="spotify" type="url" placeholder="Spotify playlist link — https://open.spotify.com/playlist/…" aria-label="Spotify playlist link" required>
-      <button type="submit">Import</button>
+      <button type="submit" class="btn primary">Import</button>
     </form>
     <form id="new-form">
       <input id="name" type="text" placeholder="Name for an empty playlist" aria-label="New playlist name" required>
-      <label class="btn secondary" id="new-picture-label">Picture<input id="new-picture" type="file" accept="image/*" hidden></label>
-      <button type="submit" class="secondary">Create</button>
+      <label class="btn" id="new-picture-label">Picture<input id="new-picture" type="file" accept="image/*" hidden></label>
+      <button type="submit" class="btn">Create</button>
     </form>
+    <div><button class="btn" id="new-folder">New folder</button></div>
     <div class="error" id="error" hidden></div>
   </section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const FOLDER = '<svg viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h5l2 2h8A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>';
+const CHEV = '<svg class="chev" viewBox="0 0 24 24"><path d="M7 9.5l5 5 5-5z"/></svg>';
 
 async function api(path, body, method) {
   const res = await fetch(path, body === undefined && !method ? {} : {
@@ -81,23 +98,87 @@ function jobLine(job) {
   return `<div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
     <div class="meta">${job.state === "queued" ? "Waiting to import…" : `Importing ${p.done || 0} of ${p.total || "?"}`}</div>`;
 }
+const card = (p) => `
+  <a class="card" href="/playlist/${p.id}">
+    <div class="cover">${p.image ? `<img src="${p.image}" alt="">` : esc((p.name || "?")[0].toUpperCase())}</div>
+    <b>${esc(p.name)}</b>
+    <div class="meta">${p.tracks} track${p.tracks === 1 ? "" : "s"}</div>
+    ${p.description ? `<div class="desc">${esc(p.description)}</div>` : ""}
+    ${jobLine(p.job)}
+  </a>`;
+
+// Which folders are closed is remembered on this device.
+const closed = (() => { try { return new Set(JSON.parse(localStorage.getItem("closedFolders") || "[]")); } catch (e) { return new Set(); } })();
+function saveClosed() { try { localStorage.setItem("closedFolders", JSON.stringify([...closed])); } catch (e) {} }
 
 let timer = null;
 async function load() {
   try {
-    const lists = await api("/api/playlists");
-    $("grid").innerHTML = lists.length ? lists.map((p) => `
-      <a class="card" href="/playlist/${p.id}">
-        <div class="cover">${p.image ? `<img src="${p.image}" alt="">` : esc((p.name || "?")[0].toUpperCase())}</div>
-        <b>${esc(p.name)}</b>
-        <div class="meta">${p.tracks} tracks</div>
-        ${jobLine(p.job)}
-      </a>`).join("") : `<div class="empty">No playlists yet. Import one from Spotify below.</div>`;
+    const [lists, folders] = await Promise.all([api("/api/playlists"), api("/api/folders")]);
+    $("folders").innerHTML = folders.map((f) => {
+      const inside = lists.filter((p) => p.folder_id === f.id);
+      return `<div class="folder ${closed.has(f.id) ? "closed" : ""}" data-folder="${f.id}">
+        <div class="folder-head">
+          <span class="folder-toggle" data-toggle="${f.id}" role="button" tabindex="0" aria-expanded="${!closed.has(f.id)}">
+            ${CHEV}<span class="folder-icon">${FOLDER}</span>
+            <span class="folder-name"><b>${esc(f.name)}</b><span class="meta">${inside.length} playlist${inside.length === 1 ? "" : "s"}</span></span>
+          </span>
+          <div class="folder-more"><button class="icon-btn" data-folder-more="${f.id}" aria-label="More for ${esc(f.name)}">⋯</button></div>
+        </div>
+        <div class="grid">${inside.length ? inside.map(card).join("") : `<div class="empty meta">Empty — move playlists here from their ⋯ menu.</div>`}</div>
+      </div>`;
+    }).join("");
+    const loose = lists.filter((p) => !p.folder_id || !folders.some((f) => f.id === p.folder_id));
+    $("grid").innerHTML = loose.length ? loose.map(card).join("")
+      : lists.length ? "" : `<div class="empty">No playlists yet. Import one from Spotify below.</div>`;
     const busy = lists.some((p) => p.job && (p.job.state === "running" || p.job.state === "queued"));
     clearTimeout(timer);
     if (busy) timer = setTimeout(load, 3000);
   } catch (e) { $("status").textContent = "Can't reach the music-hunter server."; }
 }
+
+document.addEventListener("click", async (e) => {
+  const toggle = e.target.closest("[data-toggle]");
+  if (toggle) {
+    const id = Number(toggle.dataset.toggle), box = toggle.closest(".folder");
+    box.classList.toggle("closed");
+    box.classList.contains("closed") ? closed.add(id) : closed.delete(id);
+    toggle.setAttribute("aria-expanded", String(!box.classList.contains("closed")));
+    saveClosed();
+    return;
+  }
+  const more = e.target.closest("[data-folder-more]");
+  const act = e.target.closest("[data-folder-act]");
+  document.querySelectorAll(".menu").forEach((m) => m.remove());
+  if (more) {
+    const m = document.createElement("div");
+    m.className = "menu";
+    m.innerHTML = `<button data-folder-act="rename" data-id="${more.dataset.folderMore}">Rename</button>
+      <button data-folder-act="delete" data-id="${more.dataset.folderMore}" style="color:var(--bad)">Delete folder</button>`;
+    more.parentElement.appendChild(m);
+    return;
+  }
+  if (act) {
+    const id = Number(act.dataset.id), name = act.closest(".folder").querySelector(".folder-name b").textContent;
+    try {
+      if (act.dataset.folderAct === "rename") {
+        const n = prompt("Folder name", name);
+        if (n) await api(`/api/folders/${id}`, {name: n}, "PATCH");
+      } else if (confirm(`Delete the folder "${name}"? Its playlists stay; they just leave the folder.`)) {
+        await api(`/api/folders/${id}`, undefined, "DELETE");
+      }
+    } catch (err) { showError(err.message); }
+    load();
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-toggle]")) { e.preventDefault(); e.target.click(); }
+});
+$("new-folder").addEventListener("click", async () => {
+  const name = prompt("Folder name");
+  if (!name) return;
+  try { await api("/api/folders", {name}); load(); } catch (e) { showError(e.message); }
+});
 
 $("import-form").addEventListener("submit", async (e) => {
   e.preventDefault(); showError("");

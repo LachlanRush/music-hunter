@@ -6,26 +6,22 @@
 <title>Results · Music Hunter</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400..800&display=swap">
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/icon-192.png">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="stylesheet" href="/static/style.css">
 <style>
 /* Off red, Add blue: the app's diverging rating pair (validated earlier on these surfaces). */
-.viz { --off: #e34948; --add: #2a78d6; --grid: #e1e5e9; }
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) .viz { --off: #e66767; --add: #3987e5; --grid: #2b3137; }
-}
-:root[data-theme="dark"] .viz { --off: #e66767; --add: #3987e5; --grid: #2b3137; }
+.viz { --off: #e66767; --add: #3987e5; --grid: rgba(255, 255, 255, 0.1); }   /* the app is always dark now */
 main { max-width: 860px; }
-h1 { font: 800 clamp(26px, 5vw, 40px)/1.05 var(--display); font-stretch: 112%; margin: 0; }
+h1 { font: 800 clamp(26px, 5vw, 40px)/1.05 var(--display); letter-spacing: -0.02em; margin: 0; }
 .sub { color: var(--muted); margin: 0; max-width: 68ch; font-size: 14px; }
 .legend { display: flex; gap: 16px; font-size: 13px; color: var(--muted); }
 .legend i { display: inline-block; width: 14px; height: 2px; margin-right: 6px; vertical-align: 3px; }
 .chart h2 { margin: 2px 4px 8px; font: 700 17px var(--display); }
 .chart .sub { margin: 2px 4px 8px; font-size: 13px; }
-.chart { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 12px 6px; }
+.chart { background: rgba(255, 255, 255, 0.04); border: 0; border-radius: 10px; padding: 12px 12px 6px; }
 svg { display: block; width: 100%; height: auto; overflow: visible; touch-action: none; }
 svg text { font: 400 11px var(--mono); fill: var(--muted); }
 svg text.end { font: 600 12px var(--body); }
@@ -36,7 +32,7 @@ svg text.end { font: 600 12px var(--body); }
 <body>
 <main class="viz">
   <header>
-    <nav><a class="brand" href="/">MUSIC HUNTER</a><a class="backlink" id="back" href="/" aria-label="Back to the playlist">←</a></nav>
+    <nav><a class="brand" href="/">Music Hunter</a><a class="backlink" id="back" href="/" aria-label="Back to the playlist">‹</a></nav>
   </header>
   <section style="display:grid;gap:8px">
     <h1 id="name">Results</h1>

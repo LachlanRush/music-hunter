@@ -175,6 +175,13 @@ CREATE TABLE IF NOT EXISTS playlists (
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 2026-11-11: folders group playlists on the home page (one level, no nesting).
+CREATE TABLE IF NOT EXISTS folders (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS playlist_tracks (
     playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
     track_id    INTEGER NOT NULL REFERENCES tracks(id),
@@ -320,6 +327,7 @@ MIGRATIONS = [
     ("tracks", "gate_since_at", "TEXT"),              # v5: …and when (the grace also ends after grace_days)              # v5: rating count when a playable track fell below the gate
     ("tracks", "redownloads", "INTEGER"),             # v5: times its audio was downloaded again after being dropped
     ("playlist_tracks", "starred_at", "TEXT"),
+    ("playlists", "folder_id", "INTEGER REFERENCES folders(id) ON DELETE SET NULL"),   # its folder on the home page
     ("playlist_tracks", "bpm_override", "REAL"),        # v5: this track's own "Play at … BPM" in this playlist         # v5: when its stars were last set (order within the same stars)
     ("tracks", "veto_state", "TEXT"),                  # v4: NULL/'playable' or 'vetoed' (audio dropped, fingerprint kept);
                                                        # v5: 'dropped' — every seed that suggested it left the playlist

@@ -61,9 +61,26 @@ def core_from(items) -> dict | None:
     return {"center": round(folded[len(folded) // 2], 1), "lo": round(folded[0], 1), "hi": round(folded[-1], 1)}
 
 
+def shift_to(core: dict | None, center: float | None) -> dict | None:
+    """A tempo range moved to centre on a chosen BPM, keeping its width (2026-11-11: my own Set to BPM replaces the
+    automatic median)."""
+    if not center:
+        return core
+    half_lo, half_hi = (core["center"] - core["lo"], core["hi"] - core["center"]) if core else (0.0, 0.0)
+    return {"center": round(center, 1), "lo": round(center - half_lo, 1), "hi": round(center + half_hi, 1),
+            "manual": True}
+
+
 def playlist_tempo(lib, pid: int) -> dict | None:
-    """The playlist's tempo (typical tempo and range of its 4–5 star tracks), shared by the playlist page, its Find
-    music and the veto. Kept steady: it only moves when the centre or an end changes by tempo_hysteresis_bpm."""
+    """The playlist's tempo, shared by the playlist page, its Find music and the veto: the BPM I set in Set to BPM if
+    I chose one (the range of its 4–5 star tracks moved to centre on it), else the typical tempo and range of its
+    4–5 star tracks."""
+    return shift_to(auto_tempo(lib, pid), db.get_setting(lib, playlist_key(pid), {}).get("bpm"))
+
+
+def auto_tempo(lib, pid: int) -> dict | None:
+    """The typical tempo and range of the playlist's 4–5 star tracks. Kept steady: it only moves when the centre or an
+    end changes by tempo_hysteresis_bpm."""
     fresh = core_from(lib.execute("SELECT t.bpm, pt.stars FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id"
                                   " WHERE pt.playlist_id = ? AND pt.stars IS NOT NULL", (pid,)).fetchall())
     key, step = f"tempo_core:{pid}", CONFIG["veto"]["tempo_hysteresis_bpm"]
@@ -78,7 +95,7 @@ def settings(conn, key: str, default_target: float) -> dict:
     saved = db.get_setting(conn, key, {})
     # Settings saved before `engaged` existed (0.5.4) came from someone using the switch: count them as engaged.
     s = {"on": False, "bpm": None, "engaged": bool(saved), **saved}
-    return {**s, "target": s["bpm"] or default_target}
+    return {**s, "target": s["bpm"] or default_target, "auto": default_target}
 
 
 def rate_for(bpm: float | None, s: dict, ignore_off: bool = False) -> tuple[float, str]:
@@ -102,7 +119,7 @@ def playlist_key(pid: int) -> str:
 
 def playlist_settings(lib, pid: int) -> dict:
     """The playlist's Set to BPM; its default target is the playlist's typical tempo."""
-    core = playlist_tempo(lib, pid)
+    core = auto_tempo(lib, pid)
     if core is None:
         bpms = [r[0] for r in lib.execute("SELECT t.bpm FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id"
                                           " WHERE pt.playlist_id = ?", (pid,))]

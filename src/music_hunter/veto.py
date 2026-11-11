@@ -118,6 +118,7 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
 
     if db.SESSION.get() is not None:
         core = tempo_mod.playlist_tempo(db.connect_library(), db.SESSION.get())
+        core = tempo_mod.shift_to(core, db.get_setting(conn, "same_bpm", {}).get("bpm"))   # Find music's own BPM
     else:
         core = tempo_mod.core_from(conn.execute(
             f"SELECT bpm, coalesce(stars, 5) FROM tracks WHERE id IN ({','.join('?' * len(seed_ids))})",

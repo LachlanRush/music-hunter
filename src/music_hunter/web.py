@@ -340,7 +340,8 @@ class TempoBody(BaseModel):
 
 
 def _tempo_view(s: dict) -> dict:
-    return {"on": s["on"], "bpm": s["bpm"], "target": s["target"], "max_stretch": CONFIG["bpm"]["max_stretch"]}
+    return {"on": s["on"], "bpm": s["bpm"], "target": s["target"], "auto": s.get("auto"),
+            "max_stretch": CONFIG["bpm"]["max_stretch"]}
 
 
 class StarsBody(BaseModel):
@@ -352,7 +353,20 @@ class AddTrackBody(BaseModel):
 
 
 class RenameBody(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+class FolderBody(BaseModel):
     name: str
+
+
+class MoveBody(BaseModel):
+    folder_id: int | None = None
+
+
+class PlayFilterBody(BaseModel):
+    min_stars: int = 0
 
 
 def _playlist_or_404(conn, playlist_id: int):
@@ -404,6 +418,80 @@ def overview_data(playlist_id: int) -> dict:
 def get_playlists() -> list[dict]:
     conn = db.connect()
     return [{**p, "job": _job_view(jobs.latest_for(conn, p["id"]))} for p in library.list_playlists(conn)]
+
+
+# --- folders (2026-11-11): one level of grouping on the home page ---------------------------------------------------
+
+@app.get("/api/folders")
+def get_folders() -> list[dict]:
+    return library.list_folders(db.connect())
+
+
+@app.post("/api/folders")
+def new_folder(body: FolderBody) -> dict:
+    return {"folder_id": library.create_folder(db.connect(), body.name)}
+
+
+@app.patch("/api/folders/{folder_id}")
+def rename_folder(folder_id: int, body: FolderBody) -> dict:
+    try:
+        library.rename_folder(db.connect(), folder_id, body.name)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True}
+
+
+@app.delete("/api/folders/{folder_id}")
+def delete_folder(folder_id: int) -> dict:
+    library.delete_folder(db.connect(), folder_id)
+    return {"ok": True}
+
+
+@app.put("/api/playlists/{playlist_id}/folder")
+def move_playlist(playlist_id: int, body: MoveBody) -> dict:
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    try:
+        library.move_to_folder(conn, playlist_id, body.folder_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True}
+
+
+@app.put("/api/playlists/{playlist_id}/play-filter")
+def set_play_filter(playlist_id: int, body: PlayFilterBody) -> dict:
+    """Play and Shuffle only take tracks with at least this many stars (0: every track)."""
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    if not 0 <= body.min_stars <= 5:
+        raise HTTPException(400, "0–5 stars")
+    db.set_setting(conn, f"min_stars:{playlist_id}", body.min_stars)
+    return {"min_stars": body.min_stars}
+
+
+@app.post("/api/playlists/{playlist_id}/cover/track/{track_id}")
+def cover_from_track(playlist_id: int, track_id: int) -> dict:
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    try:
+        library.cover_from_track(conn, playlist_id, track_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except subprocess.SubprocessError:
+        raise HTTPException(400, "Couldn't read that track's cover")
+    sync.request()
+    return {"ok": True}
+
+
+@app.get("/api/playlists/{playlist_id}/sound-order/{track_id}")
+def sound_order(playlist_id: int, track_id: int) -> dict:
+    """The playlist's tracks by how close they sound to this one (feedback 2026-11-11 #6)."""
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    if not conn.execute("SELECT 1 FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                        (playlist_id, track_id)).fetchone():
+        raise HTTPException(404, "That track isn't in this playlist")
+    return {"order": library.sound_order(conn, playlist_id, track_id)}
 
 
 @app.post("/api/playlists")
@@ -469,7 +557,9 @@ def get_playlist(playlist_id: int) -> dict:
             "tracks": [view(t) for t in tracks], "tempo": _tempo_view(s),
             "others": [{"id": o["id"], "name": o["name"]} for o in library.list_playlists(conn) if o["id"] != playlist_id],
             "max_stretch": CONFIG["bpm"]["max_stretch"], "phone_headroom_db": CONFIG["loudness"]["phone_headroom_db"],
-            "back_restart_s": CONFIG["ui"]["back_restart_s"], "sync": sync.state(conn, playlist_id)}
+            "back_restart_s": CONFIG["ui"]["back_restart_s"], "sync": sync.state(conn, playlist_id),
+            "folder_id": p["folder_id"], "folders": library.list_folders(conn),
+            "min_stars": db.get_setting(conn, f"min_stars:{playlist_id}", 0)}
 
 
 class SyncBody(BaseModel):
@@ -504,7 +594,9 @@ def set_playlist_tempo(playlist_id: int, body: TempoBody) -> dict:
         raise HTTPException(400, "BPM between 60 and 200")
     bpm = body.bpm if "bpm" in body.model_fields_set else tempo.playlist_settings(conn, playlist_id)["bpm"]
     tempo.save(conn, tempo.playlist_key(playlist_id), body.on, bpm)      # bpm left out: keep the target
-    return _tempo_view(tempo.sync_playlist(conn, playlist_id))
+    view = _tempo_view(tempo.sync_playlist(conn, playlist_id))
+    _after_membership_change(conn, playlist_id)     # a chosen BPM is the playlist's tempo: Find music's filter follows
+    return view
 
 
 class OverrideBody(BaseModel):
@@ -566,7 +658,10 @@ async def set_playlist_cover(playlist_id: int, request: Request) -> dict:
 def rename_playlist(playlist_id: int, body: RenameBody) -> dict:
     conn = db.connect()
     _playlist_or_404(conn, playlist_id)
-    library.rename_playlist(conn, playlist_id, body.name)
+    if body.name is not None:
+        library.rename_playlist(conn, playlist_id, body.name)
+    if "description" in body.model_fields_set:
+        library.set_description(conn, playlist_id, body.description)
     sync.request()
     return {"ok": True}
 
@@ -1386,6 +1481,15 @@ def set_find_tempo(body: TempoBody) -> dict:
     bpm = body.bpm if "bpm" in body.model_fields_set else tempo.session_settings(conn)["bpm"]
     tempo.save(conn, "same_bpm", body.on, bpm)
     tempo.sync_session(conn, db.SESSION.get())               # copies at another target are deleted
+    pid = db.SESSION.get()
+
+    def rescore():                                           # a chosen BPM moves the tempo filter
+        token = db.SESSION.set(pid)
+        try:
+            veto.update(db.connect(pid))
+        finally:
+            db.SESSION.reset(token)
+    threading.Thread(target=rescore, daemon=True).start()
     return _tempo_view(tempo.session_settings(conn))
 
 

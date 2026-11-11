@@ -1,28 +1,24 @@
-/* Shared by the player and results pages: theme tokens, base type, header. */
+/* Shared by every page (redesigned 2026-11-11, Spotify-style dark): charcoal greys, a glow behind the header taken
+   from the cover (static/colour.js sets --glow and --accent), rounded rows and pills, the orange gone. */
 :root {
-  --bg: #eef0f2;
-  --surface: #f8f9fa;
-  --fg: #16191d;
-  --muted: #5d6670;
-  --line: #d3d8dd;
-  --accent: #c2410c;          /* sodium amber: the playhead and the active rating */
-  --accent-fg: #ffffff;
-  --good: #2f7d4f;
-  --bad: #b3261e;
-  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
-  --body: "Archivo", "Helvetica Neue", Arial, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
-  color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #111417; --surface: #191d21; --fg: #e8ebee; --muted: #8d97a1; --line: #2b3137;
-    --accent: #f59e0b; --accent-fg: #111417; --good: #5fbf85; --bad: #f07167; color-scheme: dark;
-  }
-}
-:root[data-theme="dark"] {
-  --bg: #111417; --surface: #191d21; --fg: #e8ebee; --muted: #8d97a1; --line: #2b3137;
-  --accent: #f59e0b; --accent-fg: #111417; --good: #5fbf85; --bad: #f07167; color-scheme: dark;
+  --bg: #161618;
+  --surface: #1f1f22;          /* cards, inputs */
+  --raised: #2a2a2e;           /* menus, hover */
+  --fg: #f4f4f5;
+  --muted: #a7a7ad;
+  --faint: #6c6c73;
+  --line: rgba(255, 255, 255, 0.09);
+  --accent: hsl(220 12% 68%);  /* replaced by the cover's colour */
+  --accent-soft: hsl(220 12% 68% / 0.16);
+  --glow: hsl(220 12% 34% / 0.85);
+  --tint: hsl(220 10% 20%);
+  --good: #5fbf85;
+  --bad: #f07167;
+  --display: "Figtree", "Helvetica Neue", Arial, sans-serif;
+  --body: "Figtree", "Helvetica Neue", Arial, sans-serif;
+  --mono: "Figtree", "Helvetica Neue", Arial, sans-serif;   /* numbers use tabular figures instead of a mono face */
+  --radius: 8px;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }   /* no dark box behind a tapped button */
@@ -30,35 +26,108 @@
 html, body { margin: 0; }
 body {
   background: var(--bg); color: var(--fg); font: 400 15px/1.5 var(--body);
-  padding-block: 24px 48px; padding-inline: 16px;
+  font-variant-numeric: tabular-nums;
+  padding-block: 0 48px; padding-inline: 16px; min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
 }
-main { max-width: 760px; margin: 0 auto; display: grid; gap: 28px; }
+/* The glow behind the top of the page, in the cover's colour */
+body::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 420px; z-index: -1; pointer-events: none;
+  background: linear-gradient(180deg, var(--glow) 0%, color-mix(in srgb, var(--glow) 40%, transparent) 45%, transparent 100%);
+  transition: background .6s;
+}
+main { max-width: 860px; margin: 0 auto; display: grid; gap: 24px; padding-top: 18px; }
 button { font: inherit; color: inherit; cursor: pointer; }
-button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+a { color: inherit; }
+button:focus-visible, input:focus-visible, a:focus-visible, select:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
 @media (hover: none) { a:focus, button:focus, summary:focus, input[type=range]:focus { outline: none; } }   /* touch: no ring after a tap */
-.label {
-  font: 500 11px/1.2 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
-}
+.label { font: 700 12px/1.2 var(--body); letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.meta { font: 400 13px/1.4 var(--body); color: var(--muted); }
 
-header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 16px; }
-.brand { font: 700 15px/1 var(--display); font-stretch: 125%; letter-spacing: 0.02em; color: inherit; text-decoration: none; }
-.backlink { display: inline-grid; place-items: center; width: 32px; height: 32px; margin: -8px -6px -8px -4px;
-  border-radius: 50%; color: inherit; text-decoration: none; font: 500 20px/1 var(--body); }
-.backlink:hover { background: var(--surface); }
-.crumb { font: 500 13px/1 var(--body); color: var(--muted); }
-.status { font: 400 12px/1.4 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 16px; min-height: 40px; }
+nav { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.brand { font: 800 16px/1 var(--display); letter-spacing: -0.01em; color: inherit; text-decoration: none; }
+.backlink { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.35); color: var(--fg); text-decoration: none; font: 600 18px/1 var(--body); }
+.backlink:hover { background: rgba(0, 0, 0, 0.55); }
+.crumb { font: 600 13px/1.2 var(--body); color: var(--muted); }
+.status { font: 400 12px/1.4 var(--body); color: var(--muted); }
 .status .busy { color: var(--accent); }
+.error { color: var(--bad); font-size: 14px; }
+.empty { color: var(--muted); }
 
-nav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
-nav a { color: var(--muted); text-decoration: none; font: 500 13px/1 var(--body); padding-bottom: 3px; border-bottom: 2px solid transparent; }
-nav a:hover { color: var(--fg); }
-nav a[aria-current="page"] { color: var(--fg); border-bottom-color: var(--accent); }
+/* Buttons: pills, a round play button in the cover's colour, quiet icon buttons */
+.btn { padding: 8px 16px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.28); background: transparent;
+  color: var(--fg); font: 700 14px/1.2 var(--body); }
+.btn:hover:not(:disabled) { border-color: var(--fg); transform: scale(1.02); }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn.primary, .btn.on { background: var(--fg); color: #111; border-color: var(--fg); }
+.btn.danger { color: var(--bad); }
+.link { border: 0; background: none; padding: 2px 4px; color: var(--muted); font: 600 13px var(--body);
+  text-decoration: underline; text-underline-offset: 3px; }
+.link:hover { color: var(--fg); }
+.icon-btn { width: 40px; height: 40px; border-radius: 50%; border: 0; background: transparent; color: var(--muted);
+  display: inline-grid; place-items: center; padding: 0; }
+.icon-btn:hover { color: var(--fg); }
+.icon-btn svg { width: 22px; height: 22px; fill: currentColor; }
+.icon-btn.on { color: var(--accent); }
+.icon-btn.on::after { content: ""; position: absolute; }
+.play-big { width: 56px; height: 56px; border-radius: 50%; border: 0; background: var(--accent); color: #111;
+  display: inline-grid; place-items: center; padding: 0; box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35); }
+.play-big:hover { transform: scale(1.04); filter: brightness(1.06); }
+.play-big svg { width: 24px; height: 24px; fill: currentColor; }
 
-/* Fold-outs: "couldn't be imported" and the feedback box at the bottom of every page share one look */
+input[type=text], input[type=url], input[type=number], textarea, select {
+  background: var(--surface); color: var(--fg); border: 1px solid transparent; border-radius: 6px;
+  font: 400 14px var(--body); padding: 9px 12px;
+}
+input[type=text]:focus, input[type=url]:focus, input[type=number]:focus, textarea:focus, select:focus {
+  border-color: rgba(255, 255, 255, 0.35); outline: none; }
+input::placeholder, textarea::placeholder { color: var(--faint); }
+input[type=range] { width: 100%; accent-color: var(--fg); margin: 0; height: 4px; }
+input[type=checkbox] { accent-color: var(--accent); }
+
+/* Progress bars */
+.bar { height: 4px; background: rgba(255, 255, 255, 0.12); border-radius: 2px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+
+/* Menus (⋯): a raised card */
+.menu { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 220px; max-height: 70vh; overflow: auto;
+  background: var(--raised); border-radius: 6px; padding: 4px; display: grid; gap: 0;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55); }
+.menu.up { top: auto; bottom: 100%; }                    /* near the bottom of the screen: opens upwards */
+.menu button { border: 0; background: none; text-align: left; padding: 10px 12px; border-radius: 3px;
+  font: 500 14px var(--body); color: var(--fg); }
+.menu button:hover { background: rgba(255, 255, 255, 0.08); }
+.menu .label { padding: 10px 12px 4px; font-size: 11px; }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+
+/* A dialog (edit details, new folder) */
+dialog { background: var(--raised); color: var(--fg); border: 0; border-radius: var(--radius); padding: 20px;
+  width: min(440px, calc(100vw - 32px)); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6); }
+dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+dialog h3 { margin: 0 0 14px; font: 700 20px/1.2 var(--display); }
+dialog form { display: grid; gap: 10px; }
+dialog input, dialog textarea { width: 100%; }
+dialog textarea { min-height: 90px; resize: vertical; font: 400 14px/1.45 var(--body); }
+dialog .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+
+/* Fold-outs: "couldn't be imported", Recently deleted and the feedback box share one look */
 .failures, .feedback { font-size: 13px; color: var(--muted); }
-.failures summary, .feedback summary { cursor: pointer; width: max-content; }
+.failures summary, .feedback summary { cursor: pointer; width: max-content; font-weight: 600; }
+.failures summary:hover, .feedback summary:hover { color: var(--fg); }
 .feedback[open] { display: grid; gap: 8px; }
-.feedback textarea { width: 100%; min-height: 9em; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px;
-  background: var(--surface); color: var(--fg); font: 400 15px/1.45 var(--body); resize: vertical; }
-.feedback-send { justify-self: start; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line);
-  background: var(--surface); font: 600 13px var(--body); }
+.feedback textarea { width: 100%; min-height: 9em; resize: vertical; font: 400 15px/1.45 var(--body); }
+.feedback-send { justify-self: start; padding: 7px 16px; border-radius: 999px; border: 0; background: var(--fg);
+  color: #111; font: 700 13px var(--body); }
+
+/* The app's now playing bar on other pages (drawn by the app): the same look as a playlist's player */
+#mh-now { left: 8px !important; right: 8px !important; bottom: 8px !important; border: 0 !important;
+  border-radius: 10px !important; background: var(--tint) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5) !important; padding: 8px 10px !important; transition: background .6s; }
+#mh-now .art { border-radius: 5px !important; }
+#mh-now .round { border: 0 !important; background: transparent !important; color: var(--fg) !important; }
+#mh-now .round.primary { background: var(--fg) !important; color: #111 !important; }
+#mh-now .round.on { color: var(--accent) !important; background: transparent !important; }
+#mh-now input[type=range] { accent-color: var(--fg) !important; }
+#mh-now .seek { font-family: var(--body) !important; }

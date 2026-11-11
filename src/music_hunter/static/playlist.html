@@ -6,138 +6,151 @@
 <title>Playlist · Music Hunter</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400..800&display=swap">
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/icon-192.png">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/colour.js"></script>
 <script src="/static/tempo.js"></script>
 <script src="/static/media.js"></script>
 <script src="/static/shuffle.js"></script>
 <style>
-body { padding-bottom: 140px; }
-.head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: end; }
-.cover { width: 120px; height: 120px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line);
-  display: grid; place-items: center; overflow: hidden; font: 800 42px var(--display); color: var(--muted); }
+body { padding-bottom: 150px; }
+.head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 22px; align-items: end; padding-top: 8px; }
+.cover { width: 200px; height: 200px; border-radius: 6px; background: var(--raised); display: grid; place-items: center;
+  overflow: hidden; font: 800 64px var(--display); color: var(--faint); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+  cursor: pointer; }
 .cover img { width: 100%; height: 100%; object-fit: cover; }
-h1 { font: 800 clamp(26px, 5vw, 40px)/1.05 var(--display); font-stretch: 112%; margin: 4px 0; overflow-wrap: anywhere; }
-.meta { font: 400 12px/1.4 var(--mono); color: var(--muted); }
-h2 .meta { text-transform: none; letter-spacing: normal; margin-left: 6px; }
-.actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.btn { padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font: 600 14px var(--body); }
-.btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
-.btn:disabled { opacity: .45; cursor: default; }
-.btn.danger { color: var(--bad); }
-.bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
-.bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+h1 { font: 800 clamp(30px, 6vw, 56px)/1.05 var(--display); letter-spacing: -0.03em; margin: 0 0 8px; overflow-wrap: anywhere; }
+.desc { margin: 0 0 8px; color: var(--muted); font-size: 14px; line-height: 1.45; max-width: 60ch; white-space: pre-line; }
+.head .meta { font-size: 14px; color: var(--fg); opacity: .85; }
+.actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.actions .spacer { flex: 1 1 auto; }
+.pl-menu, .more { position: relative; }
+.pl-menu .menu { left: 0; right: auto; }
+.filter { appearance: none; -webkit-appearance: none; background: rgba(255, 255, 255, 0.07); border-radius: 999px;
+  padding: 7px 14px; font: 600 13px var(--body); color: var(--fg); border: 0; cursor: pointer; }
+.filter.on { background: var(--accent-soft); color: var(--accent); }
+#find.ready { border-color: var(--accent); color: var(--accent); }
+.tempo { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; font-size: 14px; color: var(--muted); }
+.tempo label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
+.tempo input[type=checkbox] { width: 16px; height: 16px; margin: 0; }
+.tempo input[type=number] { width: 72px; padding: 5px 8px; }
+.tempo input:disabled { opacity: .45; }
 #job { display: grid; gap: 10px; justify-items: start; }
-h2 { font: 700 13px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+.sortbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 14px; border-radius: var(--radius);
+  background: var(--accent-soft); font-size: 14px; }
+.sortbar b { color: var(--accent); }
+h2 { font: 700 20px/1.2 var(--display); margin: 0 0 8px; letter-spacing: -0.01em; }
+h2 .meta { font-weight: 400; margin-left: 8px; }
 ol { list-style: none; margin: 0; padding: 0; display: grid; }
-li { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto auto; gap: 10px; align-items: center;
-  padding: 8px 0; border-bottom: 1px solid var(--line); }
+li { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto auto; gap: 12px; align-items: center;
+  padding: 6px 8px; margin-inline: -8px; border-radius: 6px; }
+@media (hover: hover) { li[data-row]:not(.unavailable):hover { background: rgba(255, 255, 255, 0.07); } }
 li.playing .t b { color: var(--accent); }
-li.unavailable { opacity: .5; }
-.art { width: 40px; height: 40px; border-radius: 4px; background: var(--surface); object-fit: cover; }
-.cover-btn { width: 40px; height: 40px; padding: 0; border: 0; border-radius: 4px; background: var(--surface);
-  overflow: hidden; display: grid; place-items: center; color: var(--muted); }
+li.unavailable { opacity: .45; }
+li.filtered { opacity: .4; }
+li.found { animation: found 1.4s ease-out; }
+@keyframes found { from { background: var(--accent-soft); } to { background: transparent; } }
+.art { width: 44px; height: 44px; border-radius: 4px; background: var(--raised); object-fit: cover; display: block; }
+.cover-btn { width: 44px; height: 44px; padding: 0; border: 0; border-radius: 4px; background: var(--raised);
+  overflow: hidden; display: grid; place-items: center; color: var(--faint); cursor: default; }
 .cover-btn img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.cover-btn:disabled { cursor: default; }
-li.playing .cover-btn { outline: 2px solid var(--accent); outline-offset: 1px; }
 .t { min-width: 0; }
-.t b { display: block; font: 600 14px/1.3 var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t b { display: block; font: 500 15px/1.3 var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .t span { display: block; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.t span.sub { font: 400 12px/1.3 var(--mono); }
-.stars { display: flex; gap: 6px; margin-left: 16px; }
-.stars button { border: 0; background: none; padding: 4px 2px; font-size: 26px; line-height: 1; color: var(--line); }
+.t span.sub { color: var(--faint); font-size: 12px; }
+.stars { display: flex; gap: 2px; margin-left: 8px; }
+.stars button { border: 0; background: none; padding: 4px 2px; font-size: 19px; line-height: 1; color: rgba(255, 255, 255, 0.16); }
 .stars button.on { color: var(--accent); }
-.more, .pl-menu { position: relative; }
-.more > button { border: 0; background: none; font-size: 20px; padding: 2px 6px; color: var(--muted); }
-.menu { position: absolute; right: 0; top: 100%; z-index: 5; min-width: 200px; background: var(--surface);
-  border: 1px solid var(--line); border-radius: 6px; padding: 6px; display: grid; gap: 2px; box-shadow: 0 6px 18px rgba(0,0,0,.15); }
-.menu button { border: 0; background: none; text-align: left; padding: 8px 10px; border-radius: 4px; font-size: 14px; }
-.menu button:hover { background: var(--bg); }
-.menu .label { padding: 6px 10px 2px; }
-.player { position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--line);
-  padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); }
-.player-in { max-width: 760px; margin: 0 auto; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
-.player .art { width: 44px; height: 44px; }
+@media (hover: hover) { .stars button:hover { color: var(--fg); } }
+.more > button { border: 0; background: none; font-size: 20px; padding: 4px 8px; color: var(--muted); border-radius: 50%; }
+.more > button:hover { color: var(--fg); }
+.menu.sub-open .main-items { display: none; }
+
+/* The player: a floating bar tinted by the playing song's cover */
+.player { position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); z-index: 10;
+  background: var(--tint); border-radius: 10px; padding: 8px 10px 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  transition: background .6s; }
+.player-in { max-width: 860px; margin: 0 auto; display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+.player .art { width: 48px; height: 48px; border-radius: 5px; }
 .player .art, .player .t { cursor: pointer; }
-li.found { animation: found 1.2s ease-out; }
-@keyframes found { from { background: color-mix(in srgb, var(--accent) 22%, transparent); } to { background: transparent; } }
-.controls { display: flex; gap: 6px; align-items: center; }
-.round { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: var(--bg); display: grid; place-items: center; }
-.round svg { width: 15px; height: 15px; fill: currentColor; }
-.round.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
-.round.on { border-color: var(--accent); color: var(--accent); }
-.seek { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; align-items: center;
-  font: 400 11px var(--mono); color: var(--muted); }
-input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
-.empty { color: var(--muted); }
+.player .t b { font-weight: 700; }
+.player .t span { color: rgba(255, 255, 255, 0.72); }
+.controls { display: flex; gap: 2px; align-items: center; }
+.round { width: 40px; height: 40px; border-radius: 50%; border: 0; background: transparent; color: var(--fg);
+  display: grid; place-items: center; padding: 0; }
+.round svg { width: 18px; height: 18px; fill: currentColor; }
+.round.primary { background: var(--fg); color: #111; }
+.round.on { color: var(--accent); }
+.seek { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr auto auto; gap: 10px; align-items: center;
+  font: 400 11px var(--body); color: rgba(255, 255, 255, 0.7); }
 .add-song { display: flex; gap: 8px; }
-.add-song input { flex: 1 1 auto; min-width: 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: 999px;
-  background: var(--surface); color: var(--fg); font: 400 14px var(--body); }
+.add-song input { flex: 1 1 auto; min-width: 0; border-radius: 999px; }
 .deleted ol { margin-top: 8px; }
-.deleted li { grid-template-columns: 40px minmax(0, 1fr) auto; cursor: default; }
-.deleted li:hover { background: none; }
+.deleted li { grid-template-columns: 44px minmax(0, 1fr) auto; cursor: default; }
 .deleted .acts { display: flex; gap: 6px; }
-.deleted .acts button { padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface);
-  font: 500 12px var(--body); color: var(--fg); }
-li { margin-inline: -8px; padding-inline: 8px; border-radius: 6px; }
-@media (hover: hover) { li[data-row]:not(.unavailable):hover { background: var(--surface); } }
-li .cover-btn { cursor: default; }
-.btn.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
-.round.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.deleted .acts button { padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.28);
+  background: none; font: 600 12px var(--body); color: var(--fg); }
 #mh-download { display: none; }                           /* (the button an older app adds; it's in the ⋯ menu now) */
 .menu button.off { color: var(--muted); }                 /* Download and Sync while they're off */
 .volume { display: none; width: 90px; }
 @media (hover: hover) and (pointer: fine) { .volume { display: block; } }
-.tempo { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 14px; }
-.tempo label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
-.tempo input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
-.tempo input[type=number] { width: 72px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
-  background: var(--surface); color: var(--fg); font: 500 14px var(--mono); }
-.tempo input:disabled { opacity: .45; }
-.error { color: var(--bad); font-size: 14px; }
-@media (max-width: 520px) {
-  li { grid-template-columns: 40px minmax(0, 1fr) auto auto; gap: 8px; }
-  .stars { gap: 3px; margin-left: 8px; }
-  .stars button { font-size: 22px; padding: 4px 1px; }
-  .cover { width: 84px; height: 84px; }
+@media (max-width: 600px) {
+  .head { grid-template-columns: 1fr; justify-items: center; gap: 18px; }
+  .head-text { justify-self: stretch; }
+  .cover { width: min(62vw, 240px); height: min(62vw, 240px); }
+  h1 { font-size: clamp(26px, 8vw, 34px); }
+  li { gap: 10px; }
+  .stars { margin-left: 2px; }
+  .stars button { font-size: 18px; padding: 4px 1px; }
 }
 </style>
 </head>
 <body>
 <main>
   <header>
-    <nav><a class="brand" href="/">MUSIC HUNTER</a><a class="backlink" href="/" aria-label="Back to playlists">←</a></nav>
+    <nav><a class="brand" href="/">Music Hunter</a><a class="backlink" href="/" aria-label="Back to playlists">‹</a></nav>
     <div class="status" id="status"></div>
   </header>
 
   <section class="head">
     <div class="cover" id="cover">?</div>
-    <div>
+    <div class="head-text">
       <h1 id="name">Loading…</h1>
+      <p class="desc" id="desc" hidden></p>
       <div class="meta" id="counts"></div>
     </div>
   </section>
 
   <section class="actions">
-    <button class="btn" id="play-all">Play</button>
-    <button class="btn" id="shuffle-all" aria-pressed="false">Shuffle</button>
     <button class="btn" id="find" disabled>Find music</button>
-    <div class="pl-menu"><button class="btn" id="pl-more" aria-label="More for this playlist" aria-expanded="false">⋯</button></div>
+    <div class="pl-menu"><button class="icon-btn" id="pl-more" aria-label="More for this playlist" aria-expanded="false">
+      <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button></div>
+    <span class="spacer"></span>
+    <select class="filter" id="min-stars" aria-label="Play only tracks with at least">
+      <option value="0">All tracks</option><option value="1">★ 1+</option><option value="2">★ 2+</option>
+      <option value="3">★ 3+</option><option value="4">★ 4+</option><option value="5">★ 5</option>
+    </select>
+    <button class="icon-btn" id="shuffle-all" aria-label="Shuffle" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 7h3.5l7 10H18v-2l3 3-3 3v-2h-4.5l-7-10H4zm10.5 0H18V5l3 3-3 3V9h-3.5l-1.6 2.3-1.2-1.7zM4 17h3.5l1.6-2.3 1.2 1.7L8.5 19H4z"/></svg></button>
+    <button class="play-big" id="play-all" aria-label="Play"><svg viewBox="0 0 24 24" id="play-all-icon"><path d="M8 5l12 7-12 7z"/></svg></button>
     <input id="picture" type="file" accept="image/*" hidden>
   </section>
 
   <section class="tempo" aria-label="Tempo">
     <label><input type="checkbox" id="same-bpm"> Set to</label>
     <label><input type="number" id="bpm-target" min="60" max="200" step="0.5" inputmode="decimal" aria-label="Target BPM"> BPM</label>
+    <button class="link" id="bpm-auto" hidden></button>
     <span class="meta" id="tempo-note"></span>
   </section>
 
   <section id="find-status" hidden></section>
   <section id="importing" hidden></section>
   <div class="error" id="error" hidden></div>
+
+  <div class="sortbar" id="sortbar" hidden><span>Sorted by sound like <b id="sort-name"></b></span>
+    <button class="link" id="sort-clear">Back to normal order</button></div>
 
   <section id="added-section" hidden>
     <h2>To rate <span class="meta" id="added-count"></span></h2>
@@ -157,6 +170,15 @@ li .cover-btn { cursor: default; }
     <ol id="deleted"></ol>
   </details>
 </main>
+
+<dialog id="details">
+  <h3>Edit details</h3>
+  <form method="dialog" id="details-form">
+    <input type="text" id="d-name" aria-label="Name" placeholder="Name" maxlength="200" required>
+    <textarea id="d-desc" aria-label="Description" placeholder="Add an optional description" maxlength="500"></textarea>
+    <div class="row"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="save">Save</button></div>
+  </form>
+</dialog>
 
 <div class="player" id="player" hidden>
   <div class="player-in">
@@ -186,18 +208,23 @@ async function api(path, body, method) {
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
   return res.json();
 }
+function placeMenu(m) {                                 // open upwards when it would run under the player
+  const r = m.getBoundingClientRect(), bottom = innerHeight - ($("player").hidden ? 8 : $("player").offsetHeight + 16);
+  if (r.bottom > bottom && r.top - r.height > 60) m.classList.add("up");
+}
 function showError(msg) { $("error").textContent = msg; $("error").hidden = !msg; }
 
-let data = null, timer = null;
+let data = null, timer = null, sortOrder = null;          // sortOrder: {title, ids} while sorted by sound
 
 function stars(t) {
   return `<span class="stars" role="group" aria-label="Stars">${[1, 2, 3, 4, 5].map((n) =>
     `<button class="${t.stars && n <= t.stars ? "on" : ""}" data-star="${n}" data-track="${t.id}"
       aria-label="${n} star${n > 1 ? "s" : ""}${t.stars === n ? " (tap again to clear)" : ""}">★</button>`).join("")}</span>`;
 }
+const passes = (t) => !data.min_stars || (t.stars || 0) >= data.min_stars;   // Play / Shuffle's star filter
 function row(t) {
   const playing = queue[pos] && queue[pos].id === t.id;
-  return `<li data-row="${t.id}" class="${playing ? "playing" : ""} ${t.audio ? "" : "unavailable"}">
+  return `<li data-row="${t.id}" class="${playing ? "playing" : ""} ${t.audio ? "" : "unavailable"} ${passes(t) ? "" : "filtered"}">
     <button class="cover-btn" data-play="${t.id}" aria-label="Play ${esc(t.title)}" ${t.audio ? "" : "disabled"}>
       ${t.art ? `<img src="${t.art}" alt="" loading="lazy">` : "♪"}</button>
     <div class="t"><b>${esc(t.title)}</b><span>${esc(t.artist)}</span>
@@ -211,15 +238,33 @@ function render() {
   const d = data;
   document.title = `${d.name} · Music Hunter`;
   $("name").textContent = d.name;
-  $("cover").innerHTML = d.image ? `<img src="${d.image}" alt="">` : esc((d.name || "?")[0].toUpperCase());
+  $("desc").textContent = d.description || ""; $("desc").hidden = !d.description;
+  if ($("cover").dataset.src !== (d.image || "")) {
+    $("cover").dataset.src = d.image || "";
+    $("cover").innerHTML = d.image ? `<img src="${d.image}" alt="">` : esc((d.name || "?")[0].toUpperCase());
+    Tint.apply(d.image);                                   // the page's glow and accent from the cover
+  }
   const n = (k) => `${k} track${k === 1 ? "" : "s"}`;
-  $("counts").textContent = n(d.tracks.length);
-  const added = d.tracks.filter((t) => t.status === "added"), main = d.tracks.filter((t) => t.status !== "added");
-  $("added-count").textContent = n(added.length);
-  $("tracks-count").textContent = main.length ? n(main.length) : "";
-  $("added-section").hidden = !added.length;
-  $("added").innerHTML = added.map(row).join("");
-  $("tracks").innerHTML = main.length ? main.map(row).join("") : `<li class="empty" style="display:block">No tracks yet.</li>`;
+  $("counts").textContent = n(d.tracks.length) + (d.tempo && d.tempo.target ? ` · ${Math.round(d.tempo.target)} BPM` : "");
+  $("min-stars").value = String(d.min_stars || 0);
+  $("min-stars").classList.toggle("on", !!d.min_stars);
+  const sorted = sortOrder && sortOrder.ids;
+  $("sortbar").hidden = !sorted;
+  if (sorted) {                                            // one list, closest-sounding first (To rate included)
+    const at = new Map(sortOrder.ids.map((id, i) => [id, i]));
+    const all = [...d.tracks].sort((a, b) => (at.get(a.id) ?? 1e9) - (at.get(b.id) ?? 1e9));
+    $("sort-name").textContent = sortOrder.title;
+    $("added-section").hidden = true;
+    $("tracks-count").textContent = n(all.length);
+    $("tracks").innerHTML = all.map(row).join("");
+  } else {
+    const added = d.tracks.filter((t) => t.status === "added"), main = d.tracks.filter((t) => t.status !== "added");
+    $("added-count").textContent = n(added.length);
+    $("tracks-count").textContent = main.length ? n(main.length) : "";
+    $("added-section").hidden = !added.length;
+    $("added").innerHTML = added.map(row).join("");
+    $("tracks").innerHTML = main.length ? main.map(row).join("") : `<li class="empty" style="display:block">No tracks yet.</li>`;
+  }
   const del = d.deleted || [];
   $("deleted-section").hidden = !del.length;
   $("deleted-label").textContent = `Recently deleted (${del.length})`;
@@ -291,6 +336,7 @@ async function loadFind() {
     btn.disabled = false; btn.textContent = "Find music";
     box.hidden = true; box.innerHTML = "";
   }
+  btn.classList.toggle("ready", find.state === "ready");
 }
 $("find").addEventListener("click", async () => {
   if (!find) return;
@@ -330,11 +376,12 @@ document.addEventListener("click", async (e) => {
   if (plMore) {
     const menu = document.createElement("div");
     menu.className = "menu";
-    menu.innerHTML = (data.can_refresh ? `<button data-pl-action="refresh">Refresh from Spotify</button>` : "")
-      + (Phone ? `<button data-pl-toggle="download"></button>` : "") + `<button data-pl-toggle="sync"></button>`
-      + `<button data-pl-action="results">Results</button>
+    menu.innerHTML = `<button data-pl-action="details">Edit details</button>
       <button data-pl-action="picture">${data.image ? "Change picture" : "Add picture"}</button>
-      <button data-pl-action="rename">Rename</button>
+      <button data-pl-action="folder">${data.folder_id ? "Move to another folder" : "Move to folder"}</button>`
+      + (data.can_refresh ? `<button data-pl-action="refresh">Refresh from Spotify</button>` : "")
+      + (Phone ? `<button data-pl-toggle="download"></button>` : "") + `<button data-pl-toggle="sync"></button>`
+      + `<button data-pl-action="results">Results</button><hr>
       <button data-pl-action="delete" style="color:var(--bad)">Delete playlist</button>`;
     plMore.parentElement.appendChild(menu);
     renderToggles();
@@ -344,12 +391,16 @@ document.addEventListener("click", async (e) => {
     const tid = Number(more.dataset.more);
     const menu = document.createElement("div");
     menu.className = "menu";
-    menu.innerHTML = (data.others.length ? `<div class="label">Add to playlist</div>` + data.others.map((o) =>
-        `<button data-addto="${o.id}" data-track="${tid}">${esc(o.name)}</button>`).join("") : "")
+    const tt = data.tracks.find((x) => x.id === tid);
+    menu.innerHTML = `<button data-sound="${tid}">Sort by sound like this</button>`
+      + `<button data-similar="${tid}">Find similar (new radio playlist)</button>`
+      + (tt && tt.art ? `<button data-cover-from="${tid}">Use as playlist cover</button>` : "")
       + `<button data-own-bpm="${tid}">Play at … BPM</button>`
-      + `<button data-similar="${tid}">Find similar</button>`
-      + `<button data-remove="${tid}" style="color:var(--bad)">Remove from this playlist</button>`;
+      + (data.others.length ? `<hr><div class="label">Add to playlist</div>` + data.others.map((o) =>
+        `<button data-addto="${o.id}" data-track="${tid}">${esc(o.name)}</button>`).join("") : "")
+      + `<hr><button data-remove="${tid}" style="color:var(--bad)">Remove from this playlist</button>`;
     more.parentElement.appendChild(menu);
+    placeMenu(menu);
     return;
   }
   const addto = e.target.closest("[data-addto]");
@@ -358,6 +409,37 @@ document.addEventListener("click", async (e) => {
       const r = await api(`/api/playlists/${addto.dataset.addto}/tracks`, {track_id: Number(addto.dataset.track)});
       $("status").textContent = r.added ? "Added." : "Already in that playlist.";
     } catch (err) { showError(`Couldn't add it: ${err.message}`); }
+    return;
+  }
+  const sound = e.target.closest("[data-sound]");
+  if (sound) {
+    const tid = Number(sound.dataset.sound), t = data.tracks.find((x) => x.id === tid);
+    try {
+      const r = await api(`/api/playlists/${PID}/sound-order/${tid}`);
+      sortOrder = {title: t ? t.title : "", ids: r.order};
+      render();
+      window.scrollTo({top: $("sortbar").offsetTop - 12, behavior: "smooth"});
+    } catch (err) { showError(`Couldn't sort: ${err.message}`); }
+    return;
+  }
+  const coverFrom = e.target.closest("[data-cover-from]");
+  if (coverFrom) {
+    try { await api(`/api/playlists/${PID}/cover/track/${coverFrom.dataset.coverFrom}`, {}); await load(); }
+    catch (err) { showError(`Couldn't use that cover: ${err.message}`); }
+    return;
+  }
+  const folderPick = e.target.closest("[data-folder-pick]");
+  if (folderPick) {
+    let fid = folderPick.dataset.folderPick;
+    try {
+      if (fid === "new") {
+        const name = prompt("Folder name");
+        if (!name) return;
+        fid = (await api("/api/folders", {name})).folder_id;
+      }
+      await api(`/api/playlists/${PID}/folder`, {folder_id: fid === "none" ? null : Number(fid)}, "PUT");
+      await load();
+    } catch (err) { showError(`Couldn't move it: ${err.message}`); }
     return;
   }
   const similar = e.target.closest("[data-similar]");
@@ -402,7 +484,18 @@ document.addEventListener("click", (e) => {
   const a = e.target.closest("[data-pl-action]");
   if (!a) return;
   document.querySelectorAll(".menu").forEach((m) => m.remove());
-  ({rename: renamePlaylist, delete: deletePlaylist, refresh: refreshPlaylist,
+  if (a.dataset.plAction === "folder") {                 // the folder list opens in place of the menu
+    const m = document.createElement("div");
+    m.className = "menu";
+    m.innerHTML = `<div class="label">Move to folder</div>` + (data.folders || []).map((f) =>
+        `<button data-folder-pick="${f.id}">${f.id === data.folder_id ? "✓ " : ""}${esc(f.name)}</button>`).join("")
+      + `<button data-folder-pick="new">New folder…</button>`
+      + (data.folder_id ? `<hr><button data-folder-pick="none">Remove from folder</button>` : "");
+    $("pl-more").parentElement.appendChild(m);
+    placeMenu(m);
+    return;
+  }
+  ({details: editDetails, delete: deletePlaylist, refresh: refreshPlaylist,
     picture: () => $("picture").click(),
     results: () => { location.href = `/playlist/${PID}/results`; }})[a.dataset.plAction]();
 });
@@ -416,11 +509,26 @@ $("picture").addEventListener("change", async () => {
   } catch (e) { showError(e.message); }
   $("picture").value = "";
 });
-async function renamePlaylist() {
-  const name = prompt("Playlist name", data.name);
-  if (!name) return;
-  await api(`/api/playlists/${PID}`, {name}, "PATCH"); load();
+function editDetails() {
+  $("d-name").value = data.name; $("d-desc").value = data.description || "";
+  $("details").showModal();
 }
+$("details").addEventListener("close", async () => {
+  if ($("details").returnValue !== "save") return;
+  try { await api(`/api/playlists/${PID}`, {name: $("d-name").value, description: $("d-desc").value}, "PATCH"); load(); }
+  catch (e) { showError(`Couldn't save: ${e.message}`); }
+});
+$("sort-clear").addEventListener("click", () => { sortOrder = null; render(); });
+$("min-stars").addEventListener("change", async () => {
+  const v = Number($("min-stars").value);
+  data.min_stars = v; render();
+  try { await api(`/api/playlists/${PID}/play-filter`, {min_stars: v}, "PUT"); }
+  catch (e) { showError(`Couldn't save: ${e.message}`); }
+  if (pos >= 0) {                                        // the queue follows: keep the current track, filter the rest
+    const cur = queue[pos], rest = playable().filter((t) => t.id !== cur.id);
+    queue = [cur, ...(shuffle ? round.order(rest) : rest)]; pos = 0;
+  }
+});
 async function refreshPlaylist() {
   try { await api(`/api/playlists/${PID}/import`, {}); } catch (e) { showError(`Couldn't refresh: ${e.message}`); }
   load();
@@ -435,7 +543,12 @@ async function deletePlaylist() {
 const audio = new Audio();
 let ctx = null, gainNode = null, queue = [], pos = -1, shuffle = false, seeking = false;
 
-function playable() { return data.tracks.filter((t) => t.audio); }
+function playable() {                                    // in the order shown (sorted by sound, if it is), star filter applied
+  let list = data.tracks.filter((t) => t.audio && passes(t));
+  if (sortOrder) { const at = new Map(sortOrder.ids.map((id, i) => [id, i])); list = list.sort((a, b) => (at.get(a.id) ?? 1e9) - (at.get(b.id) ?? 1e9)); }
+  else list = [...list.filter((t) => t.status === "added"), ...list.filter((t) => t.status !== "added")];
+  return list;
+}
 const round = ShuffleRound.create(PID);                // what's been heard this shuffle round, kept on this device
 function playTrack(id) {                               // the track already playing isn't restarted
   if (queue[pos] && queue[pos].id === id) { if (audio.paused) audio.play().catch(() => {}); return; }
@@ -444,6 +557,10 @@ function playTrack(id) {                               // the track already play
 function startQueue(firstId) {
   let list = playable();
   if (shuffle) list = round.order(list);
+  if (firstId != null && !list.some((t) => t.id === firstId)) {   // a tapped track below the star filter plays first
+    const t = data.tracks.find((x) => x.id === firstId);
+    if (t) list = [t, ...list];
+  }
   if (firstId != null) {
     const i = list.findIndex((t) => t.id === firstId);
     if (i > 0) list = shuffle ? [list[i], ...list.filter((_, k) => k !== i)] : list.slice(i).concat(list.slice(0, i));
@@ -475,11 +592,14 @@ async function playAt(i) {
   $("player").hidden = false;
   $("p-title").textContent = t.title; $("p-artist").textContent = t.artist;
   $("p-art").src = t.art || ""; $("p-art").style.visibility = t.art ? "visible" : "hidden";
+  Tint.apply(t.art, $("player"));                                  // the bar takes the song's colour
   try { await audio.play(); } catch (e) { setIcon(false); }
   render();
 }
 function setIcon(on) {
-  $("play-all").classList.toggle("on", on);               // filled only while this playlist is playing
+  $("play-all").classList.toggle("on", on);               // pause while this playlist is playing
+  $("play-all-icon").innerHTML = on ? '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/>' : '<path d="M8 5l12 7-12 7z"/>';
+  $("play-all").setAttribute("aria-label", on ? "Pause" : "Play");
   paintShuffleAll(on);
   $("play-icon").innerHTML = on ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M7 4l13 8-13 8z"/>';
   $("play").setAttribute("aria-label", on ? "Pause" : "Play");
@@ -590,6 +710,8 @@ function renderTempo() {
   $("same-bpm").checked = s.on;
   $("bpm-target").value = s.target;
   $("bpm-target").disabled = !s.on;
+  $("bpm-auto").hidden = s.bpm == null;                    // my own BPM: also the playlist's tempo; Auto goes back
+  $("bpm-auto").textContent = `Auto (${s.auto})`;
 }
 async function saveTempo(on, bpm) {
   try { await api(`/api/playlists/${PID}/tempo`, {on, bpm}, "PUT"); } catch (e) { showError(`Couldn't save: ${e.message}`); }
@@ -603,6 +725,7 @@ function retuneCurrent() {                              // the playing track fol
   showTempoNote();
 }
 $("same-bpm").addEventListener("change", () => saveTempo($("same-bpm").checked, data.tempo.bpm));
+$("bpm-auto").addEventListener("click", () => saveTempo(data.tempo.on, null));
 $("bpm-target").addEventListener("change", () => {
   const v = Number($("bpm-target").value);
   saveTempo(true, v >= 60 && v <= 200 ? v : null);

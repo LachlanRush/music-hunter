@@ -213,7 +213,7 @@ def test_track_bpm_override(lib):
     assert conn.execute("SELECT bpm_override FROM playlist_tracks").fetchone()[0] == 150
 
 
-def test_recently_deleted(lib):
+def test_recently_deleted(lib, monkeypatch):
     """Removing a track moves it to Recently deleted with its stars; Restore puts it back starred; Delete forever and
     the 30-day limit remove it for good, and a Spotify refresh leaves removed tracks out."""
     conn, track, root = lib
@@ -232,6 +232,7 @@ def test_recently_deleted(lib):
     library.remove_from_playlist(conn, pid, a)
     with conn:
         conn.execute("UPDATE deleted_tracks SET deleted_at = datetime('now', '-31 days')")
+    monkeypatch.setitem(config.CONFIG["library"], "deleted_days", 30)        # (kept for good by default now)
     assert library.purge_deleted(conn) == 1 and library.deleted_tracks(conn, pid) == []
     assert conn.execute("SELECT spotify_id FROM removed_spotify WHERE playlist_id = ?", (pid,)).fetchone()[0] == "spA"
     from music_hunter import spotify
@@ -463,3 +464,71 @@ def test_similar_playlist(lib, monkeypatch):
                                                        (me, "member")]
     assert rows[-1]["stars"] == 5
     assert library.list_playlists(conn)[-1]["name"] == "Seed radio"
+
+
+def test_folders_description_and_keeping_deleted(lib, monkeypatch):
+    """Folders group playlists (one level; deleting one keeps its playlists); a description is saved and cleared;
+    with deleted_days = 0 Recently deleted is never purged."""
+    conn, track, _ = lib
+    pid = library.create_playlist(conn, "d&b")
+    fid = library.create_folder(conn, " Techno ")
+    library.move_to_folder(conn, pid, fid)
+    assert library.list_folders(conn) == [{"id": fid, "name": "Techno"}]
+    assert library.list_playlists(conn)[0]["folder_id"] == fid
+    with pytest.raises(ValueError):
+        library.move_to_folder(conn, pid, fid + 99)
+    library.rename_folder(conn, fid, "Rollers")
+    library.delete_folder(conn, fid)
+    assert library.list_folders(conn) == [] and library.list_playlists(conn)[0]["folder_id"] is None
+
+    library.set_description(conn, pid, "  Rolling, minimal vocals ")
+    assert library.list_playlists(conn)[0]["description"] == "Rolling, minimal vocals"
+    library.set_description(conn, pid, "")
+    assert library.list_playlists(conn)[0]["description"] is None
+
+    t = track("Old")
+    library.add_to_playlist(conn, pid, t)
+    library.remove_from_playlist(conn, pid, t)
+    conn.execute("UPDATE deleted_tracks SET deleted_at = '2020-01-01 00:00:00'")
+    monkeypatch.setitem(config.CONFIG["library"], "deleted_days", 0)
+    assert library.purge_deleted(conn) == 0 and library.deleted_tracks(conn, pid)
+    monkeypatch.setitem(config.CONFIG["library"], "deleted_days", 30)
+    assert library.purge_deleted(conn) == 1
+
+
+def test_sound_order(lib):
+    """Sort by sound: the chosen track first, then the rest by closeness; tracks without a fingerprint last."""
+    import numpy as np
+
+    conn, track, _ = lib
+    pid = library.create_playlist(conn, "pump")
+    ids = [track(t) for t in ("Me", "Far", "Near", "Bare")]
+    for t, a in zip(ids[:3], (0, 1.2, 0.2)):
+        v = np.zeros(4, np.float32); v[0], v[1] = np.cos(a), np.sin(a)
+        conn.execute("INSERT INTO track_embeddings (track_id, model, dim, n_chunks, embedding) VALUES (?, 'm', 4, 1, ?)",
+                     (t, db.to_blob(v)))
+    for t in ids:
+        library.add_to_playlist(conn, pid, t)
+    me, far, near, bare = ids
+    assert library.sound_order(conn, pid, me) == [me, near, far, bare]
+
+
+def test_chosen_bpm_moves_the_playlist_tempo(lib):
+    """Set to BPM with my own number: the playlist's tempo centres on it, keeping the 4–5 star range's width."""
+    from music_hunter import tempo
+
+    conn, track, _ = lib
+    pid = library.create_playlist(conn, "pump")
+    for title, bpm in (("A", 140), ("B", 142), ("C", 150)):
+        t = track(title)
+        conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", (bpm, t))
+        library.add_to_playlist(conn, pid, t)
+        library.set_stars(conn, pid, t, 5)
+    auto = tempo.playlist_tempo(conn, pid)
+    assert auto["center"] == 142 and auto["lo"] == 140 and auto["hi"] == 150
+    tempo.save(conn, tempo.playlist_key(pid), True, 130)
+    moved = tempo.playlist_tempo(conn, pid)
+    assert (moved["center"], moved["lo"], moved["hi"]) == (130, 128, 138)
+    assert tempo.playlist_settings(conn, pid)["auto"] == 142
+    tempo.save(conn, tempo.playlist_key(pid), True, None)              # Auto: back to the stars' median
+    assert tempo.playlist_tempo(conn, pid)["center"] == 142

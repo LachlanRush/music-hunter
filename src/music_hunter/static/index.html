@@ -6,58 +6,54 @@
 <title>Music Hunter</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400..800&display=swap">
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/icon-192.png">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/colour.js"></script>
 <script src="/static/tempo.js"></script>
 <script src="/static/media.js"></script>
 <style>
-/* Now playing */
-.now { display: grid; gap: 18px; }
+/* Now playing: a big cover square, names under it (hidden until rated), glow from the playlist's cover */
+.now { display: grid; gap: 20px; }
+.now-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 22px; align-items: end; }
+.art { width: 200px; height: 200px; border-radius: 8px; background: var(--raised); object-fit: cover; display: grid;
+  place-items: center; color: var(--faint); font: 800 64px/1 var(--display); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+  overflow: hidden; }
 .artist { font: 500 15px/1.3 var(--body); color: var(--muted); overflow-wrap: anywhere; }
-.title {
-  font: 800 clamp(30px, 6vw, 52px)/1.02 var(--display); font-stretch: 112%;
-  letter-spacing: -0.01em; margin: 4px 0 0; text-wrap: balance; overflow-wrap: anywhere;
-}
-.transport { display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 14px; }
-.round:disabled { opacity: 0.4; cursor: default; }
+.title { font: 800 clamp(28px, 6vw, 48px)/1.05 var(--display); letter-spacing: -0.03em; margin: 4px 0 0;
+  text-wrap: balance; overflow-wrap: anywhere; }
+.title.hidden-name { color: var(--muted); font-size: clamp(22px, 4.5vw, 32px); letter-spacing: -0.01em; }
 .now.previous .title { color: var(--muted); }
-.bpm { font: 500 13px var(--mono); color: var(--muted); margin-top: 6px; }
+.bpm { font: 600 13px var(--body); color: var(--muted); margin-top: 8px; }
 .bpm:empty { display: none; }
-.title.hidden-name { color: var(--muted); font-stretch: 100%; letter-spacing: 0; }
-.round {
-  width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--line);
-  background: var(--surface); display: grid; place-items: center;
-}
-.round svg { width: 18px; height: 18px; fill: currentColor; }
-.round.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.transport { display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 12px; }
+.round { width: 44px; height: 44px; border-radius: 50%; border: 0; background: transparent; color: var(--fg);
+  display: grid; place-items: center; padding: 0; }
+.round svg { width: 20px; height: 20px; fill: currentColor; }
+.round.primary { width: 56px; height: 56px; background: var(--accent); color: #111; box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35); }
+.round.primary svg { width: 24px; height: 24px; }
+.round:disabled { opacity: 0.4; cursor: default; }
 .seek { display: grid; gap: 4px; min-width: 0; }
-.times { display: flex; justify-content: space-between; font: 400 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
-input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
+.times { display: flex; justify-content: space-between; font: 400 12px var(--body); color: var(--muted); }
 
-/* Rating strip */
-.rate { display: grid; grid-template-columns: repeat(var(--buttons, 3), minmax(0, 1fr)); gap: 8px; }
-.rate button {
-  border: 1px solid var(--line); background: var(--surface); border-radius: 6px;
-  padding: 12px 4px 10px; display: grid; gap: 2px; justify-items: center;
-}
-.rate button b { font: 800 clamp(16px, 3.4vw, 22px)/1.1 var(--display); }
+/* Rating strip: three big pills; the chosen one fills with the cover's colour */
+.rate { display: grid; grid-template-columns: repeat(var(--buttons, 3), minmax(0, 1fr)); gap: 10px; }
+.rate button { border: 0; background: rgba(255, 255, 255, 0.08); border-radius: 999px; padding: 14px 6px;
+  display: grid; gap: 2px; justify-items: center; color: var(--fg); transition: background .15s, transform .1s; }
+.rate button b { font: 800 clamp(16px, 3.4vw, 20px)/1.1 var(--display); }
 .rate button span { font: 400 12px/1.2 var(--body); color: var(--muted); }
-.rate button:hover:not(:disabled) { border-color: var(--fg); }
-.rate button.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.rate button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.14); }
+.rate button:active:not(:disabled) { transform: scale(0.98); }
+.rate button.on { background: var(--accent); color: #111; }
 .rate button.on span { color: inherit; }
 .rate button:disabled:not(.on) { opacity: 0.45; cursor: default; }
-.now-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: end; }
-.art { width: 104px; height: 104px; border-radius: 6px; background: var(--line); object-fit: cover; display: grid;
-  place-items: center; color: var(--muted); font: 800 34px/1 var(--display); }
-.tempo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 14px; }
+.tempo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 14px; color: var(--muted); }
 .tempo label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-.tempo input[type=number] { width: 76px; font: 500 14px var(--mono); padding: 4px 6px; border: 1px solid var(--line);
-  border-radius: 4px; background: var(--surface); color: var(--fg); }
-.tempo-note { font: 400 12px var(--mono); color: var(--muted); }
-.hint { font: 400 12px/1.5 var(--mono); color: var(--muted); }
+.tempo input[type=number] { width: 76px; padding: 5px 8px; }
+.tempo-note { font: 400 12px var(--body); color: var(--faint); }
+.hint { font: 400 13px/1.5 var(--body); color: var(--muted); }
 .hint:empty { display: none; }
 .volume { display: none; }
 .volume input { width: 160px; }
@@ -66,29 +62,32 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 /* Preparing the pool */
 .gate { display: grid; gap: 14px; padding-block: 40px; }
 .gate .label:empty, .gate p:empty { display: none; }
-.gate h1 { font: 800 clamp(28px, 5vw, 40px)/1.05 var(--display); font-stretch: 112%; margin: 0; text-wrap: balance; }
+.gate h1 { font: 800 clamp(28px, 5vw, 40px)/1.05 var(--display); letter-spacing: -0.02em; margin: 0; text-wrap: balance; }
 .gate p { margin: 0; color: var(--muted); max-width: 60ch; }
-.meter { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; max-width: 420px; }
+.meter { height: 4px; background: rgba(255, 255, 255, 0.12); border-radius: 2px; overflow: hidden; max-width: 420px; }
 .meter i { display: block; height: 100%; background: var(--accent); width: 0; transition: width 0.4s; }
 
 /* The most recent rating: names, artwork and a way to change it (no scores, ever) */
-.reveal { border-top: 1px solid var(--line); padding-top: 22px; display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center; }
-.reveal .art { width: 64px; height: 64px; font-size: 22px; }
-.reveal-text { min-width: 0; flex: 1 1 220px; }
-.reveal h2 { font: 700 18px/1.2 var(--display); margin: 4px 0 0; overflow-wrap: anywhere; }
+.reveal { background: rgba(255, 255, 255, 0.05); border-radius: 10px; padding: 14px; display: flex; flex-wrap: wrap;
+  gap: 14px 18px; align-items: center; }
+.reveal .art { width: 56px; height: 56px; font-size: 22px; border-radius: 5px; box-shadow: none; }
+.reveal-text { min-width: 0; flex: 1 1 200px; }
+.reveal h2 { font: 700 16px/1.25 var(--display); margin: 0; overflow-wrap: anywhere; }
 .reveal .by { color: var(--muted); font-size: 14px; }
 .change { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.change button { border: 1px solid var(--line); background: var(--surface); border-radius: 4px; padding: 6px 10px; font: 500 13px var(--body); }
-.change button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.change button { border: 0; background: rgba(255, 255, 255, 0.08); border-radius: 999px; padding: 6px 14px;
+  font: 600 13px var(--body); color: var(--fg); }
+.change button.on { background: var(--fg); color: #111; }
 .tags { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.tags button { border: 1px dashed var(--line); background: transparent; border-radius: 999px; padding: 5px 10px;
+.tags button { border: 1px solid rgba(255, 255, 255, 0.2); background: transparent; border-radius: 999px; padding: 5px 12px;
   font: 500 12px var(--body); color: var(--muted); }
-.tags button.on { border-style: solid; border-color: var(--accent); color: var(--fg); background: var(--surface); }
-.error { color: var(--bad); font-size: 14px; }
+.tags button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
-@media (max-width: 480px) {
+@media (max-width: 600px) {
+  .now-head { grid-template-columns: 1fr; justify-items: center; }
+  .now-head > div:last-child { justify-self: stretch; }
+  .art { width: min(70vw, 300px); height: min(70vw, 300px); }
   .rate button span { font-size: 10px; }
-  .art { width: 72px; height: 72px; }
 }
 @media (prefers-reduced-motion: reduce) { .meter i { transition: none; } }
 </style>
@@ -96,7 +95,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 <body>
 <main>
   <header>
-    <nav><a class="brand" href="/">MUSIC HUNTER</a><a class="backlink" id="nav-back" href="/" aria-label="Back">←</a><span class="crumb" id="crumb"></span></nav>
+    <nav><a class="brand" href="/">Music Hunter</a><a class="backlink" id="nav-back" href="/" aria-label="Back">‹</a><span class="crumb" id="crumb"></span></nav>
     <div class="status" id="status"></div>
   </header>
 
@@ -138,6 +137,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
     <div class="tempo">
       <label><input type="checkbox" id="same-bpm"> Set to</label>
       <label><input type="number" id="bpm-target" min="60" max="200" step="0.5" inputmode="decimal" aria-label="Target BPM"> BPM</label>
+      <button class="link" id="bpm-auto" hidden></button>
       <span class="tempo-note" id="tempo-note"></span>
     </div>
     <div class="error" id="error" hidden></div>
@@ -158,9 +158,11 @@ if (PLAYLIST) {
     $("crumb").textContent = `Finding music for ${p.name}`;
     document.title = `Find music · ${p.name} · Music Hunter`;
     playlistName = p.name; headroom = p.phone_headroom_db ?? headroom;
+    playlistCover = p.image; if (!onAir() || !onAir().art) Tint.apply(playlistCover);
     if (onAir()) showNames(onAir());
   }).catch(() => {});
 }
+let playlistCover = null;               // the glow before a track is revealed (never the hidden track's art)
 let LABELS = {};                        // rating -> button label, from config via /api/state
 let PLAY_TO_END = new Set();            // updated from the server's settings
 let PRELOAD = false, STALL_MS = 250, BACK_RESTART_S = 5;    // [ui] preload_next, stall_log_ms, back_restart_s
@@ -365,6 +367,8 @@ function renderTempo() {
   $("same-bpm").checked = tempo.on;
   $("bpm-target").value = tempo.target ?? "";
   $("bpm-target").disabled = !tempo.on;
+  $("bpm-auto").hidden = tempo.bpm == null;                // my own BPM: also the tempo filter; Auto goes back
+  $("bpm-auto").textContent = `Auto (${tempo.auto})`;
 }
 async function saveTempo(on, bpm) {
   try {
@@ -381,6 +385,7 @@ async function saveTempo(on, bpm) {
   showTempoNote();
 }
 $("same-bpm").addEventListener("change", () => saveTempo($("same-bpm").checked, tempo.bpm));
+$("bpm-auto").addEventListener("click", () => saveTempo(tempo.on, null));
 $("bpm-target").addEventListener("change", () => {
   const v = Number($("bpm-target").value);
   saveTempo(true, v >= 60 && v <= 200 ? v : null);
@@ -401,6 +406,7 @@ function showNames(track) {
   $("title").classList.toggle("hidden-name", hidden);
   $("bpm").textContent = track.bpm_shown ? `${track.bpm_shown} BPM` : "";      // shown even while hidden
   $("art-box").innerHTML = track.art ? `<img class="art" src="${track.art}" alt="">` : "?";
+  Tint.apply(track.art || playlistCover);                   // the song's colour once it's revealed, else the playlist's
   Media.metadata(hidden ? {title: "Hidden until rated", artist: playlistName ? `Finding music for ${playlistName}` : "Find music"}
                         : {title: track.title, artist: track.artist, album: playlistName, art: track.art});
 }

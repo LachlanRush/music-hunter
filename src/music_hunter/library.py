@@ -37,6 +37,45 @@ def rename_playlist(conn: sqlite3.Connection, playlist_id: int, name: str) -> No
                                                                     playlist_id))
 
 
+def set_description(conn: sqlite3.Connection, playlist_id: int, description: str | None) -> None:
+    with conn:
+        conn.execute("UPDATE playlists SET description = ? WHERE id = ?",
+                     ((description or "").strip()[:500] or None, playlist_id))
+
+
+# --- folders (2026-11-11): one level of grouping on the home page ---------------------------------------------------
+
+def list_folders(conn: sqlite3.Connection) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT id, name FROM folders ORDER BY created_at, id")]
+
+
+def create_folder(conn: sqlite3.Connection, name: str) -> int:
+    with conn:
+        return conn.execute("INSERT INTO folders (name) VALUES (?)",
+                            ((name or "").strip()[:100] or "New folder",)).lastrowid
+
+
+def rename_folder(conn: sqlite3.Connection, folder_id: int, name: str) -> None:
+    with conn:
+        if not conn.execute("UPDATE folders SET name = ? WHERE id = ?",
+                            ((name or "").strip()[:100] or "New folder", folder_id)).rowcount:
+            raise ValueError("No such folder")
+
+
+def delete_folder(conn: sqlite3.Connection, folder_id: int) -> None:
+    """The folder goes; its playlists stay, out of any folder."""
+    with conn:
+        conn.execute("UPDATE playlists SET folder_id = NULL WHERE folder_id = ?", (folder_id,))
+        conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+
+
+def move_to_folder(conn: sqlite3.Connection, playlist_id: int, folder_id: int | None) -> None:
+    if folder_id is not None and not conn.execute("SELECT 1 FROM folders WHERE id = ?", (folder_id,)).fetchone():
+        raise ValueError("No such folder")
+    with conn:
+        conn.execute("UPDATE playlists SET folder_id = ? WHERE id = ?", (folder_id, playlist_id))
+
+
 def delete_playlist(conn: sqlite3.Connection, playlist_id: int) -> None:
     """Delete a playlist; audio of tracks left in no playlist is deleted (fingerprints are kept)."""
     tracks = [r[0] for r in conn.execute("SELECT track_id FROM playlist_tracks WHERE playlist_id = ? UNION"
@@ -54,7 +93,7 @@ def delete_playlist(conn: sqlite3.Connection, playlist_id: int) -> None:
 
 def list_playlists(conn: sqlite3.Connection) -> list[dict]:
     return [{**dict(r), "image": cover_url(r["id"], r["image_path"])} for r in conn.execute(
-        "SELECT p.id, p.name, p.description, p.image_path,"
+        "SELECT p.id, p.name, p.description, p.image_path, p.folder_id,"
         " count(pt.track_id) AS tracks, count(pt.stars) AS seeds,"
         " sum(pt.status = 'added') AS waiting"
         " FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id GROUP BY p.id ORDER BY p.created_at")]
@@ -134,6 +173,32 @@ def delete_forever(conn: sqlite3.Connection, playlist_id: int, track_id: int) ->
     _drop_if_orphaned(conn, track_id)
 
 
+def cover_from_track(conn: sqlite3.Connection, playlist_id: int, track_id: int) -> None:
+    """A track's cover art as the playlist's picture."""
+    t = conn.execute("SELECT art_path FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if not t or not t["art_path"] or not resolve(t["art_path"]).exists():
+        raise ValueError("That track has no cover art")
+    set_cover(conn, playlist_id, resolve(t["art_path"]).read_bytes())
+
+
+def sound_order(conn: sqlite3.Connection, playlist_id: int, track_id: int) -> list[int]:
+    """The playlist's tracks by how close they sound to one of them (MAEST fingerprint, cosine similarity): that track
+    first, then the closest; tracks without a fingerprint last."""
+    import numpy as np
+
+    me = conn.execute("SELECT embedding FROM track_embeddings WHERE track_id = ?", (track_id,)).fetchone()
+    rows = conn.execute("SELECT pt.track_id, e.embedding FROM playlist_tracks pt LEFT JOIN track_embeddings e"
+                        " ON e.track_id = pt.track_id WHERE pt.playlist_id = ? AND pt.track_id != ?",
+                        (playlist_id, track_id)).fetchall()
+    have = [r for r in rows if r["embedding"] and me]
+    rest = [r["track_id"] for r in rows if not (r["embedding"] and me)]
+    order = []
+    if have:
+        sims = np.stack([db.from_blob(r["embedding"]) for r in have]) @ db.from_blob(me["embedding"])
+        order = [have[i]["track_id"] for i in np.argsort(-sims)]
+    return [track_id, *order, *rest]
+
+
 def similar_playlist(conn: sqlite3.Connection, track_id: int) -> int:
     """"Find similar" (feedback #39): a new playlist "<title> radio" with this track at 5 stars, and the closest-sounding
     tracks from my playlists in its To rate section. Closeness is the MAEST fingerprint's cosine similarity alone
@@ -181,7 +246,9 @@ def deleted_tracks(conn: sqlite3.Connection, playlist_id: int) -> list[dict]:
 
 
 def purge_deleted(conn: sqlite3.Connection) -> int:
-    """Delete for good everything in Recently deleted for longer than [library] deleted_days."""
+    """Delete for good everything in Recently deleted for longer than [library] deleted_days (0: never)."""
+    if not CONFIG["library"]["deleted_days"]:
+        return 0
     old = conn.execute("SELECT playlist_id, track_id FROM deleted_tracks WHERE deleted_at < datetime('now', ?)",
                        (f"-{CONFIG['library']['deleted_days']} days",)).fetchall()
     for pid, tid in old:

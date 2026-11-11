@@ -379,7 +379,7 @@ home_assistant = "http://100.90.89.29:8123"
 # or deleted for good there, and is deleted for good after this many days. A refresh from Spotify never brings back
 # a track removed from the playlist.
 [library]
-deleted_days = 30
+deleted_days = 0     # 0 = kept until I delete them (from 2026-11-11; was 30)
 cover_max_mb = 30    # the largest picture accepted for a playlist
 cover_size = 600     # stored square, this many pixels a side
 # "Find similar" on a track (feedback #39, 2026-11-11): a new playlist with that track at 5 stars, and the closest-
