@@ -344,7 +344,7 @@ document.addEventListener("click", async (e) => {
     const tid = Number(more.dataset.more);
     const menu = document.createElement("div");
     menu.className = "menu";
-    menu.innerHTML = (data.others.length ? `<div class="label">Add to</div>` + data.others.map((o) =>
+    menu.innerHTML = (data.others.length ? `<div class="label">Add to playlist</div>` + data.others.map((o) =>
         `<button data-addto="${o.id}" data-track="${tid}">${esc(o.name)}</button>`).join("") : "")
       + `<button data-own-bpm="${tid}">Play at … BPM</button>`
       + `<button data-similar="${tid}">Find similar</button>`
