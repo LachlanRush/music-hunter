@@ -126,6 +126,7 @@ li.found { animation: found 1.4s ease-out; }
 .sheet li.on .tick::after { content: ""; width: 6px; height: 11px; border: solid #111; border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg); }
 /* Dragging a song within its stars */
 li[data-row] { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+li.held { background: rgba(255, 255, 255, 0.1); }
 li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5); position: relative; z-index: 3; }
 #mh-download { display: none; }                           /* (the button an older app adds; it's in the ⋯ menu now) */
 .menu button.off { color: var(--muted); }                 /* Download and Sync while they're off */
@@ -688,6 +689,8 @@ const RowDrag = (() => {
   let d = null, justDragged = false;
   const HOLD_MS = 350, SLOP = 8;
   const can = (li) => li && li.closest("#tracks") && !sortOrder;
+  let lastTouch = 0;
+  const menuFor = (li) => { const m = li.querySelector("[data-more]"); if (m) m.click(); };   // its ⋯ options
   function begin() { d.active = true; d.li.classList.add("dragging"); if (navigator.vibrate) navigator.vibrate(15); }
   function move(x, y) {
     if (y < 70) window.scrollBy(0, -12); else if (y > innerHeight - 160) window.scrollBy(0, 12);
@@ -708,14 +711,18 @@ const RowDrag = (() => {
     catch (e) { showError(`Couldn't save the order: ${e.message}`); load(); }
   }
   const start = (e, li, x, y, touch) => {
-    if (!can(li) || e.target.closest(".stars, .more, .menu")) return;
-    d = {li, x0: x, y0: y, touch, active: false};
-    if (touch) d.timer = setTimeout(() => { if (d && !d.active) begin(); }, HOLD_MS);
+    if (!li || e.target.closest(".stars, .more, .menu")) return;
+    if (touch) lastTouch = Date.now();
+    d = {li, x0: x, y0: y, touch, active: false, drag: can(li)};
+    // A finger held still: let go for the song's options, or move to drag it (within its stars).
+    if (touch) d.timer = setTimeout(() => {
+      if (d && !d.active) { d.held = true; li.classList.add("held"); if (navigator.vibrate) navigator.vibrate(15); }
+    }, HOLD_MS);
   };
   document.addEventListener("mousedown", (e) => { if (e.button === 0) start(e, e.target.closest("li[data-row]"), e.clientX, e.clientY, false); });
   document.addEventListener("mousemove", (e) => {
     if (!d || d.touch) return;
-    if (!d.active && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > SLOP) begin();
+    if (!d.active && d.drag && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > SLOP) begin();
     if (d.active) move(e.clientX, e.clientY);
   });
   document.addEventListener("mouseup", () => { if (d && !d.touch) (d.active ? end() : (d = null)); });
@@ -725,18 +732,27 @@ const RowDrag = (() => {
   document.addEventListener("touchmove", (e) => {
     if (!d || !d.touch) return;
     const t = e.touches[0];
-    if (!d.active) { if (Math.hypot(t.clientX - d.x0, t.clientY - d.y0) > SLOP) { clearTimeout(d.timer); d = null; } return; }
+    const far = Math.hypot(t.clientX - d.x0, t.clientY - d.y0) > SLOP;
+    if (!d.active && !d.held) { if (far) { clearTimeout(d.timer); d = null; } return; }   // scrolling
     e.preventDefault();
+    if (!d.active) { if (!far || !d.drag) return; d.li.classList.remove("held"); begin(); }
     move(t.clientX, t.clientY);
   }, {passive: false});
   document.addEventListener("touchend", (e) => {
     if (!d || !d.touch) return;
     clearTimeout(d.timer);
-    if (d.active) { e.preventDefault(); end(); } else d = null;
+    if (d.active) { e.preventDefault(); end(); return; }
+    if (d.held) { e.preventDefault(); d.li.classList.remove("held"); justDragged = true; setTimeout(() => { justDragged = false; }, 50); menuFor(d.li); }
+    d = null;
   });
-  document.addEventListener("touchcancel", () => { if (d) { clearTimeout(d.timer); d.li.classList.remove("dragging"); d = null; render(); } });
+  document.addEventListener("touchcancel", () => { if (d) { clearTimeout(d.timer); d.li.classList.remove("dragging", "held"); d = null; render(); } });
   document.addEventListener("click", (e) => { if (justDragged && e.target.closest("li[data-row]")) { e.preventDefault(); e.stopPropagation(); } }, true);
-  document.addEventListener("contextmenu", (e) => { if (e.target.closest("li[data-row]")) e.preventDefault(); });
+  document.addEventListener("contextmenu", (e) => {     // right-click a song: its ⋯ options (a held finger: above)
+    const li = e.target.closest("li[data-row]");
+    if (!li) return;
+    e.preventDefault();
+    if (Date.now() - lastTouch > 1500) menuFor(li);
+  });
   return {busy: () => !!(d && d.active)};
 })();
 $("delete-all").addEventListener("click", async () => {
