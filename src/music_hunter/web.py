@@ -390,10 +390,14 @@ class OrderBody(BaseModel):
     ids: list[int]
 
 
-@app.put("/api/playlists-order")
-def order_playlists(body: OrderBody) -> dict:
-    """The home page's order of playlists, after a drag."""
-    library.order_playlists(db.connect(), body.ids)
+class HomeOrderBody(BaseModel):
+    items: list[dict]
+
+
+@app.put("/api/home-order")
+def order_home(body: HomeOrderBody) -> dict:
+    """The home page's order of folders and playlists, after a drag."""
+    library.order_home(db.connect(), body.items)
     return {"ok": True}
 
 
@@ -475,7 +479,10 @@ def get_playlists() -> list[dict]:
 
 @app.get("/api/folders")
 def get_folders() -> list[dict]:
-    return library.list_folders(db.connect())
+    """The home page's sections: my folders and the built-in Playlists (id 0: playlists in no folder), in order."""
+    conn = db.connect()
+    return [*library.list_folders(conn),
+            {"id": 0, "name": "Playlists", "builtin": True, "position": db.get_setting(conn, "home_loose_position")}]
 
 
 @app.post("/api/folders")

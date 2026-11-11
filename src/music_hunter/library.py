@@ -47,7 +47,8 @@ def set_description(conn: sqlite3.Connection, playlist_id: int, description: str
 # --- folders (2026-11-11): one level of grouping on the home page ---------------------------------------------------
 
 def list_folders(conn: sqlite3.Connection) -> list[dict]:
-    return [dict(r) for r in conn.execute("SELECT id, name FROM folders ORDER BY created_at, id")]
+    return [dict(r) for r in conn.execute("SELECT id, name, position FROM folders"
+                                          " ORDER BY position IS NULL, position, created_at, id")]
 
 
 def create_folder(conn: sqlite3.Connection, name: str) -> int:
@@ -94,18 +95,24 @@ def delete_playlist(conn: sqlite3.Connection, playlist_id: int) -> None:
 
 def list_playlists(conn: sqlite3.Connection) -> list[dict]:
     return [{**dict(r), "image": cover_url(r["id"], r["image_path"])} for r in conn.execute(
-        "SELECT p.id, p.name, p.description, p.image_path, p.folder_id,"
+        "SELECT p.id, p.name, p.description, p.image_path, p.folder_id, p.position,"
         " count(pt.track_id) AS tracks, count(pt.stars) AS seeds,"
         " sum(pt.status = 'added') AS waiting"
         " FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id GROUP BY p.id"
         " ORDER BY p.position IS NULL, p.position, p.created_at, p.id")]
 
 
-def order_playlists(conn: sqlite3.Connection, ids: list[int]) -> None:
-    """The home page's order, as dragged: these playlists in this order (others keep theirs, after them)."""
+def order_home(conn: sqlite3.Connection, items: list[dict]) -> None:
+    """The home page's order, as dragged: its sections and their playlists in one sequence ({'kind': 'folder' | 'loose'
+    (the built-in Playlists section) | 'playlist', 'id'}; a section's playlists follow it)."""
     with conn:
-        for i, pid in enumerate(ids):
-            conn.execute("UPDATE playlists SET position = ? WHERE id = ?", (i, pid))
+        for i, it in enumerate(items):
+            if it["kind"] == "loose":                     # the built-in Playlists section (playlists in no folder)
+                conn.execute("INSERT INTO settings (key, value, updated_at) VALUES ('home_loose_position', ?, datetime('now'))"
+                             " ON CONFLICT(key) DO UPDATE SET value = excluded.value", (str(i),))
+                continue
+            table = "folders" if it["kind"] == "folder" else "playlists"
+            conn.execute(f"UPDATE {table} SET position = ? WHERE id = ?", (i, int(it["id"])))
 
 
 def playlist_tracks(conn: sqlite3.Connection, playlist_id: int) -> list[dict]:

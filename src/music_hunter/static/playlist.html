@@ -611,7 +611,7 @@ document.addEventListener("click", (e) => {
     m.innerHTML = `<div class="label">Move to folder</div>` + (data.folders || []).map((f) =>
         `<button data-folder-pick="${f.id}">${f.id === data.folder_id ? "✓ " : ""}${esc(f.name)}</button>`).join("")
       + `<button data-folder-pick="new">New folder…</button>`
-      + (data.folder_id ? `<hr><button data-folder-pick="none">Remove from folder</button>` : "");
+      + (data.folder_id ? `<hr><button data-folder-pick="none">Move to Playlists</button>` : "");
     $("pl-more").parentElement.appendChild(m);
     placeMenu(m);
     return;

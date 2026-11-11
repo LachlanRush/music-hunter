@@ -37,21 +37,23 @@ h1 { font: 700 20px/1.2 var(--display); margin: 0; }      /* the same as "Add" b
   .card .meta { font-size: 11px; }
 }
 
-/* Folders: one level, opened and closed with the arrow; the playlists inside stay one tap away */
-.folders { display: grid; gap: 6px; }
-.folder-head { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 10px; align-items: center;
-  padding: 10px 6px 10px 10px; border-radius: var(--radius); }
-.folder-head:hover { background: rgba(255, 255, 255, 0.05); }
-.folder-toggle { display: contents; cursor: pointer; }
-.folder-toggle .chev { width: 24px; height: 24px; fill: var(--muted); transition: transform .2s; }
+/* Sections: my folders and the built-in Playlists, each opened and closed with its arrow (as clean as the Feedback
+   fold-out), dragged by the name row into any order. */
+.home { display: grid; gap: 6px; }
+.folder-head { display: flex; align-items: center; gap: 6px; padding: 6px 0; cursor: grab; user-select: none;
+  -webkit-user-select: none; -webkit-touch-callout: none; }
+.folder-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; min-width: 0; }
+.folder-toggle .chev { width: 20px; height: 20px; fill: var(--muted); transition: transform .2s; flex: none; }
 .folder.closed .chev { transform: rotate(-90deg); }
-.folder-icon { width: 44px; height: 44px; border-radius: 6px; background: var(--raised); display: grid; place-items: center; }
-.folder-icon svg { width: 22px; height: 22px; fill: var(--muted); }
-.folder-name { min-width: 0; }
-.folder-name b { display: block; font: 700 16px/1.3 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.folder .grid { padding: 6px 0 14px 0; }
+.folder-toggle b { font: 700 16px/1.3 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folder-toggle .meta { margin-left: 4px; }
+.folder-toggle:hover b { text-decoration: underline; text-underline-offset: 3px; }
+.folder-more { position: relative; margin-left: auto; }
+.folder-more .icon-btn { width: 32px; height: 32px; }
+.folder .grid { padding: 6px 0 18px 0; }
 .folder.closed .grid { display: none; }
-.folder-more { position: relative; }
+.folder.dragging { opacity: .3; }
+body.dragging-card .folder:not(.closed) .grid:empty { display: block; min-height: 80px; border: 2px dashed rgba(255, 255, 255, 0.18); border-radius: 8px; margin-bottom: 12px; }
 
 /* Dragging a playlist (into or out of a folder, or to a new place) */
 .card { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
@@ -62,6 +64,8 @@ h1 { font: 700 20px/1.2 var(--display); margin: 0; }      /* the same as "Add" b
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6); transform: translate(-50%, -60%) scale(1.04); opacity: .95; }
 .ghost img, .ghost div { width: 120px; height: 120px; object-fit: cover; display: grid; place-items: center;
   background: var(--raised); font: 800 36px var(--display); color: var(--faint); }
+.folder-ghost { width: auto; display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--raised);
+  font: 700 15px var(--display); transform: translate(-50%, -50%); }
 .folder.drop-here > .folder-head { background: var(--accent-soft); outline: 2px solid rgba(255, 255, 255, 0.35); outline-offset: -2px; }
 body.dragging-card { cursor: grabbing; }
 .add { display: grid; gap: 12px; padding-top: 12px; }
@@ -75,8 +79,7 @@ form input { flex: 1 1 260px; min-width: 0; }
 <main>
   <div class="status" id="status"></div>
 
-  <section class="folders" id="folders" aria-label="Folders"></section>
-  <section class="grid" id="grid" aria-label="Your playlists"><div class="empty">Loading…</div></section>
+  <section class="home" id="home" aria-label="Your playlists and folders"><div class="empty">Loading…</div></section>
 
   <section class="add" aria-label="Add a playlist">
     <form id="import-form">
@@ -103,7 +106,6 @@ form input { flex: 1 1 260px; min-width: 0; }
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-const FOLDER = '<svg viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h5l2 2h8A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>';
 const CHEV = '<svg class="chev" viewBox="0 0 24 24"><path d="M7 9.5l5 5 5-5z"/></svg>';
 
 async function api(path, body, method) {
@@ -132,7 +134,7 @@ const card = (p) => `
   </a>`;
 
 // Which folders are closed is remembered on this device.
-const closed = (() => { try { return new Set(JSON.parse(localStorage.getItem("closedFolders") || "[]")); } catch (e) { return new Set(); } })();
+const closed = (() => { try { return new Set(JSON.parse(localStorage.getItem("closedFolders") || "[]").map(String)); } catch (e) { return new Set(); } })();
 function saveClosed() { try { localStorage.setItem("closedFolders", JSON.stringify([...closed])); } catch (e) {} }
 
 // The list as last seen shows at once; each playlist's page data is fetched ahead, so opening one is instant.
@@ -158,32 +160,32 @@ async function load() {
   } catch (e) { $("status").textContent = "Can't reach the music-hunter server."; }
 }
 function show(lists, folders) {
-  if (typeof Drag !== "undefined" && Drag.busy()) return;    // not while a playlist is being dragged
-  const fh = folders.map((f) => {
-    const inside = lists.filter((p) => p.folder_id === f.id);
-    return `<div class="folder ${closed.has(f.id) ? "closed" : ""}" data-folder="${f.id}">
+  if (typeof Drag !== "undefined" && Drag.busy()) return;    // not while something is being dragged
+  // Sections, in the order I dragged them into: my folders and the built-in Playlists (id 0, everything in no folder,
+  // where new playlists go). Each opens and closes with its arrow; only my folders have a ⋯ (rename, delete).
+  const mine = new Set(folders.filter((f) => !f.builtin).map((f) => f.id));
+  const sections = folders.map((f, i) => ({...f, n: f.builtin ? 1000 : i}))
+    .sort((x, y) => ((x.position == null) - (y.position == null)) || ((x.position ?? 0) - (y.position ?? 0)) || (x.n - y.n));
+  const html = sections.map((f) => {
+    const inside = lists.filter((p) => (f.builtin ? !mine.has(p.folder_id) : p.folder_id === f.id));
+    const key = String(f.id);
+    return `<div class="folder ${closed.has(key) ? "closed" : ""}" data-folder="${f.id}">
       <div class="folder-head">
-        <span class="folder-toggle" data-toggle="${f.id}" role="button" tabindex="0" aria-expanded="${!closed.has(f.id)}">
-          ${CHEV}<span class="folder-icon">${FOLDER}</span>
-          <span class="folder-name"><b>${esc(f.name)}</b><span class="meta">${inside.length} playlist${inside.length === 1 ? "" : "s"}</span></span>
-        </span>
-        <div class="folder-more"><button class="icon-btn" data-folder-more="${f.id}" aria-label="More for ${esc(f.name)}">⋯</button></div>
+        <span class="folder-toggle" data-toggle="${key}" role="button" tabindex="0" aria-expanded="${!closed.has(key)}">
+          ${CHEV}<b>${esc(f.name)}</b><span class="meta">${inside.length}</span></span>
+        ${f.builtin ? "" : `<div class="folder-more"><button class="icon-btn" data-folder-more="${f.id}" aria-label="More for ${esc(f.name)}">⋯</button></div>`}
       </div>
-      <div class="grid">${inside.length ? inside.map(card).join("") : `<div class="empty meta">Empty — move playlists here from their ⋯ menu.</div>`}</div>
+      <div class="grid">${inside.map(card).join("")}</div>
     </div>`;
   }).join("");
-  const loose = lists.filter((p) => !p.folder_id || !folders.some((f) => f.id === p.folder_id));
-  const gh = loose.length ? loose.map(card).join("")
-    : lists.length ? "" : `<div class="empty">No playlists yet. Import one from Spotify below.</div>`;
   // Unchanged since the cached view: left alone, so the covers don't flash.
-  if (fh !== $("folders").dataset.html) { $("folders").innerHTML = fh; $("folders").dataset.html = fh; }
-  if (gh !== $("grid").dataset.html) { $("grid").innerHTML = gh; $("grid").dataset.html = gh; }
+  if (html !== $("home").dataset.html) { $("home").innerHTML = html; $("home").dataset.html = html; }
 }
 
 document.addEventListener("click", async (e) => {
   const toggle = e.target.closest("[data-toggle]");
   if (toggle) {
-    const id = Number(toggle.dataset.toggle), box = toggle.closest(".folder");
+    const id = toggle.dataset.toggle, box = toggle.closest(".folder");
     box.classList.toggle("closed");
     box.classList.contains("closed") ? closed.add(id) : closed.delete(id);
     toggle.setAttribute("aria-expanded", String(!box.classList.contains("closed")));
@@ -245,15 +247,19 @@ const Drag = (() => {
   let d = null, justDragged = false;
   const HOLD_MS = 350, SLOP = 8;
   const at = (x, y) => document.elementFromPoint(x, y);
+  // What's picked up: a playlist (its card) or a folder (by its name row).
+  const pick = (t) => t.closest(".card[data-id]") || (!t.closest(".folder-more") && t.closest(".folder-head")?.parentElement) || null;
   function begin(card, x, y) {
-    const img = card.querySelector(".cover img");
+    const folder = card.classList.contains("folder");
+    const img = !folder && card.querySelector(".cover img");
     const ghost = document.createElement("div");
-    ghost.className = "ghost";
-    ghost.innerHTML = img ? `<img src="${img.src}" alt="">` : `<div>${esc(card.querySelector("b").textContent[0] || "?")}</div>`;
+    ghost.className = folder ? "ghost folder-ghost" : "ghost";
+    ghost.innerHTML = folder ? `<b>${esc(card.querySelector(".folder-toggle b").textContent)}</b>`
+      : img ? `<img src="${img.src}" alt="">` : `<div>${esc(card.querySelector("b").textContent[0] || "?")}</div>`;
     document.body.appendChild(ghost);
     card.classList.add("dragging");
     document.body.classList.add("dragging-card");
-    d = {...d, card, ghost, active: true};
+    d = {...d, card, ghost, folder, active: true};
     move(x, y);
     if (navigator.vibrate) navigator.vibrate(15);
   }
@@ -263,6 +269,13 @@ const Drag = (() => {
     document.querySelectorAll(".drop-here").forEach((f) => f.classList.remove("drop-here"));
     const el = at(x, y);
     if (!el) return;
+    if (d.folder) {                                     // a section goes above or below another
+      const top = el.closest("#home > .folder");
+      if (!top || top === d.card) return;
+      const r = top.getBoundingClientRect();
+      $("home").insertBefore(d.card, y > r.top + r.height / 2 ? top.nextSibling : top);
+      return;
+    }
     const head = el.closest(".folder-head"), over = el.closest(".card");
     if (head) { head.parentElement.classList.add("drop-here"); return; }      // into the folder, at its end
     if (over && over !== d.card) {                                             // beside another playlist
@@ -280,14 +293,22 @@ const Drag = (() => {
     document.body.classList.remove("dragging-card");
     const into = document.querySelector(".folder.drop-here");
     document.querySelectorAll(".drop-here").forEach((f) => f.classList.remove("drop-here"));
-    if (into) into.querySelector(".grid").appendChild(card);
+    if (into && !d.folder) into.querySelector(".grid").appendChild(card);
+    const wasFolder = d.folder;
     d = null; justDragged = true; setTimeout(() => { justDragged = false; }, 50);
-    const box = card.closest("[data-folder]");
-    const folder = box ? Number(box.dataset.folder) : null;
-    const ids = [...document.querySelectorAll(".card[data-id]")].map((c) => Number(c.dataset.id));
+    // The whole page's order, folders and playlists together (a folder's playlists after it).
+    const items = [];
+    for (const block of $("home").children) {
+      const fid = Number(block.dataset.folder);
+      items.push(fid ? {kind: "folder", id: fid} : {kind: "loose"});
+      block.querySelectorAll(".card[data-id]").forEach((c) => items.push({kind: "playlist", id: Number(c.dataset.id)}));
+    }
     try {
-      await api(`/api/playlists/${card.dataset.id}/folder`, {folder_id: folder}, "PUT");
-      await api("/api/playlists-order", {ids}, "PUT");
+      if (!wasFolder) {
+        const box = card.closest("[data-folder]");
+        await api(`/api/playlists/${card.dataset.id}/folder`, {folder_id: box ? (Number(box.dataset.folder) || null) : null}, "PUT");
+      }
+      await api("/api/home-order", {items}, "PUT");
     } catch (e) { showError(`Couldn't move it: ${e.message}`); }
     load();
   }
@@ -298,7 +319,7 @@ const Drag = (() => {
   }
   // Mouse
   document.addEventListener("mousedown", (e) => {
-    const card = e.button === 0 && e.target.closest(".card[data-id]");
+    const card = e.button === 0 && pick(e.target);
     if (card) d = {card, x0: e.clientX, y0: e.clientY, active: false};
   });
   document.addEventListener("mousemove", (e) => {
@@ -309,7 +330,7 @@ const Drag = (() => {
   document.addEventListener("mouseup", (e) => { if (d && !d.touch) { d.active ? end(e.clientX, e.clientY) : (d = null); } });
   // Finger: hold, then drag
   document.addEventListener("touchstart", (e) => {
-    const card = e.target.closest(".card[data-id]");
+    const card = pick(e.target);
     if (!card || e.touches.length > 1) return;
     const t = e.touches[0];
     lastTouch = Date.now();
@@ -332,10 +353,10 @@ const Drag = (() => {
     if (!d || !d.touch) return;
     clearTimeout(d.timer);
     if (d.active) { e.preventDefault(); end(d.x ?? d.x0, d.y ?? d.y0); return; }
-    if (d.held) {                                          // held and let go: its options
+    if (d.held) {                                          // held and let go: a playlist's options
       e.preventDefault();
       d.card.classList.remove("held");
-      PlMenu.open(Number(d.card.dataset.id), d.x0, d.y0);
+      if (d.card.dataset.id) PlMenu.open(Number(d.card.dataset.id), d.x0, d.y0);
     }
     d = null;
   });
@@ -347,7 +368,7 @@ const Drag = (() => {
     e.preventDefault();
     if (Date.now() - lastTouch > 1500) PlMenu.open(Number(card.dataset.id), e.clientX, e.clientY);
   });
-  document.addEventListener("click", (e) => { if (justDragged && e.target.closest(".card")) { e.preventDefault(); e.stopPropagation(); } }, true);
+  document.addEventListener("click", (e) => { if (justDragged && e.target.closest(".card, .folder-head")) { e.preventDefault(); e.stopPropagation(); } }, true);
   return {busy: () => !!(d && d.active)};
 })();
 
@@ -389,7 +410,7 @@ const PlMenu = (() => {
     m.innerHTML = `<div class="label">Move to folder</div>` + (info.folders || []).map((f) =>
         `<button data-act="to" data-folder="${f.id}">${f.id === info.folder_id ? "✓ " : ""}${esc(f.name)}</button>`).join("")
       + `<button data-act="to" data-folder="new">New folder…</button>`
-      + (info.folder_id ? `<hr><button data-act="to" data-folder="none">Remove from folder</button>` : "");
+      + (info.folder_id ? `<hr><button data-act="to" data-folder="none">Move to Playlists</button>` : "");
     place(m, x, y);
   }
   document.addEventListener("click", async (e) => {

@@ -473,7 +473,7 @@ def test_folders_description_and_keeping_deleted(lib, monkeypatch):
     pid = library.create_playlist(conn, "d&b")
     fid = library.create_folder(conn, " Techno ")
     library.move_to_folder(conn, pid, fid)
-    assert library.list_folders(conn) == [{"id": fid, "name": "Techno"}]
+    assert library.list_folders(conn) == [{"id": fid, "name": "Techno", "position": None}]
     assert library.list_playlists(conn)[0]["folder_id"] == fid
     with pytest.raises(ValueError):
         library.move_to_folder(conn, pid, fid + 99)
@@ -532,3 +532,13 @@ def test_chosen_bpm_moves_the_playlist_tempo(lib):
     assert tempo.playlist_settings(conn, pid)["auto"] == 142
     tempo.save(conn, tempo.playlist_key(pid), True, None)              # Auto: back to the stars' median
     assert tempo.playlist_tempo(conn, pid)["center"] == 142
+
+
+def test_home_order(lib):
+    """Folders and playlists share one order on the home page (a folder can sit below the playlists)."""
+    conn, _, _ = lib
+    a, b = library.create_playlist(conn, "a"), library.create_playlist(conn, "b")
+    fid = library.create_folder(conn, "f")
+    library.order_home(conn, [{"kind": "playlist", "id": b}, {"kind": "playlist", "id": a}, {"kind": "folder", "id": fid}])
+    assert [p["id"] for p in library.list_playlists(conn)] == [b, a]
+    assert library.list_folders(conn)[0]["position"] == 2
