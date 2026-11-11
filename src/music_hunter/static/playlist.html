@@ -121,6 +121,9 @@ li.found { animation: found 1.4s ease-out; }
 .sheet li { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 6px;
   margin: 0; border-radius: 6px; cursor: pointer; }
 .sheet li:hover { background: rgba(255, 255, 255, 0.06); }
+.sheet li.sheet-sec { display: block; padding: 12px 6px 4px; cursor: default; font: 700 12px var(--body); letter-spacing: .04em;
+  text-transform: uppercase; color: var(--muted); }
+.sheet li.sheet-sec:hover { background: none; }
 .sheet .pic { width: 44px; height: 44px; border-radius: 4px; background: var(--surface); object-fit: cover; display: grid;
   place-items: center; color: var(--faint); font: 800 18px var(--display); }
 .sheet li b { font: 500 15px var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -556,7 +559,8 @@ document.addEventListener("click", async (e) => {
       <button data-pl-action="folder">${data.folder_id ? "Move to another folder" : "Move to folder"}</button>`
       + (data.can_refresh ? `<button data-pl-action="refresh">Refresh from Spotify</button>` : "")
       + (Phone ? `<button data-pl-toggle="download"></button>` : "") + `<button data-pl-toggle="sync"></button>`
-      + `<button data-pl-action="results">Results</button><hr>
+      + `<button data-pl-action="results">Results</button>`
+      + (data.others.length ? `<button data-pl-action="merge">Merge into…</button>` : "") + `<hr>
       <button data-pl-action="delete" style="color:var(--bad)">Delete playlist</button>`;
     plMore.parentElement.appendChild(menu);
     renderToggles();
@@ -597,6 +601,15 @@ document.addEventListener("click", async (e) => {
   if (coverFrom) {
     try { await api(`/api/playlists/${PID}/cover/track/${coverFrom.dataset.coverFrom}`, {}); await load(); }
     catch (err) { showError(`Couldn't use that cover: ${err.message}`); }
+    return;
+  }
+  const mergeInto = e.target.closest("[data-merge-into]");
+  if (mergeInto) {
+    const to = data.others.find((o) => o.id === Number(mergeInto.dataset.mergeInto));
+    if (!await ask(`Merge "${data.name}" into "${to.name}"?`, {ok: "Merge", danger: true,
+        detail: `Its songs join "${to.name}" (a song in both keeps the higher stars), then "${data.name}" and its Find music are deleted.`})) return;
+    try { await api(`/api/playlists/${PID}/merge`, {into: to.id}); go(`/playlist/${to.id}`); }
+    catch (err) { showError(`Couldn't merge: ${err.message}`); }
     return;
   }
   const folderPick = e.target.closest("[data-folder-pick]");
@@ -668,6 +681,15 @@ document.addEventListener("click", (e) => {
   const a = e.target.closest("[data-pl-action]");
   if (!a) return;
   document.querySelectorAll(".menu").forEach((m) => m.remove());
+  if (a.dataset.plAction === "merge") {                  // the playlists to merge into, in place of the menu
+    const m = document.createElement("div");
+    m.className = "menu";
+    m.innerHTML = `<div class="label">Merge into</div>` + data.others.map((o) =>
+      `<button data-merge-into="${o.id}">${esc(o.name)}</button>`).join("");
+    $("pl-more").parentElement.appendChild(m);
+    placeMenu(m);
+    return;
+  }
   if (a.dataset.plAction === "folder") {                 // the folder list opens in place of the menu
     const m = document.createElement("div");
     m.className = "menu";
@@ -715,11 +737,23 @@ async function openSheet(tid) {
   $("sheet-list").innerHTML = `<li class="empty">Loading…</li>`;
   $("sheet").showModal();
   try {
-    const lists = await api(`/api/tracks/${tid}/playlists`);
+    const [lists, folders] = await Promise.all([api(`/api/tracks/${tid}/playlists`), api("/api/folders")]);
     sheetWas = new Set(lists.filter((p) => p.has).map((p) => p.id));
-    $("sheet-list").innerHTML = lists.map((p) => `<li data-pick="${p.id}" class="${p.has ? "on" : ""}" role="checkbox" aria-checked="${p.has}">
+    // The home page's sections, in its order, with this playlist's section first; inside each the most recently
+    // played first (the order the server gives).
+    const mine = new Set(folders.filter((f) => !f.builtin).map((f) => f.id));
+    const sec = (p) => (mine.has(p.folder_id) ? p.folder_id : 0);
+    const here = sec({folder_id: data.folder_id});
+    const order = folders.map((f, i) => ({...f, n: f.builtin ? 1000 : i}))
+      .sort((x, y) => (x.id !== here) - (y.id !== here) || ((x.position == null) - (y.position == null))
+        || ((x.position ?? 0) - (y.position ?? 0)) || (x.n - y.n));
+    const item = (p) => `<li data-pick="${p.id}" class="${p.has ? "on" : ""}" role="checkbox" aria-checked="${p.has}">
       ${p.image ? `<img class="pic" src="${p.image}" alt="">` : `<span class="pic">${esc((p.name || "?")[0].toUpperCase())}</span>`}
-      <b>${esc(p.name)}</b><span class="tick"></span></li>`).join("");
+      <b>${esc(p.name)}</b><span class="tick"></span></li>`;
+    $("sheet-list").innerHTML = order.map((f) => {
+      const inside = lists.filter((p) => sec(p) === f.id);
+      return inside.length ? `<li class="sheet-sec">${esc(f.name)}</li>` + inside.map(item).join("") : "";
+    }).join("");
   } catch (e) { $("sheet-list").innerHTML = `<li class="error">Couldn't load the playlists: ${esc(e.message)}</li>`; }
 }
 $("sheet-list").addEventListener("click", (e) => {
@@ -912,6 +946,7 @@ async function playAt(i) {
   pos = i;
   const t = queue[i];
   if (!t) { audio.pause(); return; }
+  fetch(`/api/playlists/${PID}/played`, {method: "POST"}).catch(() => {});   // home lists the most recently played first
   if (shuffle) round.mark(t.id);
   showNow(t);                                                      // the player shows it at once; sound follows
   if (Media.desktop) {                                             // loudness levelling (static/media.js)

@@ -127,6 +127,11 @@ class Worker:
         return None
 
     def _run(self, job: str) -> None:
+        # With the PC doing the downloads (remote), its one worker already takes one track at a time from every
+        # playlist in turn, so several playlists fill side by side (2026-11-11: four new playlists waited hours, one
+        # whole pool at a time). The app's own downloads (restores) still go one playlist at a time.
+        if CONFIG["worker"]["mode"] == "remote" and job != "restore":
+            return self._run_locked(job)
         if not HEAVY.acquire(blocking=False):         # one session's downloads at a time (paced, no bursts)
             self.message = "Waiting for another playlist's downloads to finish…"
             HEAVY.acquire()
@@ -185,6 +190,37 @@ class Worker:
 
 
 HEAVY = threading.Lock()
+
+
+def _first_fills_first(conn) -> None:
+    """Before a track is downloaded: a playlist whose Find music can already play waits while another one's first
+    fill is still short of early_start_tracks, so a new playlist is ready in minutes, not after the others' top-ups."""
+    pid = db.SESSION.get()
+    if pid is None or CONFIG["worker"]["mode"] != "remote":
+        return
+    early = CONFIG["ui"]["early_start_tracks"]
+    from .pool import unrated_pool_size
+    if unrated_pool_size(conn) < early:
+        return                                        # this one isn't ready yet itself: go ahead
+    for _ in range(600):                              # at most ~20 min, then carry on anyway
+        needy = False
+        for other, w in list(workers.items()):
+            if other in (None, pid) or w.state != "running":
+                continue
+            try:
+                if unrated_pool_size(db.connect(other)) < early:
+                    needy = True
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+        if not needy:
+            return
+        session_worker(pid).message = "Letting a new playlist's Find music get ready first…"
+        time.sleep(2)
+
+
+import music_hunter.pool as _pool_module  # noqa: E402
+_pool_module.before_download = _first_fills_first
 worker = Worker(None)                       # the single session of earlier versions (and tests)
 workers: dict[int | None, Worker] = {None: worker}
 
@@ -520,6 +556,7 @@ def move_playlist(playlist_id: int, body: MoveBody) -> dict:
         library.move_to_folder(conn, playlist_id, body.folder_id)
     except ValueError as e:
         raise HTTPException(404, str(e))
+    _after_membership_change(conn, playlist_id)    # its folder's Offs (#49) now count, or stop counting
     return {"ok": True}
 
 
@@ -732,6 +769,33 @@ def rename_playlist(playlist_id: int, body: RenameBody) -> dict:
     return {"ok": True}
 
 
+@app.post("/api/playlists/{playlist_id}/played")
+def playlist_played(playlist_id: int) -> dict:
+    """A song of this playlist (or of its Find music) started: the home page lists the most recently played first."""
+    conn = db.connect()
+    with conn:
+        conn.execute("UPDATE playlists SET played_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = ?", (playlist_id,))
+    return {"ok": True}
+
+
+class MergeBody(BaseModel):
+    into: int
+
+
+@app.post("/api/playlists/{playlist_id}/merge")
+def merge_playlist(playlist_id: int, body: MergeBody) -> dict:
+    """Merge this playlist into another, then delete it (feedback #44)."""
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    try:
+        new = library.merge_into(conn, playlist_id, body.into)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    delete_playlist(playlist_id)
+    _after_membership_change(conn, body.into)
+    return {"ok": True, "new": new}
+
+
 @app.delete("/api/playlists/{playlist_id}")
 def delete_playlist(playlist_id: int) -> dict:
     conn = db.connect()
@@ -792,6 +856,7 @@ def _rescore_all(skip: int | None = None) -> None:
                     continue
                 token = db.SESSION.set(p["id"])
                 try:
+                    find.mark_owned(db.connect_library(), db.connect(p["id"]), p["id"])   # a folder's Offs (#49)
                     veto.update(db.connect(p["id"]))
                 finally:
                     db.SESSION.reset(token)

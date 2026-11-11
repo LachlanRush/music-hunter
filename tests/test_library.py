@@ -463,7 +463,7 @@ def test_similar_playlist(lib, monkeypatch):
     assert [(r["id"], r["status"]) for r in rows] == [(near_low, "added"), (near, "added"), (mid, "added"),
                                                        (me, "member")]
     assert rows[-1]["stars"] == 5
-    assert library.list_playlists(conn)[-1]["name"] == "Seed"
+    assert library.list_playlists(conn)[0]["name"] == "Seed"
 
 
 def test_folders_description_and_keeping_deleted(lib, monkeypatch):
@@ -562,3 +562,23 @@ def test_similar_playlist_keeps_to_the_tempo(lib):
     new = library.similar_playlist(conn, ids["Seed"])
     got = {r["title"] for r in library.playlist_tracks(conn, new)}
     assert got == {"Seed", "Near", "Misread"}
+
+
+def test_merge_into(lib):
+    """Merging: the source's songs join the target with their stars and To rate status; a song in both keeps the
+    higher stars."""
+    conn, track, _ = lib
+    a, b = library.create_playlist(conn, "a"), library.create_playlist(conn, "b")
+    both, only_a, new_a = track("Both"), track("OnlyA"), track("NewA")
+    for t in (both, only_a):
+        library.add_to_playlist(conn, a, t)
+    library.add_to_playlist(conn, a, new_a, status="added")
+    library.add_to_playlist(conn, b, both)
+    library.set_stars(conn, a, both, 5)
+    library.set_stars(conn, b, both, 2)
+    library.set_stars(conn, a, only_a, 3)
+    assert library.merge_into(conn, a, b) == 2
+    rows = {t["title"]: (t["stars"], t["status"]) for t in library.playlist_tracks(conn, b)}
+    assert rows == {"Both": (5, "member"), "OnlyA": (3, "member"), "NewA": (None, "added")}
+    with pytest.raises(ValueError):
+        library.merge_into(conn, a, a)

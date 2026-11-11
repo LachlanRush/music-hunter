@@ -158,6 +158,8 @@ class Filler:
         if not hasattr(self, "bpm_prior"):
             self.bpm_prior = seeds_median(self.conn)      # 3:2 tie-break: prefer tempos near the seeds'
         say = getattr(self, "progress", None)
+        if before_download:
+            before_download(self.conn)                    # (the app lets playlists that can't play yet go first)
         try:
             res = self.backend.analyse(c["video_id"], self.bpm_prior,
                                        status=say and (lambda text: say(f"{c['artist']} – {c['title']}: {text}")))
@@ -353,6 +355,9 @@ def unpulled_seeds(conn: sqlite3.Connection) -> list[int]:
         {r[0] for r in conn.execute("SELECT DISTINCT seed_track_id FROM suggestions")}
     return [s.track_id for s in seeds(conn) if s.track_id not in queried]
 
+
+# Called before each track is downloaded (set by the app, web.py): lets playlists not yet ready to play go first.
+before_download = None
 
 def fill(conn: sqlite3.Connection, generation: int, progress=None) -> dict:
     """Top up every seed's share of the playable pool from this generation's candidates. Safe to re-run (resumes).

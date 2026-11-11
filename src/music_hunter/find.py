@@ -77,7 +77,29 @@ def playlist_songs(lib: sqlite3.Connection, playlist_id: int) -> tuple[set, list
                        "  UNION SELECT track_id FROM removed_tracks WHERE playlist_id = ?)"
                        " OR t.spotify_id IN (SELECT spotify_id FROM removed_spotify WHERE playlist_id = ?)",
                        (playlist_id,) * 4).fetchall()
-    return {r[0] for r in rows if r[0]}, [names.song(r[1], r[2]) for r in rows]
+    vids, songs = {r[0] for r in rows if r[0]}, [names.song(r[1], r[2]) for r in rows]
+    fv, fs = folder_offs(lib, playlist_id)
+    return vids | fv, songs + fs
+
+
+def folder_offs(lib: sqlite3.Connection, playlist_id: int) -> tuple[set, list]:
+    """Songs rated Off in the Find music of another playlist in the same folder (2026-11-11, feedback #49): they
+    aren't offered here either."""
+    from . import names
+
+    row = lib.execute("SELECT folder_id FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+    if not row or row[0] is None:
+        return set(), []
+    vids, songs = set(), []
+    for (pid,) in lib.execute("SELECT id FROM playlists WHERE folder_id = ? AND id != ?", (row[0], playlist_id)):
+        if not started(pid):
+            continue
+        for r in db.connect(pid).execute("SELECT t.video_id, t.artist, t.title FROM plays p JOIN tracks t"
+                                         " ON t.id = p.track_id WHERE p.rating = 1"):
+            if r[0]:
+                vids.add(r[0])
+            songs.append(names.song(r[1], r[2]))
+    return vids, songs
 
 
 def mark_owned(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: int) -> dict:

@@ -99,7 +99,7 @@ def list_playlists(conn: sqlite3.Connection) -> list[dict]:
         " count(pt.track_id) AS tracks, count(pt.stars) AS seeds,"
         " sum(pt.status = 'added') AS waiting"
         " FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id GROUP BY p.id"
-        " ORDER BY p.position IS NULL, p.position, p.created_at, p.id")]
+        " ORDER BY p.played_at IS NULL, p.played_at DESC, p.created_at DESC, p.id DESC")]   # most recently played first
 
 
 def order_home(conn: sqlite3.Connection, items: list[dict]) -> None:
@@ -144,6 +144,35 @@ def set_stars(conn: sqlite3.Connection, playlist_id: int, track_id: int, stars: 
     db.log_event(conn, "stars_changed", playlist_id=playlist_id, track_id=track_id, stars=stars)   # for replays
 
 
+def merge_into(conn: sqlite3.Connection, source: int, target: int) -> int:
+    """Merge a playlist into another (feedback #44): its songs join the target with their stars and To rate status;
+    a song in both keeps the higher stars. Returns how many songs were new to the target. (The caller deletes the
+    source.)"""
+    if source == target:
+        raise ValueError("Pick another playlist")
+    if not conn.execute("SELECT 1 FROM playlists WHERE id = ?", (target,)).fetchone():
+        raise ValueError("No such playlist")
+    new = 0
+    with conn:
+        for r in conn.execute("SELECT track_id, stars, status, added_at, starred_at, bpm_override FROM playlist_tracks"
+                              " WHERE playlist_id = ?", (source,)).fetchall():
+            have = conn.execute("SELECT stars FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                                (target, r["track_id"])).fetchone()
+            if have:
+                if (r["stars"] or 0) > (have["stars"] or 0):
+                    conn.execute("UPDATE playlist_tracks SET stars = ?, status = 'member', starred_at = ?"
+                                 " WHERE playlist_id = ? AND track_id = ?", (r["stars"], r["starred_at"], target, r["track_id"]))
+                continue
+            conn.execute("DELETE FROM deleted_tracks WHERE playlist_id = ? AND track_id = ?", (target, r["track_id"]))
+            conn.execute("DELETE FROM removed_tracks WHERE playlist_id = ? AND track_id = ?", (target, r["track_id"]))
+            conn.execute("INSERT INTO playlist_tracks (playlist_id, track_id, stars, status, added_at, starred_at,"
+                         " bpm_override) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (target, r["track_id"], r["stars"], r["status"], r["added_at"], r["starred_at"], r["bpm_override"]))
+            new += 1
+    db.log_event(conn, "playlists_merged", source=source, target=target, new=new)
+    return new
+
+
 def order_tracks(conn: sqlite3.Connection, playlist_id: int, ids: list[int]) -> None:
     """My own order for tracks with the same stars (dragged): these tracks in this order."""
     stars = {r[0] for r in conn.execute(f"SELECT coalesce(stars, 0) FROM playlist_tracks WHERE playlist_id = ?"
@@ -159,8 +188,9 @@ def order_tracks(conn: sqlite3.Connection, playlist_id: int, ids: list[int]) -> 
 def track_playlists(conn: sqlite3.Connection, track_id: int) -> list[dict]:
     """Every playlist, and whether this track is in it (the Add to playlist sheet)."""
     return [{**dict(r), "image": cover_url(r["id"], r["image_path"]), "has": bool(r["has"])} for r in conn.execute(
-        "SELECT p.id, p.name, p.image_path, EXISTS (SELECT 1 FROM playlist_tracks pt WHERE pt.playlist_id = p.id"
-        " AND pt.track_id = ?) AS has FROM playlists p ORDER BY p.position IS NULL, p.position, p.created_at, p.id",
+        "SELECT p.id, p.name, p.image_path, p.folder_id, EXISTS (SELECT 1 FROM playlist_tracks pt WHERE pt.playlist_id = p.id"
+        " AND pt.track_id = ?) AS has FROM playlists p"
+        " ORDER BY p.played_at IS NULL, p.played_at DESC, p.created_at DESC, p.id DESC",
         (track_id,))]
 
 

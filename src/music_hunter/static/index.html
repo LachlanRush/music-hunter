@@ -349,6 +349,7 @@ async function loadTrack(track, startAt, alreadyPlayed, autoplay = true) {
   if (Media.desktop) gainNode.gain.value = Math.pow(10, track.gain_db / 20);   // loudness levelling
   else audio.volume = Media.phoneVolume(track.gain_db, headroom);
   const cached = blobs.get(track.track_id);
+  if (PLAYLIST) fetch(`/api/playlists/${PLAYLIST}/played`, {method: "POST"}).catch(() => {});   // most recently played first
   const src = await tempoPlayer.start(track.track_id, cached || track.audio, track.rate);
   if (onAir() !== track) return;                       // moved on meanwhile
   startedFromMemory = src === cached;
