@@ -1,5 +1,5 @@
 // Colour from cover art (2026-11-11): a page takes its soft accent and the glow behind its header from the playlist's
-// cover, and the player bar its solid colour from it too (--tint), instead of one fixed orange.
+// cover, and the player bar (--tint, set on the bar) a hint of the playing song's cover, instead of one fixed orange.
 // Tint.apply(url, el?) sets --accent, --accent-soft, --glow (and --tint-rgb) on `el` (default: the page root).
 const Tint = window.Tint = (() => {
   const cache = new Map();

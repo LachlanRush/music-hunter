@@ -145,12 +145,8 @@ const MHShell = window.MHShell = (() => {
     if (lastArt !== (s.art || "")) {
       lastArt = s.art || "";
       $("b-art").src = lastArt; $("b-art").style.visibility = lastArt ? "visible" : "hidden";
+      Tint.apply(lastArt || null, bar);                     // grey with a hint of the song's cover (none while hidden)
     }
-    try {                                                                   // the playing playlist's colours
-      const cs = win(owner).getComputedStyle(win(owner).document.documentElement);
-      bar.style.background = cs.getPropertyValue("--tint");
-      bar.style.setProperty("--accent", cs.getPropertyValue("--accent"));
-    } catch (e) {}
     $("b-note").textContent = s.note || "";
     bar.querySelector('[data-c="toggle"]').classList.toggle("loading", !!s.loading);
     if (s.volume !== undefined && document.activeElement !== $("b-volume")) $("b-volume").value = Math.round(s.volume * 100);

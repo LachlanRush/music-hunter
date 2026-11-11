@@ -665,6 +665,7 @@ function showNow(t) {
   $("player").hidden = false;
   $("p-title").textContent = t.title; $("p-artist").textContent = t.artist;
   $("p-art").src = t.art || ""; $("p-art").style.visibility = t.art ? "visible" : "hidden";
+  Tint.apply(t.art, $("player"));                                  // grey with a hint of the song's cover
   $("pos").textContent = "0:00"; $("dur").textContent = fmt(t.duration_s); $("seek").value = 0;
   setLoading(true);
   render();
