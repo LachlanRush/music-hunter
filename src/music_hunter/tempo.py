@@ -112,7 +112,7 @@ def rate_for(bpm: float | None, s: dict, ignore_off: bool = False) -> tuple[floa
     `ignore_off`: the rate its copy is made at (copies are kept ready even while Same BPM is off)."""
     if not s["on"] and not (ignore_off and s.get("engaged")):
         return 1.0, ""                                   # never turned on: no copies at all
-    target, max_stretch = s["target"], CONFIG["bpm"]["max_stretch"]
+    target, max_stretch = s["target"], CONFIG["tempo"].get("play_max_stretch", CONFIG["bpm"]["max_stretch"])
     if not bpm or not target:
         return 1.0, "Own tempo (unknown BPM)"
     reading = min((bpm * f for f in FOLDS), key=lambda r: abs(target / r - 1))

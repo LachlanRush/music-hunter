@@ -1023,3 +1023,9 @@ All 297 rated plays on the Pi (289 tracks) re-downloaded (256; YouTube refused t
 - **The player bar is see-through, the page blurred behind it** (frosted), instead of a grey with a hint of the song's colour.
 
 **Released as add-on 0.5.13 and app 0.3.8 (2026-11-11)**: everything since 0.5.12 — pushing code to the Pi, the new look and its follow-ups (sections and folders, drag and drop, the browser shell keeping music going between pages, Add to queue, Find similar, faster pages, the app's own question boxes), the d&b tempo fix, imports finding label uploads and fetching lost audio again, and the app's queue across playlists and cover-copy crash fix.
+
+### 19.2 Feedback round 7 (2026-11-11)
+- **A song's ⋯ near the bottom** opens upwards above the browser shell's player bar too (it opened under it, #40).
+- **Tap a playlist's name or description** to edit them (#42).
+- **Set to BPM has no ±12% limit** (#45): every song plays at the target however far its tempo is (`[tempo] play_max_stretch`); "Own tempo (… too far …)" no longer happens.
+- **Find music**: the cover box is a normal size (120 px; phones up to 160) with a small music note while the song is hidden (#47); the colours stay the playlist's, not the revealed song's, so the play button and Off · Close · Add don't change colour from song to song (#48, #51).

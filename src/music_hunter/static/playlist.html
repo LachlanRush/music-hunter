@@ -33,6 +33,7 @@ main { overflow-anchor: none; }                   /* the page keeps its own plac
   overflow: hidden; font: 800 64px var(--display); color: var(--faint); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); }
 .cover img { width: 100%; height: 100%; object-fit: cover; }
 h1 { font: 800 clamp(30px, 6vw, 56px)/1.05 var(--display); letter-spacing: -0.03em; margin: 0 0 8px; overflow-wrap: anywhere; }
+#name, .desc { cursor: text; }
 .desc { margin: 0 0 8px; color: var(--muted); font-size: 14px; line-height: 1.45; max-width: 60ch; white-space: pre-line; }
 .head .meta { font-size: 14px; color: var(--fg); opacity: .85; }
 .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -268,7 +269,9 @@ function settleLater(ms = 1500) {
   settleTimer = setTimeout(() => { load(); loadFind(); }, ms);
 }
 function placeMenu(m) {                                 // open upwards when it would run under the player
-  const r = m.getBoundingClientRect(), bottom = innerHeight - ($("player").hidden ? 8 : $("player").offsetHeight + 16);
+  const bar = document.body.classList.contains("mh-now-on") ? 150 : ($("player").hidden || getComputedStyle($("player")).display === "none")
+    ? 8 : $("player").offsetHeight + 16;              // (in the browser shell its bar covers the bottom instead)
+  const r = m.getBoundingClientRect(), bottom = innerHeight - bar;
   if (r.bottom > bottom && r.top - r.height > 60) m.classList.add("up");
 }
 function showError(msg) { $("error").textContent = msg; $("error").hidden = !msg; }
@@ -700,6 +703,8 @@ $("details").addEventListener("close", async () => {
   catch (e) { showError(`Couldn't save: ${e.message}`); }
 });
 $("sort-clear").addEventListener("click", () => { sortOrder = null; render(); });
+$("name").addEventListener("click", () => data && editDetails());          // tap the name or description to edit them
+$("desc").addEventListener("click", () => data && editDetails());
 
 // --- Add to playlist (like Spotify): every playlist, ticked where this song is; Done adds and removes --------------
 let sheetTrack = null, sheetWas = new Set();

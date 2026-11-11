@@ -308,6 +308,7 @@ back_restart_s = 5               # v5: the back button restarts the track once i
 locked = true
 target_bpm = 0.0                 # 0 = no target set: bpm_match uses the median BPM of seeds and liked tracks
 match_tempo = false              # play tracks time-stretched to the target (pitch kept), within [bpm] max_stretch
+play_max_stretch = 1.0           # Set to BPM plays every song at the target, however far (2026-11-11: no ±12% limit)
 bitrate_kbps = 160               # v5 Same BPM: stretched copies (Rubber Band, rendered on the server) as Opus
 cache_mb = 2000                  # … kept in cache/tempo/, oldest removed beyond this
 max_override_stretch = 0.25      # a track's own "Play at … BPM" in a playlist: at most ±25% from its own tempo

@@ -362,7 +362,7 @@ class TempoBody(BaseModel):
 
 def _tempo_view(s: dict) -> dict:
     return {"on": s["on"], "bpm": s["bpm"], "target": s["target"], "auto": s.get("auto"),
-            "max_stretch": CONFIG["bpm"]["max_stretch"]}
+            "max_stretch": CONFIG["tempo"].get("play_max_stretch", CONFIG["bpm"]["max_stretch"])}
 
 
 class StarsBody(BaseModel):
@@ -622,7 +622,7 @@ def get_playlist(playlist_id: int) -> dict:
             "can_refresh": bool((jobs.latest_for(conn, playlist_id, "import") or {}).get("payload", {}).get("link")),
             "tracks": [view(t) for t in tracks], "tempo": _tempo_view(s),
             "others": [{"id": o["id"], "name": o["name"]} for o in library.list_playlists(conn) if o["id"] != playlist_id],
-            "max_stretch": CONFIG["bpm"]["max_stretch"], "phone_headroom_db": CONFIG["loudness"]["phone_headroom_db"],
+            "max_stretch": CONFIG["tempo"].get("play_max_stretch", CONFIG["bpm"]["max_stretch"]), "phone_headroom_db": CONFIG["loudness"]["phone_headroom_db"],
             "back_restart_s": CONFIG["ui"]["back_restart_s"], "sync": sync.state(conn, playlist_id),
             "folder_id": p["folder_id"], "folders": library.list_folders(conn),
             "min_stars": db.get_setting(conn, f"min_stars:{playlist_id}", 0)}
@@ -1453,7 +1453,7 @@ def get_settings() -> dict:
     conn = db.connect()
     target, source = target_bpm(conn)
     return {**tempo_settings(conn), "effective_target_bpm": target, "target_source": source,
-            "max_stretch": CONFIG["bpm"]["max_stretch"]}
+            "max_stretch": CONFIG["tempo"].get("play_max_stretch", CONFIG["bpm"]["max_stretch"])}
 
 
 @router.post("/api/settings")
