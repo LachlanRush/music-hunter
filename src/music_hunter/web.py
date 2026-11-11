@@ -307,21 +307,33 @@ def track_info(conn, play) -> dict:
             "audio": f"{_base()}/audio/{t['id']}"}
 
 
+def _page(name: str) -> HTMLResponse:
+    """A page, with its /static/ files' addresses carrying their version: a browser kept an old style.css (no cache
+    rules were sent, so it guessed) under a new page, and every button looked broken on the computer (2026-11-11)."""
+    import re
+
+    def versioned(m):
+        f = STATIC / m.group(2)
+        return f'{m.group(1)}="/static/{m.group(2)}?v={f.stat().st_mtime_ns if f.exists() else 0}"'
+    html = re.sub(r'(src|href)="/static/([^"?]+)"', versioned, (STATIC / name).read_text())
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/", response_class=HTMLResponse)
 def home() -> str:
     """v5: the playlist library (SPEC.md §18.1)."""
-    return (STATIC / "home.html").read_text()
+    return _page("home.html")
 
 
 @app.get("/playlist/{playlist_id}", response_class=HTMLResponse)
 def playlist_page(playlist_id: int) -> str:
-    return (STATIC / "playlist.html").read_text()
+    return _page("playlist.html")
 
 
 @app.get("/listen", response_class=HTMLResponse)
 def index() -> str:
     """The listening interface (Find music; per playlist from milestone 2)."""
-    return (STATIC / "index.html").read_text()
+    return _page("index.html")
 
 
 # --- v5: playlists and the library (SPEC.md §18.1) -------------------------------------------
@@ -405,7 +417,7 @@ def send_feedback(body: FeedbackBody) -> dict:
 @app.get("/playlist/{playlist_id}/results", response_class=HTMLResponse)
 def overview_page(playlist_id: int) -> str:
     """A playlist's Find music results: Off and Add by score (SPEC.md §18.30)."""
-    return (STATIC / "overview.html").read_text()
+    return _page("overview.html")
 
 
 @app.get("/api/playlists/{playlist_id}/results")
@@ -1191,7 +1203,7 @@ def find_page(playlist_id: int):
 
     if not find.started(playlist_id):
         return RedirectResponse(f"/playlist/{playlist_id}")
-    return HTMLResponse((STATIC / "index.html").read_text())
+    return _page("index.html")
 
 
 @app.get("/cover/{playlist_id}")
