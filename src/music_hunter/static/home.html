@@ -16,7 +16,7 @@ else if (window.top !== window) document.documentElement.classList.add("framed")
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/nav.js"></script>
 <style>
-h1 { font: 800 clamp(28px, 6vw, 40px)/1.1 var(--display); letter-spacing: -0.02em; margin: 0; }
+h1 { font: 700 20px/1.2 var(--display); margin: 0; }      /* the same as "Add" below */
 .status:empty { display: none; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
 .card { display: grid; gap: 4px; align-content: start; text-decoration: none; color: inherit; padding: 12px;
@@ -63,7 +63,7 @@ form input { flex: 1 1 260px; min-width: 0; }
 </head>
 <body>
 <main>
-  <h1>Your playlists</h1>
+  <h1>Playlists</h1>
   <div class="status" id="status"></div>
 
   <section class="folders" id="folders" aria-label="Folders"></section>
