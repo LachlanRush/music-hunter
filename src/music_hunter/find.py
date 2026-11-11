@@ -83,22 +83,30 @@ def playlist_songs(lib: sqlite3.Connection, playlist_id: int) -> tuple[set, list
 
 
 def folder_offs(lib: sqlite3.Connection, playlist_id: int) -> tuple[set, list]:
-    """Songs rated Off in the Find music of another playlist in the same folder (2026-11-11, feedback #49): they
-    aren't offered here either."""
+    """Songs another playlist in the same folder already has, or rated Off in its Find music (2026-11-11, feedback
+    #49, #50): they aren't offered here either. Only folders I've made; the built-in Playlists section isn't one."""
     from . import names
 
     row = lib.execute("SELECT folder_id FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
     if not row or row[0] is None:
         return set(), []
     vids, songs = set(), []
+
+    def add(r):
+        if r[0]:
+            vids.add(r[0])
+        songs.append(names.song(r[1], r[2]))
+
+    for r in lib.execute("SELECT t.video_id, t.artist, t.title FROM playlist_tracks pt JOIN playlists p"
+                         " ON p.id = pt.playlist_id JOIN tracks t ON t.id = pt.track_id"
+                         " WHERE p.folder_id = ? AND p.id != ?", (row[0], playlist_id)):
+        add(r)
     for (pid,) in lib.execute("SELECT id FROM playlists WHERE folder_id = ? AND id != ?", (row[0], playlist_id)):
         if not started(pid):
             continue
         for r in db.connect(pid).execute("SELECT t.video_id, t.artist, t.title FROM plays p JOIN tracks t"
                                          " ON t.id = p.track_id WHERE p.rating = 1"):
-            if r[0]:
-                vids.add(r[0])
-            songs.append(names.song(r[1], r[2]))
+            add(r)
     return vids, songs
 
 

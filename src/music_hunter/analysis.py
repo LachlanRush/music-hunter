@@ -140,12 +140,13 @@ class Quality:
         again. Not signed in: no 256 kbps attempts, and each track's note says why."""
         import http.cookiejar
 
-        now = time.time()
-        if Quality.signed_in_at and now - Quality.signed_in_at[0] < CONFIG["quality"].get("signin_check_minutes", 60) * 60:
-            return Quality.signed_in_at[1]
+        now, file = time.time(), Path(CONFIG["quality"]["cookies_file"]).expanduser()
+        fresh = Quality.signed_in_at and now - Quality.signed_in_at[0] < CONFIG["quality"].get("signin_check_minutes", 60) * 60
+        if fresh and not (not Quality.signed_in_at[1] and file.stat().st_mtime > Quality.signed_in_at[0]):
+            return Quality.signed_in_at[1]                 # (a newly saved cookies file is checked straight away)
         ok = True                                      # can't tell (network): try, as before
         try:
-            jar = http.cookiejar.MozillaCookieJar(str(Path(CONFIG["quality"]["cookies_file"]).expanduser()))
+            jar = http.cookiejar.MozillaCookieJar(str(file))
             jar.load(ignore_discard=True, ignore_expires=True)
             r = requests.get("https://music.youtube.com/", cookies=jar, timeout=20, headers={
                 "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36"})

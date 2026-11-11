@@ -555,12 +555,16 @@ def delete_folder(folder_id: int) -> dict:
 def move_playlist(playlist_id: int, body: MoveBody) -> dict:
     conn = db.connect()
     _playlist_or_404(conn, playlist_id)
+    was = conn.execute("SELECT folder_id FROM playlists WHERE id = ?", (playlist_id,)).fetchone()[0]
     try:
         library.move_to_folder(conn, playlist_id, body.folder_id)
     except ValueError as e:
         raise HTTPException(404, str(e))
     _after_membership_change(conn, playlist_id)    # its folder's Offs (#49) now count, or stop counting (and the laptop
                                                    # copy moves into the folder: _after_membership_change requests sync)
+    if was is not None and was != body.folder_id:   # the folder it left offers its songs again (#50)
+        for (pid,) in conn.execute("SELECT id FROM playlists WHERE folder_id = ?", (was,)).fetchall():
+            _follow(pid)
     return {"ok": True}
 
 
@@ -924,6 +928,15 @@ def _after_membership_change(conn, playlist_id: int) -> None:
     in quick succession run it once more after the current pass, not once per tap."""
     _sync_tempo(conn, playlist_id)
     sync.request()                                    # the laptop's folder and ratings follow
+    folder = conn.execute("SELECT folder_id FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+    if folder and folder[0] is not None:              # the folder's other Find musics stop (or start) offering its
+        for (pid,) in conn.execute("SELECT id FROM playlists WHERE folder_id = ? AND id != ?",   # songs (#50)
+                                   (folder[0], playlist_id)).fetchall():
+            _follow(pid)
+    _follow(playlist_id)
+
+
+def _follow(playlist_id: int) -> None:
     if not find.started(playlist_id):
         return
     with _FOLLOW_GUARD:

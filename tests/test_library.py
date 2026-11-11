@@ -582,3 +582,22 @@ def test_merge_into(lib):
     assert rows == {"Both": (5, "member"), "OnlyA": (3, "member"), "NewA": (None, "added")}
     with pytest.raises(ValueError):
         library.merge_into(conn, a, a)
+
+
+def test_folder_songs_are_not_offered_again(lib):
+    """Feedback #50: a song another playlist in the same folder already has isn't offered by this one's Find music;
+    the built-in Playlists section (no folder) doesn't count."""
+    from music_hunter import find
+
+    conn, track, _ = lib
+    a, b = library.create_playlist(conn, "A"), library.create_playlist(conn, "B")
+    t = track("Work Tha Floor", "6 SENSE")
+    library.add_to_playlist(conn, b, t)
+    assert find.folder_offs(conn, a) == (set(), [])                  # neither is in a folder
+    fid = library.create_folder(conn, "style set")
+    library.move_to_folder(conn, a, fid)
+    library.move_to_folder(conn, b, fid)
+    vids, songs = find.folder_offs(conn, a)
+    assert len(songs) == 1 and find.folder_offs(conn, b) == (set(), [])   # B's own songs come from playlist_songs
+    library.remove_from_playlist(conn, b, t)
+    assert find.folder_offs(conn, a) == (set(), [])
