@@ -46,10 +46,10 @@ class PlayerService : MediaSessionService() {
     private fun showVotes() {
         val v = App.of(this).audio.votes
         session?.setCustomLayout(if (v == null) emptyList() else listOf(
-            CommandButton.Builder(if (v == 3) CommandButton.ICON_PLUS_CIRCLE_FILLED else CommandButton.ICON_PLUS_CIRCLE_UNFILLED)
-                .setDisplayName("Add to this playlist").setSessionCommand(UP).build(),
             CommandButton.Builder(if (v == 1) CommandButton.ICON_MINUS_CIRCLE_FILLED else CommandButton.ICON_MINUS_CIRCLE_UNFILLED)
                 .setDisplayName("Not for this playlist").setSessionCommand(DOWN).build(),
+            CommandButton.Builder(if (v == 3) CommandButton.ICON_PLUS_CIRCLE_FILLED else CommandButton.ICON_PLUS_CIRCLE_UNFILLED)
+                .setDisplayName("Add to this playlist").setSessionCommand(UP).build(),
         ))
     }
 

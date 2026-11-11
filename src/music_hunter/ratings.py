@@ -236,7 +236,7 @@ def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = 
              settings_version(conn))).lastrowid
     # Control status and rank stay out of the event log (and its text file): they're in the plays table, and
     # seeing them during the run would reveal which plays are controls (SPEC.md §16.6).
-    db.log_event(conn, "shown", play_id, pool_size=len(scored), score_ms=round(score_ms, 1))
+    db.log_event(conn, "shown", play_id, track_id=row["track_id"], pool_size=len(scored), score_ms=round(score_ms, 1))
     return play_id
 
 
