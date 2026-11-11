@@ -930,6 +930,7 @@ function addToQueue(t, quiet = false) {
     if (r === "queued") { toast(`Added to queue: ${t.title}`); return; }
     if (r === "unsupported") { toast("Find music is playing: it picks its own next track"); return; }
   }
+  if (fm) { toast("Find music is playing: it picks its own next track"); return; }
   const item = {...t, queued: true};
   if (pos >= 0) queue.splice(pos + 1 + pendingQueued(), 0, item);
   else upNext.push(item);
@@ -1190,6 +1191,7 @@ const Find = (() => {
     $("shuffle").hidden = on;
     $("down").classList.toggle("on", r === DOWN); $("up").classList.toggle("on", r === UP);
     $("find").classList.toggle("on", on);
+    try { window.NativeAudioBridge && NativeAudioBridge.setVotes && NativeAudioBridge.setVotes(on ? (r || 0) : -1); } catch (e) {}
   }
   async function syncTempo() {                           // one tempo control: the playlist's Set to BPM
     try { await fetch(BASE + "/api/tempo", {method: "PUT", headers: {"Content-Type": "application/json"},

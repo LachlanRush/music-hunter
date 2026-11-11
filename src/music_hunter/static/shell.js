@@ -178,7 +178,8 @@ const MHShell = window.MHShell = (() => {
   function enqueue(track, from) {
     const w = win(owner);
     if (!w || w === from || !playing(owner)) return null;          // nothing playing elsewhere: the page queues it
-    if (!w.__enqueue) return "unsupported";                          // Find music chooses its own next track
+    let fm = false; try { fm = !!(w.__playerState && (w.__playerState() || {}).find); } catch (e) {}
+    if (!w.__enqueue || fm) return "unsupported";                    // Find music chooses its own next track
     w.__enqueue(track);
     setTimeout(paint, 100);
     return "queued";

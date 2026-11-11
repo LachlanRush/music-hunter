@@ -19,9 +19,9 @@ android {
         applicationId = "au.lachlan.musichunter"
         minSdk = 29
         targetSdk = 34          // 35 forces edge-to-edge, which the pages don't allow for
-        versionCode = 15
-        versionName = "0.3.8"
-        buildConfigField("String", "SERVER", "\"http://100.90.89.29:8765\"")
+        versionCode = 16
+        versionName = "0.4.0"
+        buildConfigField("String", "SERVER", "\"${project.findProperty("server") ?: "http://100.90.89.29:8765"}\"")   // -Pserver=… for a test build
     }
     signingConfigs {
         if (keyProps.isNotEmpty()) create("release") {

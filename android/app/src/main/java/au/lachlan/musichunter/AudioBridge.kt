@@ -57,6 +57,22 @@ class AudioBridge(private val app: App) {
     /** Called on the main thread whenever what's playing or its state changes (the now playing bar). */
     var onChange: () -> Unit = {}
 
+    /** Find music's − / + for the notification (2026-11-11): null when the music isn't Find music, else 0 (neither
+     *  chosen), 1 (−) or 3 (+). Only the page that has the music sets it; it clears when another page takes over. */
+    var votes: Int? = null
+        private set
+    var votesWeb: WebView? = null
+        private set
+    var onVotes: () -> Unit = {}
+    fun setVotes(web: WebView, v: Int?) {
+        if (v != null && owner != null && owner !== web) return
+        if (v == null && votesWeb != null && votesWeb !== web) return
+        votes = v; votesWeb = if (v == null) null else web
+        onVotes()
+    }
+    /** A − or + pressed in the notification: the page that has the music rates the song, as its own buttons do. */
+    fun vote(dir: String) = js("window.__playerControl&&__playerControl('$dir')", votesWeb ?: owner)
+
     val hasTrack get() = exo.mediaItemCount > 0
     val title: String get() = metadata.title?.toString() ?: ""
     val artist: String get() = metadata.artist?.toString() ?: ""
@@ -180,6 +196,7 @@ class AudioBridge(private val app: App) {
             exo.prepare()
         }
         if (old != null) app.pageLostMusic(old)
+        if (votesWeb != null && votesWeb !== web) { votes = null; votesWeb = null; onVotes() }
         onChange()
     }
 
@@ -258,6 +275,8 @@ class PageBridge(private val app: App, private val web: WebView) {
     @JavascriptInterface fun stop() = on { audio.stop(web) }
     @JavascriptInterface fun seek(ms: Long) = on { audio.seek(web, ms) }
     @JavascriptInterface fun setVolume(v: Float) = on { audio.setVolume(web, v) }
+    // Find music's − / + in the notification: -1 = not Find music, 0 = neither chosen, 1 = −, 3 = +.
+    @JavascriptInterface fun setVotes(v: Int) = on { audio.setVotes(web, if (v < 0) null else v) }
     @JavascriptInterface fun setMetadata(title: String, artist: String, album: String, art: String) =
         on { audio.setMetadata(web, title, artist, album, art) }
     // The now playing bar (assets/native-audio.js), on a page the music doesn't come from.
@@ -277,7 +296,7 @@ class PageBridge(private val app: App, private val web: WebView) {
             try {
                 val owner = audio.owner
                 if (owner != null && owner !== web && audio.hasTrack) {
-                    if (owner.url?.contains("/find/") == true) result.set("unsupported")
+                    if (owner.url?.contains("/find/") == true || audio.votes != null) result.set("unsupported")
                     else { owner.evaluateJavascript("window.__enqueue && __enqueue($trackJson)", null); result.set("queued") }
                 }
             } finally { done.countDown() }
