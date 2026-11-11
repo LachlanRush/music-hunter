@@ -337,11 +337,17 @@ function row(t) {
 // What an import is doing right now, and for how long: "BETH – Keep It Movin' · downloading and analysing on the PC
 // · 0:42". The clock restarts whenever the step changes, so a step that sits for many minutes stands out as stuck.
 let stepSeen = {text: null, at: 0};
+// Just the song and the clock (the step is left out, my note): "BETH – Keep It Movin' · 0:42". The clock counts from
+// when the song started, so one sitting for many minutes stands out.
 function stepLine(message) {
-  if (!message || message === "Done") return "";
-  if (message !== stepSeen.text) stepSeen = {text: message, at: Date.now()};
+  if (!message || message === "Done" || message === "Reading Spotify") return "";
+  const name = message.split(": ")[0];
+  if (name !== stepSeen.text) stepSeen = {text: name, at: Date.now()};
+  return `${name} · ${clock()}`;
+}
+function clock() {
   const s = Math.floor((Date.now() - stepSeen.at) / 1000);
-  return `${message.replace(/: /, " · ")} · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 // A greyed song (no audio yet) says where it is: being downloaded now (with the step and clock), waiting its turn, or
 // without audio (when nothing is fetching it).
@@ -355,14 +361,14 @@ function rowStatus(t) {
   const job = data && data.job, active = job && (job.state === "queued" || job.state === "running");
   if (!active) return "No audio";
   const msg = (job.progress && job.progress.message) || "", name = `${t.artist} – ${t.title}`;
-  if (msg.startsWith(name)) return `<span class="row-step">${esc(stepLine(msg).slice(name.length + 3) || "Starting…")}</span>`;
+  if (msg.startsWith(name)) { stepLine(msg); return `<span class="row-step">${clock()}</span>`; }
   return "Waiting to download";
 }
 setInterval(() => {
   const el = document.getElementById("import-step");
   if (el && stepSeen.text) el.textContent = stepLine(stepSeen.text);
-  const row = document.querySelector(".row-step"), msg = stepSeen.text;
-  if (row && msg) { const i = msg.indexOf(": "); row.textContent = stepLine(msg).slice(i >= 0 ? i + 3 : msg.length + 3) || "Starting…"; }
+  const row = document.querySelector(".row-step");
+  if (row && stepSeen.text) row.textContent = clock();
 }, 1000);
 function render() {
   if (typeof RowDrag !== "undefined" && RowDrag.busy()) return;   // not under a row being dragged
