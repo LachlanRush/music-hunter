@@ -119,6 +119,8 @@ class Local:
 class Quality:
     """The PC side of playlist tracks' M4A files (SPEC.md §19). Only tracks in a playlist come here."""
 
+    signed_in_at: tuple[float, bool] | None = None   # (when checked, signed in?)
+
     @staticmethod
     def premium_ready() -> bool:
         """My sign-in and the token tool are both there."""
@@ -131,6 +133,30 @@ class Quality:
             return False
 
     @staticmethod
+    def signed_in() -> bool:
+        """Does the cookies file still sign in to YouTube Music? Checked at most once an hour (one page request).
+        2026-11-10: YouTube signed the exported session out (cookies copied from a browser that kept using them get
+        rotated out); every 256 kbps fetch then failed with "format not available" until the cookies were exported
+        again. Not signed in: no 256 kbps attempts, and each track's note says why."""
+        import http.cookiejar
+
+        now = time.time()
+        if Quality.signed_in_at and now - Quality.signed_in_at[0] < CONFIG["quality"].get("signin_check_minutes", 60) * 60:
+            return Quality.signed_in_at[1]
+        ok = True                                      # can't tell (network): try, as before
+        try:
+            jar = http.cookiejar.MozillaCookieJar(str(Path(CONFIG["quality"]["cookies_file"]).expanduser()))
+            jar.load(ignore_discard=True, ignore_expires=True)
+            r = requests.get("https://music.youtube.com/", cookies=jar, timeout=20, headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36"})
+            if '"LOGGED_IN":false' in r.text:
+                ok = False
+        except Exception:
+            pass
+        Quality.signed_in_at = (now, ok)
+        return ok
+
+    @staticmethod
     def fetch(video_id: str, folder: Path) -> tuple[Path, int, str | None]:
         """(file, quality, why not the good one). A refusal by YouTube is raised, to pause as other downloads do."""
         from .pool import download
@@ -141,7 +167,9 @@ class Quality:
             if wait > 0:
                 time.sleep(wait)
             try:
-                if Quality.premium_ready():
+                if Quality.premium_ready() and not Quality.signed_in():
+                    why = "signed out of YouTube Music: export the cookies again"
+                elif Quality.premium_ready():
                     try:
                         return download(video_id, folder, {
                             "format": q["format"], "cookiefile": str(Path(q["cookies_file"]).expanduser()),

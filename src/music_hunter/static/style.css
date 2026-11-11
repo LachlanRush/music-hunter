@@ -101,7 +101,6 @@ input[type=checkbox] { accent-color: var(--accent); }
 .menu { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 220px; max-height: 70vh; overflow: auto;
   background: var(--raised); border-radius: 6px; padding: 4px; display: grid; gap: 0;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55); }
-.menu.up { top: auto; bottom: 100%; }                    /* near the bottom of the screen: opens upwards */
 .menu button { border: 0; background: none; text-align: left; padding: 10px 12px; border-radius: 3px;
   font: 500 14px var(--body); color: var(--fg); }
 .menu button:hover { background: rgba(255, 255, 255, 0.08); }

@@ -68,7 +68,12 @@ const MHShell = window.MHShell = (() => {
   function open(url, push = true) {
     const k = key(url);
     if (push && key(location.href) !== k) history.pushState({}, "", url);
-    if (owner && win(owner) && key(win(owner).location.href) === k) { show(owner); return; }
+    if (owner && win(owner) && key(win(owner).location.href) === k) {
+      // The playing page kept alive: catch up with changes made meanwhile on other pages (e.g. a song added to it
+      // from another playlist, feedback #46), as the app does when it returns to a kept page.
+      if (owner !== current) { try { const w = win(owner); if (typeof w.load === "function") w.load(); if (typeof w.loadFind === "function") w.loadFind(); } catch (e) {} }
+      show(owner); return;
+    }
     if (current && win(current) && key(win(current).location.href) === k) return;
     const f = frame(url);
     let done = false;
