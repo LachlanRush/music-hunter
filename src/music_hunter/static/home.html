@@ -108,30 +108,48 @@ const card = (p) => `
 const closed = (() => { try { return new Set(JSON.parse(localStorage.getItem("closedFolders") || "[]")); } catch (e) { return new Set(); } })();
 function saveClosed() { try { localStorage.setItem("closedFolders", JSON.stringify([...closed])); } catch (e) {} }
 
+// The list as last seen shows at once; each playlist's page data is fetched ahead, so opening one is instant.
+const cache = {get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
+               set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }};
+let prefetched = false;
+function prefetch(lists) {
+  if (prefetched) return;
+  prefetched = true;
+  lists.forEach((p, i) => setTimeout(() => api(`/api/playlists/${p.id}`)
+    .then((d) => cache.set(`playlist:${p.id}`, d)).catch(() => {}), 300 + 150 * i));
+}
 let timer = null;
 async function load() {
   try {
     const [lists, folders] = await Promise.all([api("/api/playlists"), api("/api/folders")]);
-    $("folders").innerHTML = folders.map((f) => {
-      const inside = lists.filter((p) => p.folder_id === f.id);
-      return `<div class="folder ${closed.has(f.id) ? "closed" : ""}" data-folder="${f.id}">
-        <div class="folder-head">
-          <span class="folder-toggle" data-toggle="${f.id}" role="button" tabindex="0" aria-expanded="${!closed.has(f.id)}">
-            ${CHEV}<span class="folder-icon">${FOLDER}</span>
-            <span class="folder-name"><b>${esc(f.name)}</b><span class="meta">${inside.length} playlist${inside.length === 1 ? "" : "s"}</span></span>
-          </span>
-          <div class="folder-more"><button class="icon-btn" data-folder-more="${f.id}" aria-label="More for ${esc(f.name)}">⋯</button></div>
-        </div>
-        <div class="grid">${inside.length ? inside.map(card).join("") : `<div class="empty meta">Empty — move playlists here from their ⋯ menu.</div>`}</div>
-      </div>`;
-    }).join("");
-    const loose = lists.filter((p) => !p.folder_id || !folders.some((f) => f.id === p.folder_id));
-    $("grid").innerHTML = loose.length ? loose.map(card).join("")
-      : lists.length ? "" : `<div class="empty">No playlists yet. Import one from Spotify below.</div>`;
+    cache.set("home", {lists, folders});
+    show(lists, folders);
+    prefetch(lists);
     const busy = lists.some((p) => p.job && (p.job.state === "running" || p.job.state === "queued"));
     clearTimeout(timer);
     if (busy) timer = setTimeout(load, 3000);
   } catch (e) { $("status").textContent = "Can't reach the music-hunter server."; }
+}
+function show(lists, folders) {
+  const fh = folders.map((f) => {
+    const inside = lists.filter((p) => p.folder_id === f.id);
+    return `<div class="folder ${closed.has(f.id) ? "closed" : ""}" data-folder="${f.id}">
+      <div class="folder-head">
+        <span class="folder-toggle" data-toggle="${f.id}" role="button" tabindex="0" aria-expanded="${!closed.has(f.id)}">
+          ${CHEV}<span class="folder-icon">${FOLDER}</span>
+          <span class="folder-name"><b>${esc(f.name)}</b><span class="meta">${inside.length} playlist${inside.length === 1 ? "" : "s"}</span></span>
+        </span>
+        <div class="folder-more"><button class="icon-btn" data-folder-more="${f.id}" aria-label="More for ${esc(f.name)}">⋯</button></div>
+      </div>
+      <div class="grid">${inside.length ? inside.map(card).join("") : `<div class="empty meta">Empty — move playlists here from their ⋯ menu.</div>`}</div>
+    </div>`;
+  }).join("");
+  const loose = lists.filter((p) => !p.folder_id || !folders.some((f) => f.id === p.folder_id));
+  const gh = loose.length ? loose.map(card).join("")
+    : lists.length ? "" : `<div class="empty">No playlists yet. Import one from Spotify below.</div>`;
+  // Unchanged since the cached view: left alone, so the covers don't flash.
+  if (fh !== $("folders").dataset.html) { $("folders").innerHTML = fh; $("folders").dataset.html = fh; }
+  if (gh !== $("grid").dataset.html) { $("grid").innerHTML = gh; $("grid").dataset.html = gh; }
 }
 
 document.addEventListener("click", async (e) => {
@@ -202,6 +220,7 @@ $("new-picture").addEventListener("change", () => {
   const f = $("new-picture").files[0];
   $("new-picture-label").firstChild.textContent = f ? "Picture ✓" : "Picture";
 });
+{ const c = cache.get("home"); if (c) show(c.lists, c.folders); }
 load();
 </script>
 <script src="/static/feedback.js"></script>

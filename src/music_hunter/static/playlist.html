@@ -84,6 +84,10 @@ li.found { animation: found 1.4s ease-out; }
 .round svg { width: 18px; height: 18px; fill: currentColor; }
 .round.primary { background: var(--fg); color: #111; }
 .round.on { color: var(--accent); }
+.round.loading { position: relative; }
+.round.loading::after { content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 2px solid transparent;
+  border-top-color: var(--fg); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .seek { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr auto auto; gap: 10px; align-items: center;
   font: 400 11px var(--body); color: rgba(255, 255, 255, 0.7); }
 .add-song { display: flex; gap: 8px; }
@@ -209,6 +213,13 @@ async function api(path, body, method) {
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
   return res.json();
 }
+// After changes made on the page (shown at once), the server's view is fetched once things go quiet: the list
+// re-orders then, not under my finger while I'm still tapping stars.
+let settleTimer = null;
+function settleLater(ms = 1500) {
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(() => { load(); loadFind(); }, ms);
+}
 function placeMenu(m) {                                 // open upwards when it would run under the player
   const r = m.getBoundingClientRect(), bottom = innerHeight - ($("player").hidden ? 8 : $("player").offsetHeight + 16);
   if (r.bottom > bottom && r.top - r.height > 60) m.classList.add("up");
@@ -216,6 +227,26 @@ function placeMenu(m) {                                 // open upwards when it 
 function showError(msg) { $("error").textContent = msg; $("error").hidden = !msg; }
 
 let data = null, timer = null, sortOrder = null;          // sortOrder: {title, ids} while sorted by sound
+
+// Rows are kept and reused while their content is unchanged, so a star or a play redraws one row, not the list
+// (re-creating every row reloaded its cover and felt sluggish).
+const rowCache = new Map();                               // html -> element
+function fill(ol, html) {
+  const els = html.map((h) => {
+    let el = rowCache.get(h);
+    if (!el) {
+      const tpl = document.createElement("template"); tpl.innerHTML = h.trim();
+      el = tpl.content.firstElementChild; rowCache.set(h, el);
+    }
+    return el;
+  });
+  ol.replaceChildren(...els);
+  if (rowCache.size > 600) rowCache.clear();              // (old versions of rows)
+}
+// The playlist as last seen is kept on this device and shown at once on opening; fresh data follows.
+const CACHE_KEY = `playlist:${PID}`;
+function cached() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch (e) { return null; } }
+function keep(d) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(d)); } catch (e) {} }
 
 function stars(t) {
   return `<span class="stars" role="group" aria-label="Stars">${[1, 2, 3, 4, 5].map((n) =>
@@ -257,14 +288,14 @@ function render() {
     $("sort-name").textContent = sortOrder.title;
     $("added-section").hidden = true;
     $("tracks-count").textContent = n(all.length);
-    $("tracks").innerHTML = all.map(row).join("");
+    fill($("tracks"), all.map(row));
   } else {
     const added = d.tracks.filter((t) => t.status === "added"), main = d.tracks.filter((t) => t.status !== "added");
     $("added-count").textContent = n(added.length);
     $("tracks-count").textContent = main.length ? n(main.length) : "";
     $("added-section").hidden = !added.length;
-    $("added").innerHTML = added.map(row).join("");
-    $("tracks").innerHTML = main.length ? main.map(row).join("") : `<li class="empty" style="display:block">No tracks yet.</li>`;
+    fill($("added"), added.map(row));
+    fill($("tracks"), main.length ? main.map(row) : [`<li class="empty" style="display:block">No tracks yet.</li>`]);
   }
   const del = d.deleted || [];
   $("deleted-section").hidden = !del.length;
@@ -309,7 +340,7 @@ function render() {
 }
 
 async function load() {
-  try { data = await api(`/api/playlists/${PID}`); render(); }
+  try { data = await api(`/api/playlists/${PID}`); keep(data); render(); }
   catch (e) { showError(`Couldn't load the playlist: ${e.message}`); }
 }
 
@@ -358,8 +389,8 @@ document.addEventListener("click", async (e) => {
     const tid = Number(star.dataset.track), n = Number(star.dataset.star);
     const t = data.tracks.find((x) => x.id === tid);
     const stars = t.stars === n ? null : n;
-    t.stars = stars; render();                          // shown at once; the list re-orders when the server answers
-    try { await api(`/api/playlists/${PID}/tracks/${tid}`, {stars}, "PUT"); await load(); loadFind(); }
+    t.stars = stars; render();                          // shown at once; the list re-orders after a pause
+    try { await api(`/api/playlists/${PID}/tracks/${tid}`, {stars}, "PUT"); settleLater(); }
     catch (err) { showError(`Couldn't save the stars: ${err.message}`); load(); }
     return;
   }
@@ -474,22 +505,35 @@ document.addEventListener("click", async (e) => {
   }
   const restore = e.target.closest("[data-restore]");
   if (restore) {
-    try { await api(`/api/playlists/${PID}/deleted/${restore.dataset.restore}/restore`, {}); await load(); }
-    catch (err) { showError(`Couldn't restore it: ${err.message}`); }
+    const id = Number(restore.dataset.restore), t = (data.deleted || []).find((x) => x.id === id);
+    if (t) {                                             // back in the list at once; the server follows
+      data.deleted = data.deleted.filter((x) => x.id !== id);
+      data.tracks = [...data.tracks, {...t, status: "member", bpm_shown: null, rate: 1}];
+      render();
+    }
+    try { await api(`/api/playlists/${PID}/deleted/${id}/restore`, {}); settleLater(300); }
+    catch (err) { showError(`Couldn't restore it: ${err.message}`); load(); }
     return;
   }
   const forever = e.target.closest("[data-forever]");
   if (forever) {
     const t = (data.deleted || []).find((x) => x.id === Number(forever.dataset.forever));
     if (!confirm(`Delete "${t ? t.title : "this track"}" for good? It can't be restored.`)) return;
-    try { await api(`/api/playlists/${PID}/deleted/${forever.dataset.forever}`, undefined, "DELETE"); await load(); }
-    catch (err) { showError(`Couldn't delete it: ${err.message}`); }
+    data.deleted = (data.deleted || []).filter((x) => x.id !== Number(forever.dataset.forever)); render();
+    try { await api(`/api/playlists/${PID}/deleted/${forever.dataset.forever}`, undefined, "DELETE"); settleLater(300); }
+    catch (err) { showError(`Couldn't delete it: ${err.message}`); load(); }
     return;
   }
   const remove = e.target.closest("[data-remove]");
   if (remove) {
-    try { await api(`/api/playlists/${PID}/tracks/${remove.dataset.remove}`, undefined, "DELETE"); await load(); }
-    catch (err) { showError(`Couldn't remove it: ${err.message}`); }
+    const id = Number(remove.dataset.remove), t = data.tracks.find((x) => x.id === id);
+    if (t) {                                             // gone from the list at once; the server follows
+      data.tracks = data.tracks.filter((x) => x.id !== id);
+      data.deleted = [{...t, deleted_at: new Date().toISOString().replace("T", " ").slice(0, 19)}, ...(data.deleted || [])];
+      render();
+    }
+    try { await api(`/api/playlists/${PID}/tracks/${id}`, undefined, "DELETE"); settleLater(300); }
+    catch (err) { showError(`Couldn't remove it: ${err.message}`); load(); }
   }
 });
 document.addEventListener("click", (e) => {
@@ -585,6 +629,7 @@ async function playAt(i) {
   const t = queue[i];
   if (!t) { audio.pause(); return; }
   if (shuffle) round.mark(t.id);
+  showNow(t);                                                      // the player shows it at once; sound follows
   if (Media.desktop) {                                             // loudness levelling (static/media.js)
     if (!ctx) {
       ctx = new AudioContext(); gainNode = ctx.createGain(); volumeNode = ctx.createGain();
@@ -601,13 +646,22 @@ async function playAt(i) {
   if (queue[pos] !== t) return;                                   // another track was chosen meanwhile
   const nextT = queue[pos + 1];
   if (nextT) tempoPlayer.prepare(nextT.id, fresh(nextT).rate);    // its copy first in line after this one
+  try { await audio.play(); } catch (e) { setIcon(false); setLoading(false); }
+}
+function showNow(t) {
   $("player").hidden = false;
   $("p-title").textContent = t.title; $("p-artist").textContent = t.artist;
   $("p-art").src = t.art || ""; $("p-art").style.visibility = t.art ? "visible" : "hidden";
   Tint.apply(t.art, $("player"));                                  // the bar takes the song's colour
-  try { await audio.play(); } catch (e) { setIcon(false); }
+  $("pos").textContent = "0:00"; $("dur").textContent = fmt(t.duration_s); $("seek").value = 0;
+  setLoading(true);
   render();
 }
+function setLoading(on) { $("play").classList.toggle("loading", on); }
+audio.addEventListener("playing", () => setLoading(false));
+audio.addEventListener("waiting", () => setLoading(true));
+audio.addEventListener("error", () => setLoading(false));
+audio.addEventListener("pause", () => setLoading(false));
 function setIcon(on) {
   $("play-all").classList.toggle("on", on);               // pause while this playlist is playing
   $("play-all-icon").innerHTML = on ? '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/>' : '<path d="M8 5l12 7-12 7z"/>';
@@ -752,6 +806,7 @@ $("add-song").addEventListener("submit", async (e) => {
   try { await api(`/api/playlists/${PID}/add`, {link: $("add-link").value}); $("add-link").value = ""; load(); }
   catch (err) { showError(err.message); }
 });
+{ const c = cached(); if (c) { data = c; render(); renderTempo(); } }   // as last seen, at once
 load().then(renderTempo);
 loadFind();
 </script>
