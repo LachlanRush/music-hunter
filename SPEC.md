@@ -1013,3 +1013,4 @@ All 297 rated plays on the Pi (289 tracks) re-downloaded (256; YouTube refused t
 - **256 kbps downloads stopped** (found 2026-11-11): every premium fetch failed with "requested format is not available" and fell back to ~130 kbps (subtle energy: 13 of 18). Two causes: yt-dlp needs a JavaScript runtime for YouTube's web player and only tried Deno (fixed: Node too); and with that fixed, format 141 still isn't offered, even for tracks that got it on 2026-11-09 — the sign-in in the cookies file no longer counts as Premium and needs exporting again.
 - **Total time** under a playlist's name: "40 tracks · 3 hr 12 min · 142 BPM".
 - The star filter ("All tracks", "★ 3+"…) is always in the playlist's colour.
+- The star filter sits next to Find music (left), Shuffle and Play on the right.
