@@ -1467,6 +1467,16 @@ def next_track() -> dict:
     return track_info(conn, play)
 
 
+class PlayNextBody(BaseModel):
+    track_ids: list[int]
+
+
+@router.post("/api/play-next")
+def play_next(body: PlayNextBody) -> dict:
+    """Songs to play next, in order, ahead of the random picks (heard before or not)."""
+    return {"queued": ratings.queue_next(db.connect(), body.track_ids)}
+
+
 @router.post("/api/resume")
 def resume() -> dict:
     """Coming back to Find music (2026-11-11): the song that was on air — the latest pick, rated or not — unless it

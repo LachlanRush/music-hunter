@@ -361,3 +361,17 @@ def test_back_three_and_change_any_of_them(conn):
         ratings.change_last_rating(conn, 3, play_id=ids[0])          # four back: out of reach
     held = {r[0] for r in conn.execute("SELECT id FROM plays WHERE undo_path IS NOT NULL")}
     assert ids[0] not in held                                         # its audio went with it
+
+
+def test_play_songs_again_next(conn):
+    """2026-11-11: songs can be asked for again; they come next, in order, ahead of the random picks, as new plays."""
+    first = ratings.show_next(conn)
+    ratings.rate(conn, first, 2, 30)
+    tid = conn.execute("SELECT track_id FROM plays WHERE id = ?", (first,)).fetchone()[0]
+    assert ratings.queue_next(conn, [tid]) == [tid]
+    again = ratings.show_next(conn)
+    assert again != first and conn.execute("SELECT track_id FROM plays WHERE id = ?", (again,)).fetchone()[0] == tid
+    assert conn.execute("SELECT rating FROM plays WHERE id = ?", (first,)).fetchone()[0] == 2    # history kept
+    ratings.rate(conn, again, 3, 10)
+    nxt = ratings.show_next(conn)
+    assert conn.execute("SELECT track_id FROM plays WHERE id = ?", (nxt,)).fetchone()[0] != tid  # back to random

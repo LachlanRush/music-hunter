@@ -173,6 +173,12 @@ def upcoming(conn: sqlite3.Connection, rng=random) -> int | None:
     is drawn once and kept until that play starts; only the track is redrawn if it no longer qualifies (e.g. a
     rating in between vetoed it). With nothing vetoed yet, a control can't be injected and the play is a normal pick.
     """
+    queued = [t for t in (db.get_setting(conn, "play_next") or [])
+              if conn.execute("SELECT file_path FROM tracks WHERE id = ?", (t,)).fetchone()[0]]
+    if queued:                                       # songs asked for again come first (2026-11-11)
+        draw = {"control": False, "track_id": queued[0], "queued": True}
+        db.set_setting(conn, "next_draw", draw, log=False)
+        return queued[0]
     playable, vetoed = set(playable_ids(conn)), set(vetoed_ids(conn))
     if not playable and not vetoed:
         return None
@@ -195,7 +201,49 @@ def show_next(conn: sqlite3.Connection, rng=random) -> int:
         raise RuntimeError("The pool has no playable tracks")
     draw = db.get_setting(conn, "next_draw")
     db.set_setting(conn, "next_draw", None, log=False)
+    if draw.get("queued"):
+        db.set_setting(conn, "play_next", [t for t in (db.get_setting(conn, "play_next") or []) if t != draw["track_id"]])
+        if conn.execute("SELECT 1 FROM plays WHERE track_id = ?", (draw["track_id"],)).fetchone():
+            return replay(conn, draw["track_id"])
     return show(conn, track_id=draw["track_id"], control=draw["control"])
+
+
+def queue_next(conn: sqlite3.Connection, track_ids: list[int]) -> list[int]:
+    """Songs to play next, in this order, ahead of the random picks — heard before or not (2026-11-11: songs lost to
+    the leave-skip bug). Earlier plays stay as they were; a song's held audio is kept for it."""
+    ok = []
+    with conn:
+        for tid in track_ids:
+            t = conn.execute("SELECT file_path FROM tracks WHERE id = ?", (tid,)).fetchone()
+            if t is None:
+                continue
+            if not t["file_path"]:
+                held = conn.execute("SELECT id, undo_path FROM plays WHERE track_id = ? AND undo_path IS NOT NULL"
+                                    " ORDER BY id DESC LIMIT 1", (tid,)).fetchone()
+                if held is None or not resolve(held["undo_path"]).exists():
+                    continue
+                conn.execute("UPDATE tracks SET file_path = ? WHERE id = ?", (held["undo_path"], tid))
+                conn.execute("UPDATE plays SET undo_path = NULL WHERE id = ?", (held["id"],))
+            ok.append(tid)
+    db.set_setting(conn, "play_next", ok)
+    db.set_setting(conn, "next_draw", None, log=False)
+    return ok
+
+
+def replay(conn: sqlite3.Connection, track_id: int) -> int:
+    """A new play of a song played before (queue_next): its scores as logged then; the old play stays as it was."""
+    old = conn.execute("SELECT * FROM plays WHERE track_id = ? ORDER BY id DESC LIMIT 1", (track_id,)).fetchone()
+    play_number = conn.execute("SELECT count(*) FROM plays").fetchone()[0] + 1
+    with conn:
+        play_id = conn.execute(
+            "INSERT INTO plays (track_id, generation, play_number, is_control, weight_set_id, components, score, rank,"
+            " pool_size, provenance, target_bpm, scored_for_seed, veto, settings_version, shown_at)"
+            " VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))",
+            (track_id, current_generation(conn), play_number, old["weight_set_id"], old["components"], old["score"],
+             old["rank"], old["pool_size"], old["provenance"], old["target_bpm"], old["scored_for_seed"], old["veto"],
+             old["settings_version"])).lastrowid
+    db.log_event(conn, "shown", play_id, track_id=track_id, replay_of=old["id"])
+    return play_id
 
 
 # --- showing and rating --------------------------------------------------------------------
