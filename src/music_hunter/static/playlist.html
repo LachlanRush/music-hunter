@@ -41,7 +41,7 @@ h1 { font: 800 clamp(30px, 6vw, 56px)/1.05 var(--display); letter-spacing: -0.03
 .pl-menu .menu { left: 0; right: auto; }
 .filter { appearance: none; -webkit-appearance: none; background: rgba(255, 255, 255, 0.07); border-radius: 999px;
   padding: 7px 14px; font: 600 13px var(--body); color: var(--fg); border: 0; cursor: pointer; }
-.filter.on { background: var(--accent-soft); color: var(--accent); }
+.filter, .filter.on { background: var(--accent-soft); color: var(--accent); }   /* in the playlist's colour */
 #find { border: 0; background: rgba(255, 255, 255, 0.07); padding: 7px 14px; font: 600 13px var(--body); }   /* like All tracks */
 #find:hover:not(:disabled) { transform: none; background: rgba(255, 255, 255, 0.12); }
 #find.ready { background: var(--accent-soft); color: var(--accent); }
