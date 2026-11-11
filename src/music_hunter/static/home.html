@@ -57,6 +57,8 @@ h1 { font: 700 20px/1.2 var(--display); margin: 0; }      /* the same as "Add" b
 /* Dragging a playlist (into or out of a folder, or to a new place) */
 .card { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
 .card.dragging { opacity: .25; }
+.card.held { transform: scale(.97); background: rgba(255, 255, 255, 0.1); transition: transform .15s; }
+.menu.fixed { position: fixed; right: auto; top: auto; }
 .ghost { position: fixed; z-index: 50; pointer-events: none; width: 120px; border-radius: 6px; overflow: hidden;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6); transform: translate(-50%, -60%) scale(1.04); opacity: .95; }
 .ghost img, .ghost div { width: 120px; height: 120px; object-fit: cover; display: grid; place-items: center;
@@ -92,6 +94,15 @@ form input { flex: 1 1 260px; min-width: 0; }
     <div class="error" id="error" hidden></div>
   </section>
 </main>
+<input id="picture" type="file" accept="image/*" hidden>
+<dialog id="details">
+  <h3>Edit details</h3>
+  <form method="dialog">
+    <input type="text" id="d-name" aria-label="Name" placeholder="Name" maxlength="200" required>
+    <textarea id="d-desc" aria-label="Description" placeholder="Add an optional description" maxlength="500"></textarea>
+    <div class="row"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="save">Save</button></div>
+  </form>
+</dialog>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
@@ -304,26 +315,129 @@ const Drag = (() => {
     const card = e.target.closest(".card[data-id]");
     if (!card || e.touches.length > 1) return;
     const t = e.touches[0];
+    lastTouch = Date.now();
     d = {card, x0: t.clientX, y0: t.clientY, active: false, touch: true};
-    d.timer = setTimeout(() => { if (d && !d.active) begin(card, d.x0, d.y0); }, HOLD_MS);
+    // Held: let go without moving for the playlist's options; move to drag it.
+    d.timer = setTimeout(() => {
+      if (d && !d.active) { d.held = true; card.classList.add("held"); if (navigator.vibrate) navigator.vibrate(15); }
+    }, HOLD_MS);
   }, {passive: true});
   document.addEventListener("touchmove", (e) => {
     if (!d || !d.touch) return;
-    const t = e.touches[0];
-    if (!d.active) { if (Math.hypot(t.clientX - d.x0, t.clientY - d.y0) > SLOP) { clearTimeout(d.timer); d = null; } return; }
-    e.preventDefault();                                   // dragging, not scrolling
+    const t = e.touches[0], far = Math.hypot(t.clientX - d.x0, t.clientY - d.y0) > SLOP;
+    if (!d.active && !d.held) { if (far) { clearTimeout(d.timer); d = null; } return; }   // scrolling
+    e.preventDefault();                                   // held: dragging, not scrolling
+    if (!d.active) { if (!far) return; d.card.classList.remove("held"); begin(d.card, t.clientX, t.clientY); }
     d.x = t.clientX; d.y = t.clientY;
     move(t.clientX, t.clientY);
   }, {passive: false});
   document.addEventListener("touchend", (e) => {
     if (!d || !d.touch) return;
     clearTimeout(d.timer);
-    if (d.active) { e.preventDefault(); end(d.x ?? d.x0, d.y ?? d.y0); } else d = null;
+    if (d.active) { e.preventDefault(); end(d.x ?? d.x0, d.y ?? d.y0); return; }
+    if (d.held) {                                          // held and let go: its options
+      e.preventDefault();
+      d.card.classList.remove("held");
+      PlMenu.open(Number(d.card.dataset.id), d.x0, d.y0);
+    }
+    d = null;
   });
   document.addEventListener("touchcancel", cancel);
-  document.addEventListener("contextmenu", (e) => { if (e.target.closest(".card")) e.preventDefault(); });   // no link menu on hold
+  let lastTouch = 0;
+  document.addEventListener("contextmenu", (e) => {        // right-click: its options (a hold is handled above)
+    const card = e.target.closest(".card[data-id]");
+    if (!card) return;
+    e.preventDefault();
+    if (Date.now() - lastTouch > 1500) PlMenu.open(Number(card.dataset.id), e.clientX, e.clientY);
+  });
   document.addEventListener("click", (e) => { if (justDragged && e.target.closest(".card")) { e.preventDefault(); e.stopPropagation(); } }, true);
   return {busy: () => !!(d && d.active)};
+})();
+
+// --- a playlist's options (right-click, or hold and let go): the same as its ⋯ on the playlist page -----------------
+const PlMenu = (() => {
+  let pid = null, info = null;
+  const Phone = window.NativeAudioBridge || null;
+  function place(m, x, y) {
+    document.body.appendChild(m);
+    const r = m.getBoundingClientRect();
+    m.style.left = `${Math.max(8, Math.min(x, innerWidth - r.width - 8))}px`;
+    m.style.top = `${Math.max(8, Math.min(y, innerHeight - r.height - 8))}px`;
+  }
+  function close() { document.querySelectorAll(".menu").forEach((m) => m.remove()); }
+  async function open(id, x, y) {
+    close();
+    pid = id;
+    info = cache.get(`playlist:${id}`);
+    try { info = await api(`/api/playlists/${id}`); cache.set(`playlist:${id}`, info); } catch (e) { if (!info) return showError(e.message); }
+    let dl = null;
+    if (Phone) { try { const s = JSON.parse(Phone.offlineState(id)); dl = s.on; } catch (e) {} }
+    const m = document.createElement("div");
+    m.className = "menu fixed";
+    m.innerHTML = `<div class="label">${esc(info.name)}</div>
+      <button data-act="details">Edit details</button>
+      <button data-act="picture">${info.image ? "Change picture" : "Add picture"}</button>
+      <button data-act="folder">${info.folder_id ? "Move to another folder" : "Move to folder"}</button>`
+      + (info.can_refresh ? `<button data-act="refresh">Refresh from Spotify</button>` : "")
+      + (Phone ? `<button data-act="download">${dl ? "Downloaded" : "Download"}</button>` : "")
+      + `<button data-act="sync">${info.sync && info.sync.on ? "Synced" : "Sync"}</button>
+      <button data-act="results">Results</button><hr>
+      <button data-act="delete" style="color:var(--bad)">Delete playlist</button>`;
+    place(m, x, y);
+  }
+  function folders(x, y) {
+    close();
+    const m = document.createElement("div");
+    m.className = "menu fixed";
+    m.innerHTML = `<div class="label">Move to folder</div>` + (info.folders || []).map((f) =>
+        `<button data-act="to" data-folder="${f.id}">${f.id === info.folder_id ? "✓ " : ""}${esc(f.name)}</button>`).join("")
+      + `<button data-act="to" data-folder="new">New folder…</button>`
+      + (info.folder_id ? `<hr><button data-act="to" data-folder="none">Remove from folder</button>` : "");
+    place(m, x, y);
+  }
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest(".menu.fixed [data-act]");
+    if (!b) { if (!e.target.closest(".menu.fixed")) document.querySelectorAll(".menu.fixed").forEach((m) => m.remove()); return; }
+    const act = b.dataset.act, r = b.getBoundingClientRect();
+    if (act === "folder") return folders(r.left, r.top);
+    close();
+    try {
+      if (act === "details") { $("d-name").value = info.name; $("d-desc").value = info.description || ""; $("details").showModal(); return; }
+      if (act === "picture") { $("picture").click(); return; }
+      if (act === "refresh") await api(`/api/playlists/${pid}/import`, {});
+      if (act === "download") { const s = JSON.parse(Phone.offlineState(pid));
+        if (s.on && !confirm("Remove this playlist's downloads from the phone?")) return; Phone.offlineSet(pid, !s.on); }
+      if (act === "sync") await api(`/api/playlists/${pid}/sync`, {on: !(info.sync && info.sync.on)}, "PUT");
+      if (act === "results") return go(`/playlist/${pid}/results`);
+      if (act === "delete") {
+        if (!confirm(`Delete "${info.name}" for good?\n\nThis can't be undone: the playlist, its stars, its Find music and `
+            + "its Recently deleted list are removed, and tracks that are in no other playlist lose their audio.")) return;
+        await api(`/api/playlists/${pid}`, undefined, "DELETE");
+      }
+      if (act === "to") {
+        let fid = b.dataset.folder;
+        if (fid === "new") { const name = prompt("Folder name"); if (!name) return; fid = (await api("/api/folders", {name})).folder_id; }
+        await api(`/api/playlists/${pid}/folder`, {folder_id: fid === "none" ? null : Number(fid)}, "PUT");
+      }
+    } catch (err) { showError(err.message); }
+    load();
+  });
+  $("details").addEventListener("close", async () => {
+    if ($("details").returnValue !== "save") return;
+    try { await api(`/api/playlists/${pid}`, {name: $("d-name").value, description: $("d-desc").value}, "PATCH"); load(); }
+    catch (e) { showError(e.message); }
+  });
+  $("picture").addEventListener("change", async () => {
+    const f = $("picture").files[0];
+    if (!f) return;
+    try {
+      const res = await fetch(`/api/playlists/${pid}/cover`, {method: "POST", body: await f.arrayBuffer()});
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Couldn't use that picture");
+      load();
+    } catch (e) { showError(e.message); }
+    $("picture").value = "";
+  });
+  return {open};
 })();
 
 { const c = cache.get("home"); if (c) show(c.lists, c.folders); }

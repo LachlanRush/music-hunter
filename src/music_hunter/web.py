@@ -397,6 +397,25 @@ def order_playlists(body: OrderBody) -> dict:
     return {"ok": True}
 
 
+@app.put("/api/playlists/{playlist_id}/track-order")
+def order_tracks(playlist_id: int, body: OrderBody) -> dict:
+    """My own order of tracks with the same stars, after a drag."""
+    conn = db.connect()
+    _playlist_or_404(conn, playlist_id)
+    try:
+        library.order_tracks(conn, playlist_id, body.ids)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    sync.request()
+    return {"ok": True}
+
+
+@app.get("/api/tracks/{track_id}/playlists")
+def track_playlists(track_id: int) -> list[dict]:
+    """The Add to playlist sheet: every playlist, ticked if the track is in it."""
+    return library.track_playlists(db.connect(), track_id)
+
+
 class PlayFilterBody(BaseModel):
     min_stars: int = 0
 

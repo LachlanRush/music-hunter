@@ -111,6 +111,22 @@ li.found { animation: found 1.4s ease-out; }
 .deleted .acts { display: flex; gap: 6px; }
 .deleted .acts button { padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.28);
   background: none; font: 600 12px var(--body); color: var(--fg); }
+/* Add to playlist: every playlist with its cover, ticked where the song is; tick and untick, then Done */
+.sheet { padding: 18px 16px; }
+.sheet .sheet-song { color: var(--muted); font-size: 13px; margin: -8px 0 10px; }
+.sheet ul { list-style: none; margin: 0; padding: 0; max-height: 60vh; overflow: auto; }
+.sheet li { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 6px;
+  margin: 0; border-radius: 6px; cursor: pointer; }
+.sheet li:hover { background: rgba(255, 255, 255, 0.06); }
+.sheet .pic { width: 44px; height: 44px; border-radius: 4px; background: var(--surface); object-fit: cover; display: grid;
+  place-items: center; color: var(--faint); font: 800 18px var(--display); }
+.sheet li b { font: 500 15px var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sheet .tick { width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.4); display: grid; place-items: center; }
+.sheet li.on .tick { background: var(--accent); border-color: var(--accent); }
+.sheet li.on .tick::after { content: ""; width: 6px; height: 11px; border: solid #111; border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg); }
+/* Dragging a song within its stars */
+li[data-row] { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5); position: relative; z-index: 3; }
 #mh-download { display: none; }                           /* (the button an older app adds; it's in the ⋯ menu now) */
 .menu button.off { color: var(--muted); }                 /* Download and Sync while they're off */
 .volume { display: none; width: 90px; }
@@ -187,6 +203,13 @@ li.found { animation: found 1.4s ease-out; }
     <ol id="deleted"></ol>
   </details>
 </main>
+
+<dialog id="sheet" class="sheet">
+  <h3>Add to playlist</h3>
+  <div class="sheet-song" id="sheet-song"></div>
+  <ul id="sheet-list"></ul>
+  <div class="row"><button class="btn" id="sheet-cancel">Cancel</button><button class="btn primary" id="sheet-done">Done</button></div>
+</dialog>
 
 <dialog id="details">
   <h3>Edit details</h3>
@@ -280,6 +303,8 @@ function sortTracks(list) {
     || (added(a) && added(b) ? cmp(a.added_at || "", b.added_at || "") : 0)
     || ((a.stars == null) - (b.stars == null))
     || ((b.stars || 0) - (a.stars || 0))
+    || ((a.position != null) - (b.position != null))                // not yet placed by hand: on top of its stars
+    || ((a.position ?? 0) - (b.position ?? 0))                       // then in the order I dragged them into
     || cmp(a.starred_at || a.added_at || "", b.starred_at || b.added_at || "")
     || cmp(a.added_at || "", b.added_at || "")
     || (b.id - a.id));
@@ -297,7 +322,7 @@ function stars(t) {
 const passes = (t) => !data.min_stars || (t.stars || 0) >= data.min_stars;   // Play / Shuffle's star filter
 function row(t) {
   const playing = queue[pos] && queue[pos].id === t.id;
-  return `<li data-row="${t.id}" class="${playing ? "playing" : ""} ${t.audio ? "" : "unavailable"} ${passes(t) ? "" : "filtered"}">
+  return `<li data-row="${t.id}" data-stars="${t.stars || 0}" class="${playing ? "playing" : ""} ${t.audio ? "" : "unavailable"} ${passes(t) ? "" : "filtered"}">
     <button class="cover-btn" data-play="${t.id}" aria-label="Play ${esc(t.title)}" ${t.audio ? "" : "disabled"}>
       ${t.art ? `<img src="${t.art}" alt="" loading="lazy">` : "♪"}</button>
     <div class="t"><b>${esc(t.title)}</b><span>${esc(t.artist)}</span>
@@ -308,6 +333,7 @@ function row(t) {
 }
 
 function render() {
+  if (typeof RowDrag !== "undefined" && RowDrag.busy()) return;   // not under a row being dragged
   const d = data;
   document.title = `${d.name} · Music Hunter`;
   $("name").textContent = d.name;
@@ -432,7 +458,7 @@ document.addEventListener("click", async (e) => {
     const stars = t.stars === n ? null : n;
     // Shown and moved into place at once (the server does the same and catches up behind); the page stays where it
     // is: the moving row isn't used to hold the scroll position, so the view doesn't follow it.
-    t.stars = stars; t.starred_at = nowStamp();
+    t.stars = stars; t.starred_at = nowStamp(); t.position = null;
     if (stars != null) t.status = "member";             // a starred To rate track joins the list
     data.tracks = sortTracks(data.tracks);
     keepView(star.closest("li"), render);
@@ -485,21 +511,14 @@ document.addEventListener("click", async (e) => {
       + `<button data-similar="${tid}">Find similar</button>`
       + (tt && tt.art ? `<button data-cover-from="${tid}">Use as playlist cover</button>` : "")
       + `<button data-own-bpm="${tid}">Play at … BPM</button>`
-      + (data.others.length ? `<hr><div class="label">Add to playlist</div>` + data.others.map((o) =>
-        `<button data-addto="${o.id}" data-track="${tid}">${esc(o.name)}</button>`).join("") : "")
+      + `<button data-sheet="${tid}">Add to playlist…</button>`
       + `<hr><button data-remove="${tid}" style="color:var(--bad)">Remove from this playlist</button>`;
     more.parentElement.appendChild(menu);
     placeMenu(menu);
     return;
   }
-  const addto = e.target.closest("[data-addto]");
-  if (addto) {
-    try {
-      const r = await api(`/api/playlists/${addto.dataset.addto}/tracks`, {track_id: Number(addto.dataset.track)});
-      $("status").textContent = r.added ? "Added." : "Already in that playlist.";
-    } catch (err) { showError(`Couldn't add it: ${err.message}`); }
-    return;
-  }
+  const sheet = e.target.closest("[data-sheet]");
+  if (sheet) { openSheet(Number(sheet.dataset.sheet)); return; }
   const sound = e.target.closest("[data-sound]");
   if (sound) {
     const tid = Number(sound.dataset.sound), t = data.tracks.find((x) => x.id === tid);
@@ -621,6 +640,105 @@ $("details").addEventListener("close", async () => {
   catch (e) { showError(`Couldn't save: ${e.message}`); }
 });
 $("sort-clear").addEventListener("click", () => { sortOrder = null; render(); });
+
+// --- Add to playlist (like Spotify): every playlist, ticked where this song is; Done adds and removes --------------
+let sheetTrack = null, sheetWas = new Set();
+async function openSheet(tid) {
+  const t = data.tracks.find((x) => x.id === tid);
+  sheetTrack = tid;
+  $("sheet-song").textContent = t ? `${t.title} · ${t.artist}` : "";
+  $("sheet-list").innerHTML = `<li class="empty">Loading…</li>`;
+  $("sheet").showModal();
+  try {
+    const lists = await api(`/api/tracks/${tid}/playlists`);
+    sheetWas = new Set(lists.filter((p) => p.has).map((p) => p.id));
+    $("sheet-list").innerHTML = lists.map((p) => `<li data-pick="${p.id}" class="${p.has ? "on" : ""}" role="checkbox" aria-checked="${p.has}">
+      ${p.image ? `<img class="pic" src="${p.image}" alt="">` : `<span class="pic">${esc((p.name || "?")[0].toUpperCase())}</span>`}
+      <b>${esc(p.name)}</b><span class="tick"></span></li>`).join("");
+  } catch (e) { $("sheet-list").innerHTML = `<li class="error">Couldn't load the playlists: ${esc(e.message)}</li>`; }
+}
+$("sheet-list").addEventListener("click", (e) => {
+  const li = e.target.closest("[data-pick]");
+  if (li) { li.classList.toggle("on"); li.setAttribute("aria-checked", String(li.classList.contains("on"))); }
+});
+$("sheet-cancel").addEventListener("click", () => $("sheet").close());
+$("sheet-done").addEventListener("click", async () => {
+  const tid = sheetTrack, now = new Set([...$("sheet-list").querySelectorAll("li.on")].map((li) => Number(li.dataset.pick)));
+  $("sheet").close();
+  const add = [...now].filter((id) => !sheetWas.has(id)), drop = [...sheetWas].filter((id) => !now.has(id));
+  if (drop.includes(PID)) {                               // taken out of this playlist: gone from the list at once
+    const t = data.tracks.find((x) => x.id === tid);
+    if (t) {
+      data.tracks = data.tracks.filter((x) => x.id !== tid);
+      data.deleted = [{...t, deleted_at: nowStamp().slice(0, 19)}, ...(data.deleted || [])];
+      render();
+    }
+  }
+  try {
+    await Promise.all([
+      ...add.map((id) => api(`/api/playlists/${id}/tracks`, {track_id: tid})),
+      ...drop.map((id) => api(`/api/playlists/${id}/tracks/${tid}`, undefined, "DELETE")),
+    ]);
+    if (add.length || drop.length) settleLater(300);
+  } catch (err) { showError(`Couldn't change the playlists: ${err.message}`); load(); }
+});
+
+// --- dragging a song within its stars (my own order); a mouse drags at once, a finger holds a moment first --------
+const RowDrag = (() => {
+  let d = null, justDragged = false;
+  const HOLD_MS = 350, SLOP = 8;
+  const can = (li) => li && li.closest("#tracks") && !sortOrder;
+  function begin() { d.active = true; d.li.classList.add("dragging"); if (navigator.vibrate) navigator.vibrate(15); }
+  function move(x, y) {
+    if (y < 70) window.scrollBy(0, -12); else if (y > innerHeight - 160) window.scrollBy(0, 12);
+    const over = document.elementFromPoint(x, y)?.closest("#tracks li[data-row]");
+    if (!over || over === d.li || over.dataset.stars !== d.li.dataset.stars) return;   // only among the same stars
+    const r = over.getBoundingClientRect();
+    over.parentElement.insertBefore(d.li, y > r.top + r.height / 2 ? over.nextSibling : over);
+  }
+  async function end() {
+    const li = d.li, s = li.dataset.stars;
+    li.classList.remove("dragging");
+    d = null; justDragged = true; setTimeout(() => { justDragged = false; }, 50);
+    const ids = [...document.querySelectorAll(`#tracks li[data-row][data-stars="${s}"]`)].map((x) => Number(x.dataset.row));
+    ids.forEach((id, i) => { const t = data.tracks.find((x) => x.id === id); if (t) t.position = i; });
+    data.tracks = sortTracks(data.tracks);
+    keepView(null, render);
+    try { await api(`/api/playlists/${PID}/track-order`, {ids}, "PUT"); }
+    catch (e) { showError(`Couldn't save the order: ${e.message}`); load(); }
+  }
+  const start = (e, li, x, y, touch) => {
+    if (!can(li) || e.target.closest(".stars, .more, .menu")) return;
+    d = {li, x0: x, y0: y, touch, active: false};
+    if (touch) d.timer = setTimeout(() => { if (d && !d.active) begin(); }, HOLD_MS);
+  };
+  document.addEventListener("mousedown", (e) => { if (e.button === 0) start(e, e.target.closest("li[data-row]"), e.clientX, e.clientY, false); });
+  document.addEventListener("mousemove", (e) => {
+    if (!d || d.touch) return;
+    if (!d.active && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > SLOP) begin();
+    if (d.active) move(e.clientX, e.clientY);
+  });
+  document.addEventListener("mouseup", () => { if (d && !d.touch) (d.active ? end() : (d = null)); });
+  document.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 1) start(e, e.target.closest("li[data-row]"), e.touches[0].clientX, e.touches[0].clientY, true);
+  }, {passive: true});
+  document.addEventListener("touchmove", (e) => {
+    if (!d || !d.touch) return;
+    const t = e.touches[0];
+    if (!d.active) { if (Math.hypot(t.clientX - d.x0, t.clientY - d.y0) > SLOP) { clearTimeout(d.timer); d = null; } return; }
+    e.preventDefault();
+    move(t.clientX, t.clientY);
+  }, {passive: false});
+  document.addEventListener("touchend", (e) => {
+    if (!d || !d.touch) return;
+    clearTimeout(d.timer);
+    if (d.active) { e.preventDefault(); end(); } else d = null;
+  });
+  document.addEventListener("touchcancel", () => { if (d) { clearTimeout(d.timer); d.li.classList.remove("dragging"); d = null; render(); } });
+  document.addEventListener("click", (e) => { if (justDragged && e.target.closest("li[data-row]")) { e.preventDefault(); e.stopPropagation(); } }, true);
+  document.addEventListener("contextmenu", (e) => { if (e.target.closest("li[data-row]")) e.preventDefault(); });
+  return {busy: () => !!(d && d.active)};
+})();
 $("delete-all").addEventListener("click", async () => {
   const n = (data.deleted || []).length;
   if (!n || !confirm(`Delete all ${n} track${n > 1 ? "s" : ""} in Recently deleted for good? They can't be restored.`)) return;

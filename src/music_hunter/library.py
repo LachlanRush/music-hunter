@@ -110,15 +110,17 @@ def order_playlists(conn: sqlite3.Connection, ids: list[int]) -> None:
 
 def playlist_tracks(conn: sqlite3.Connection, playlist_id: int) -> list[dict]:
     """Added (waiting for stars) first, newest first; then by stars, 5 at the top and unstarred last; within the same
-    stars, the most recently starred first (then the most recently added)."""
+    stars, tracks I haven't placed by dragging first (the most recently starred first), then in the order I dragged
+    them into (static/playlist.html sorts the same way)."""
     return [dict(r) for r in conn.execute(
         "SELECT t.id, t.artist, t.title, t.duration_s, t.gain_db, t.bpm, t.release_date,"
         " t.art_path IS NOT NULL AS has_art, t.file_path IS NOT NULL AS has_audio, pt.stars, pt.status, pt.added_at,"
-        " pt.starred_at,"
+        " pt.starred_at, pt.position,"
         " pt.bpm_override, t.quality"
         " FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id WHERE pt.playlist_id = ?"
         " ORDER BY pt.status = 'added' DESC, CASE WHEN pt.status = 'added' THEN pt.added_at END DESC,"
-        " pt.stars IS NULL, pt.stars DESC, coalesce(pt.starred_at, pt.added_at) DESC, pt.added_at DESC, t.id DESC",
+        " pt.stars IS NULL, pt.stars DESC, pt.position IS NOT NULL, pt.position,"
+        " coalesce(pt.starred_at, pt.added_at) DESC, pt.added_at DESC, t.id DESC",
         (playlist_id,))]
 
 
@@ -128,11 +130,31 @@ def set_stars(conn: sqlite3.Connection, playlist_id: int, track_id: int, stars: 
         raise ValueError("Stars must be 1–5, or none")
     with conn:
         n = conn.execute("UPDATE playlist_tracks SET stars = ?, status = CASE WHEN ? IS NULL THEN status ELSE 'member' END,"
-                         " starred_at = strftime('%Y-%m-%d %H:%M:%f', 'now')"
+                         " starred_at = strftime('%Y-%m-%d %H:%M:%f', 'now'), position = NULL"
                          " WHERE playlist_id = ? AND track_id = ?", (stars, stars, playlist_id, track_id)).rowcount
     if not n:
         raise ValueError("That track isn't in this playlist")
     db.log_event(conn, "stars_changed", playlist_id=playlist_id, track_id=track_id, stars=stars)   # for replays
+
+
+def order_tracks(conn: sqlite3.Connection, playlist_id: int, ids: list[int]) -> None:
+    """My own order for tracks with the same stars (dragged): these tracks in this order."""
+    stars = {r[0] for r in conn.execute(f"SELECT coalesce(stars, 0) FROM playlist_tracks WHERE playlist_id = ?"
+                                        f" AND track_id IN ({','.join('?' * len(ids))})", (playlist_id, *ids))}
+    if len(stars) > 1:
+        raise ValueError("Only tracks with the same stars can be put in order")
+    with conn:
+        for i, tid in enumerate(ids):
+            conn.execute("UPDATE playlist_tracks SET position = ? WHERE playlist_id = ? AND track_id = ?",
+                         (i, playlist_id, tid))
+
+
+def track_playlists(conn: sqlite3.Connection, track_id: int) -> list[dict]:
+    """Every playlist, and whether this track is in it (the Add to playlist sheet)."""
+    return [{**dict(r), "image": cover_url(r["id"], r["image_path"]), "has": bool(r["has"])} for r in conn.execute(
+        "SELECT p.id, p.name, p.image_path, EXISTS (SELECT 1 FROM playlist_tracks pt WHERE pt.playlist_id = p.id"
+        " AND pt.track_id = ?) AS has FROM playlists p ORDER BY p.position IS NULL, p.position, p.created_at, p.id",
+        (track_id,))]
 
 
 def add_to_playlist(conn: sqlite3.Connection, playlist_id: int, track_id: int, status: str = "member") -> bool:
