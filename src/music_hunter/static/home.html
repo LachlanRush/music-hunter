@@ -74,6 +74,7 @@ body.dragging-card { cursor: grabbing; }
 form { display: flex; flex-wrap: wrap; gap: 8px; }
 form input { flex: 1 1 260px; min-width: 0; }
 .add .btn { padding: 9px 18px; }
+.new-row { display: flex; gap: 8px; flex-wrap: wrap; }
 </style>
 </head>
 <body>
@@ -87,11 +88,7 @@ form input { flex: 1 1 260px; min-width: 0; }
       <input id="spotify" type="url" placeholder="Spotify playlist link — https://open.spotify.com/playlist/…" aria-label="Spotify playlist link" required>
       <button type="submit" class="btn">Import</button>
     </form>
-    <form id="new-form">
-      <input id="name" type="text" placeholder="Name for an empty playlist" aria-label="New playlist name" required>
-      <button type="submit" class="btn">Create</button>
-    </form>
-    <div><button class="btn" id="new-folder">New folder</button></div>
+    <div class="new-row"><button class="btn" id="new-playlist">New playlist</button><button class="btn" id="new-folder">New folder</button></div>
     <div class="error" id="error" hidden></div>
   </section>
 </main>
@@ -237,10 +234,12 @@ $("import-form").addEventListener("submit", async (e) => {
   } catch (err) { showError(`Couldn't import: ${err.message}`); }
   btn.disabled = false; btn.textContent = "Import";
 });
-$("new-form").addEventListener("submit", async (e) => {
-  e.preventDefault(); showError("");
+$("new-playlist").addEventListener("click", async () => {
+  showError("");
+  const name = await askText("New playlist", {placeholder: "Playlist name", ok: "Create"});
+  if (!name) return;
   try {
-    const r = await api("/api/playlists", {name: $("name").value.trim()});
+    const r = await api("/api/playlists", {name});
     go(`/playlist/${r.playlist_id}`);
   } catch (err) { showError(`Couldn't create it: ${err.message}`); }
 });
