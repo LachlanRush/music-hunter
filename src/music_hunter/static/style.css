@@ -11,7 +11,7 @@
   --accent: hsl(220 12% 68%);  /* replaced by the cover's colour */
   --accent-soft: hsl(220 12% 68% / 0.16);
   --glow: hsl(220 12% 34% / 0.85);
-  --tint: hsl(220 10% 20%);
+  --tint: hsl(220 6% 18%);
   --good: #5fbf85;
   --bad: #f07167;
   --display: "Figtree", "Helvetica Neue", Arial, sans-serif;

@@ -54,7 +54,7 @@ const Tint = window.Tint = (() => {
     el.style.setProperty("--accent", hsl(h, sat, 0.68));          // text, stars, the progress bar
     el.style.setProperty("--accent-soft", hsl(h, sat, 0.68, 0.16));
     el.style.setProperty("--glow", hsl(h, Math.min(sat, 0.6), 0.34, 0.85));   // behind the header
-    el.style.setProperty("--tint", hsl(h, Math.min(sat, 0.55), 0.24));       // the player bar, solid
+    el.style.setProperty("--tint", hsl(h, rgb ? 0.14 : 0.06, 0.18));          // the player bar: grey, a hint of the cover
   }
 
   return {
