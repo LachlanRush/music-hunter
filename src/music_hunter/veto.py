@@ -92,8 +92,8 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
 
     likes = conn.execute(
         "SELECT p.track_id, p.rating, e.embedding FROM plays p JOIN track_embeddings e ON e.track_id = p.track_id"
-        f" WHERE p.rating IN ({','.join(str(int(k)) for k in POSITIVE_WEIGHTS)})"
-        " AND NOT coalesce(p.auto_rated, 0)").fetchall()      # heard (skipped / not rated) isn't a like (2026-11-11)
+        f" WHERE p.rating IN ({','.join(str(int(k)) for k in POSITIVE_WEIGHTS)})").fetchall()
+    # (heard — skipped or no − / + — counts as Close, a mild like, as unrated plays always did: 2026-11-11)
     like_close = None
     if likes:
         L = np.stack([db.from_blob(r["embedding"]) for r in likes]).astype(np.float64)
