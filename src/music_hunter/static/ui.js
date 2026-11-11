@@ -1,7 +1,7 @@
 // The app's own question boxes (2026-11-11), instead of the browser's plain confirm/prompt windows:
 //   await ask("Delete …?", {detail, ok: "Delete", danger: true})  → true / false
 //   await askText("Folder name", {value, placeholder, ok})        → the text, or null if cancelled
-// Esc, Cancel or a tap outside closes it as "no".
+// Esc, Cancel or a tap outside closes it as "no" (outside: the handler at the end, for every box on the page).
 const UI = window.UI = (() => {
   function open(build) {
     return new Promise((resolve) => {
@@ -14,7 +14,6 @@ const UI = window.UI = (() => {
       d.querySelector("[data-no]").onclick = () => done(input ? null : false);
       d.querySelector("form").onsubmit = (e) => { e.preventDefault(); done(input ? input.value.trim() || null : true); };
       d.addEventListener("cancel", (e) => { e.preventDefault(); done(input ? null : false); });
-      d.addEventListener("click", (e) => { if (e.target === d) done(input ? null : false); });   // the backdrop
       d.showModal();
       (input || d.querySelector("[data-yes]")).focus();
       if (input) input.select();
@@ -36,3 +35,13 @@ const UI = window.UI = (() => {
   };
 })();
 const ask = UI.ask, askText = UI.askText;
+
+// A tap or click outside any open box (Add to playlist, Edit details, a question) cancels and closes it.
+document.addEventListener("click", (e) => {
+  const d = e.target;
+  if (!(d instanceof HTMLDialogElement) || !d.open) return;
+  const r = d.getBoundingClientRect();
+  if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) return;   // inside it
+  if (d.classList.contains("ask")) d.dispatchEvent(new Event("cancel"));
+  else d.close("cancel");
+});

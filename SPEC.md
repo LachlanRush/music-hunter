@@ -1015,3 +1015,6 @@ All 297 rated plays on the Pi (289 tracks) re-downloaded (256; YouTube refused t
 - The star filter ("All tracks", "★ 3+"…) is always in the playlist's colour.
 - The star filter sits next to Find music (left), Shuffle and Play on the right.
 - **Add to queue** (a song's ⋯, under Add to playlist…): it plays after the current song, ahead of the rest of the playlist; several stack, first added first. While nothing plays they wait and play first when something starts. Shuffle or the star filter changing keeps them first. A short note confirms it.
+- **Add to queue across playlists** (in the browser): on a playlist page while another playlist plays, Add to queue puts the song in the playing playlist's queue (played at its own tempo). While Find music plays it says Find music picks its own next track. In the phone app it still queues within the playlist on screen.
+- **Find similar only picks songs near its tempo**: from every song in every playlist (To rate included), only those within 6% of the song's BPM (`[library] similar_bpm_tolerance`; half, double and 2:3 readings count as the tempo they really are), then the closest-sounding.
+- A tap or click outside any open box (Add to playlist, Edit details, a question) cancels and closes it.

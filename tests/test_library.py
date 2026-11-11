@@ -542,3 +542,23 @@ def test_home_order(lib):
     library.order_home(conn, [{"kind": "playlist", "id": b}, {"kind": "playlist", "id": a}, {"kind": "folder", "id": fid}])
     assert [p["id"] for p in library.list_playlists(conn)] == [b, a]
     assert library.list_folders(conn)[0]["position"] == 2
+
+
+def test_similar_playlist_keeps_to_the_tempo(lib):
+    """Find similar: only songs within [library] similar_bpm_tolerance of the song's tempo (a 2:3 reading counts as
+    the tempo it really is)."""
+    import numpy as np
+
+    conn, track, _ = lib
+    pid = library.create_playlist(conn, "mixed")
+    v = np.zeros(4, np.float32); v[0] = 1
+    ids = {}
+    for title, bpm in (("Seed", 140), ("Near", 142), ("Fast", 174), ("Misread", 93.6), ("Unknown", None)):
+        t = ids[title] = track(title)
+        conn.execute("UPDATE tracks SET bpm = ? WHERE id = ?", (bpm, t))
+        conn.execute("INSERT INTO track_embeddings (track_id, model, dim, n_chunks, embedding) VALUES (?, 'm', 4, 1, ?)",
+                     (t, db.to_blob(v)))
+        library.add_to_playlist(conn, pid, t)
+    new = library.similar_playlist(conn, ids["Seed"])
+    got = {r["title"] for r in library.playlist_tracks(conn, new)}
+    assert got == {"Seed", "Near", "Misread"}

@@ -165,5 +165,14 @@ const MHShell = window.MHShell = (() => {
     history.replaceState({}, "", target);
     show(frame(target));
   });
-  return {open};
+  // "Add to queue" on a page that isn't the playing one: the song goes to the playing page's queue.
+  function enqueue(track, from) {
+    const w = win(owner);
+    if (!w || w === from || !playing(owner)) return null;          // nothing playing elsewhere: the page queues it
+    if (!w.__enqueue) return "unsupported";                          // Find music chooses its own next track
+    w.__enqueue(track);
+    setTimeout(paint, 100);
+    return "queued";
+  }
+  return {open, enqueue};
 })();

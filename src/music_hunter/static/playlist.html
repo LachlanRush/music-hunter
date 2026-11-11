@@ -857,12 +857,21 @@ function playTrack(id) {                               // the track already play
 // playlist carries on. While nothing plays they wait, and play first once something starts.
 let upNext = [];                                       // waiting while nothing plays
 const pendingQueued = () => { let n = 0; while (queue[pos + 1 + n] && queue[pos + 1 + n].queued) n++; return n; };
-function addToQueue(t) {
+function addToQueue(t, quiet = false) {
+  // Music playing from another playlist (the browser shell keeps it going): the song joins that queue instead.
+  if (!quiet) {
+    let r = null;
+    try { if (window.parent !== window && window.parent.MHShell) r = window.parent.MHShell.enqueue(t, window); } catch (e) {}
+    if (r === "queued") { toast(`Added to queue: ${t.title}`); return; }
+    if (r === "unsupported") { toast("Find music is playing: it picks its own next track"); return; }
+  }
   const item = {...t, queued: true};
   if (pos >= 0) queue.splice(pos + 1 + pendingQueued(), 0, item);
   else upNext.push(item);
-  toast(`Added to queue: ${t.title}`);
+  if (!quiet) toast(`Added to queue: ${t.title}`);
 }
+// A song queued from another playlist's page: played at its own tempo (this playlist's Set to BPM has no copy of it).
+window.__enqueue = (t) => addToQueue({...t, rate: 1, tempo_note: ""}, true);
 // The rest of the queue rebuilt (shuffle switched, star filter changed): queued songs still come first.
 function rebuildRest() {
   const cur = queue[pos], waiting = queue.slice(pos + 1, pos + 1 + pendingQueued());

@@ -386,3 +386,4 @@ cover_size = 600     # stored square, this many pixels a side
 # sounding tracks from my other playlists in its To rate section, to keep or remove before starting Find music.
 # Closeness is sound alone (MAEST fingerprint); stars play no part.
 similar_count = 10
+similar_bpm_tolerance = 0.06   # Find similar: only songs within this share of the song's tempo (2026-11-11)

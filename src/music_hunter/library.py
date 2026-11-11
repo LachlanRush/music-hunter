@@ -244,16 +244,21 @@ def similar_playlist(conn: sqlite3.Connection, track_id: int) -> int:
     (stars play no part, 2026-11-11)."""
     import numpy as np
 
-    t = conn.execute("SELECT t.artist, t.title, t.art_path, e.embedding FROM tracks t"
+    t = conn.execute("SELECT t.artist, t.title, t.art_path, t.bpm, e.embedding FROM tracks t"
                      " LEFT JOIN track_embeddings e ON e.track_id = t.id WHERE t.id = ?", (track_id,)).fetchone()
     if not t:
         raise ValueError("No such track")
     rows = conn.execute(
-        "SELECT t.id, t.artist, t.title, e.embedding FROM playlist_tracks pt"
+        "SELECT t.id, t.artist, t.title, t.bpm, e.embedding FROM playlist_tracks pt"
         " JOIN tracks t ON t.id = pt.track_id JOIN track_embeddings e ON e.track_id = t.id"
         " WHERE t.id != ? GROUP BY t.id", (track_id,)).fetchall() if t["embedding"] else []
     me = names.song(t["artist"], t["title"])
     rows = [r for r in rows if not names.song(r["artist"], r["title"]).same_song(me)]   # not another version of it
+    # Only songs near its tempo (a half, double or 2:3 reading counts as the tempo it really is).
+    if t["bpm"]:
+        from .tempo import nearest
+        tol = CONFIG["library"]["similar_bpm_tolerance"]
+        rows = [r for r in rows if r["bpm"] and abs(nearest(r["bpm"], t["bpm"]) / t["bpm"] - 1) <= tol]
     picks = []
     if rows:
         sims = np.stack([db.from_blob(r["embedding"]) for r in rows]) @ db.from_blob(t["embedding"])
