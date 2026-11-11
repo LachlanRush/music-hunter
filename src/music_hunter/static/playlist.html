@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script>/* In a browser, pages run inside the shell, which keeps the music going between pages (static/shell.js); the app is its own shell */
-if (window.top === window && !window.NativeAudioBridge) location.replace("/shell#" + location.pathname + location.search);</script>
+if (window.top === window && !window.NativeAudioBridge) location.replace("/shell#" + location.pathname + location.search);
+else if (window.top !== window) document.documentElement.classList.add("framed");</script>
 <title>Playlist · Music Hunter</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -72,10 +73,10 @@ li.found { animation: found 1.4s ease-out; }
 .more > button:hover { color: var(--fg); }
 .menu.sub-open .main-items { display: none; }
 
-/* The player: a floating bar tinted by the playing song's cover */
-.player { position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); z-index: 10;
-  background: var(--tint); border-radius: 10px; padding: 8px 10px 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-  transition: background .6s; }
+/* The player: a solid bar along the bottom, in the playlist's colour */
+.player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--tint);
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35); transition: background .6s; }
+.framed .player { display: none !important; }       /* in the browser shell its bar plays this part (static/shell.js) */
 .player-in { max-width: 860px; margin: 0 auto; display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
 .player .art { width: 48px; height: 48px; border-radius: 5px; }
 .player .art, .player .t { cursor: pointer; }
@@ -96,6 +97,8 @@ li.found { animation: found 1.4s ease-out; }
 .add-song { display: flex; gap: 8px; }
 .add-song input { flex: 1 1 auto; min-width: 0; border-radius: 999px; }
 .deleted ol { margin-top: 8px; }
+.del-all { margin-top: 10px; }
+.del-all .btn { padding: 6px 14px; font-size: 13px; }
 .deleted li { grid-template-columns: 44px minmax(0, 1fr) auto; cursor: pointer; }
 @media (hover: hover) { .deleted li:not(.unavailable):hover { background: rgba(255, 255, 255, 0.07); } }
 .deleted .acts { display: flex; gap: 6px; }
@@ -149,7 +152,6 @@ li.found { animation: found 1.4s ease-out; }
   <section class="tempo" aria-label="Tempo">
     <label><input type="checkbox" id="same-bpm"> Set to</label>
     <label><input type="number" id="bpm-target" min="60" max="200" step="0.5" inputmode="decimal" aria-label="Target BPM"> BPM</label>
-    <button class="link" id="bpm-auto" hidden></button>
     <span class="meta" id="tempo-note"></span>
   </section>
 
@@ -175,6 +177,7 @@ li.found { animation: found 1.4s ease-out; }
   <section id="job" hidden></section>
   <details class="failures deleted" id="deleted-section" hidden>
     <summary id="deleted-label">Recently deleted</summary>
+    <div class="del-all"><button class="btn danger" id="delete-all">Delete all</button></div>
     <ol id="deleted"></ol>
   </details>
 </main>
@@ -578,6 +581,13 @@ $("details").addEventListener("close", async () => {
   catch (e) { showError(`Couldn't save: ${e.message}`); }
 });
 $("sort-clear").addEventListener("click", () => { sortOrder = null; render(); });
+$("delete-all").addEventListener("click", async () => {
+  const n = (data.deleted || []).length;
+  if (!n || !confirm(`Delete all ${n} track${n > 1 ? "s" : ""} in Recently deleted for good? They can't be restored.`)) return;
+  data.deleted = []; render();                          // gone at once; the server follows
+  try { await api(`/api/playlists/${PID}/deleted`, undefined, "DELETE"); settleLater(300); }
+  catch (err) { showError(`Couldn't delete them: ${err.message}`); load(); }
+});
 $("min-stars").addEventListener("change", async () => {
   const v = Number($("min-stars").value);
   data.min_stars = v; render();
@@ -655,7 +665,6 @@ function showNow(t) {
   $("player").hidden = false;
   $("p-title").textContent = t.title; $("p-artist").textContent = t.artist;
   $("p-art").src = t.art || ""; $("p-art").style.visibility = t.art ? "visible" : "hidden";
-  Tint.apply(t.art, $("player"));                                  // the bar takes the song's colour
   $("pos").textContent = "0:00"; $("dur").textContent = fmt(t.duration_s); $("seek").value = 0;
   setLoading(true);
   render();
@@ -697,14 +706,18 @@ $("play").addEventListener("click", () => {
 $("next").addEventListener("click", () => { if (pos + 1 < queue.length) playAt(pos + 1); });
 // For the browser shell's player bar on other pages (static/shell.js): what's playing here, and its controls.
 window.__audio = audio;
+window.__barOnPage = true;                                // the shell's bar stands in for this page's player
 window.__nowPlaying = () => {
   const t = queue[pos];
   return t ? {title: t.title, artist: t.artist, art: t.art, playing: !audio.paused, t: audio.currentTime,
-              d: audio.duration || t.duration_s, shuffle} : null;
+              d: audio.duration || t.duration_s, shuffle, note: $("p-tempo").textContent, loading: $("play").classList.contains("loading"),
+              volume: Number($("volume").value) / 100 } : null;
 };
 window.__control = (action, value) => ({
   toggle: () => $("play").click(), next: () => $("next").click(), prev: () => $("prev").click(),
   shuffle: () => $("shuffle").click(), seek: () => { audio.currentTime = value; },
+  reveal: () => $("p-open").click(),
+  volume: () => { $("volume").value = Math.round(value * 100); $("volume").dispatchEvent(new Event("input")); },
 })[action]?.();
 // Tapping the playing track (cover or names) shows it in the list (feedback #38).
 $("p-art").onclick = $("p-open").onclick = () => {
@@ -790,8 +803,6 @@ function renderTempo() {
   $("same-bpm").checked = s.on;
   $("bpm-target").value = s.target;
   $("bpm-target").disabled = !s.on;
-  $("bpm-auto").hidden = s.bpm == null;                    // my own BPM: also the playlist's tempo; Auto goes back
-  $("bpm-auto").textContent = `Auto (${s.auto})`;
 }
 async function saveTempo(on, bpm) {
   try { await api(`/api/playlists/${PID}/tempo`, {on, bpm}, "PUT"); } catch (e) { showError(`Couldn't save: ${e.message}`); }
@@ -805,7 +816,6 @@ function retuneCurrent() {                              // the playing track fol
   showTempoNote();
 }
 $("same-bpm").addEventListener("change", () => saveTempo($("same-bpm").checked, data.tempo.bpm));
-$("bpm-auto").addEventListener("click", () => saveTempo(data.tempo.on, null));
 $("bpm-target").addEventListener("change", () => {
   const v = Number($("bpm-target").value);
   saveTempo(true, v >= 60 && v <= 200 ? v : null);

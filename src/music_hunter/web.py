@@ -876,6 +876,16 @@ def delete_track_forever(playlist_id: int, track_id: int) -> dict:
     return {"ok": True}
 
 
+@app.delete("/api/playlists/{playlist_id}/deleted")
+def empty_deleted(playlist_id: int) -> dict:
+    """Delete all: everything in Recently deleted goes for good."""
+    conn = db.connect()
+    ids = [d["id"] for d in library.deleted_tracks(conn, playlist_id)]
+    for tid in ids:
+        library.delete_forever(conn, playlist_id, tid)
+    return {"deleted": len(ids)}
+
+
 class LinkBody(BaseModel):
     link: str
 

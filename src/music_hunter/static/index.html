@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script>/* In a browser, pages run inside the shell, which keeps the music going between pages (static/shell.js); the app is its own shell */
-if (window.top === window && !window.NativeAudioBridge) location.replace("/shell#" + location.pathname + location.search);</script>
+if (window.top === window && !window.NativeAudioBridge) location.replace("/shell#" + location.pathname + location.search);
+else if (window.top !== window) document.documentElement.classList.add("framed");</script>
 <title>Music Hunter</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -140,8 +141,7 @@ if (window.top === window && !window.NativeAudioBridge) location.replace("/shell
     <div class="tempo">
       <label><input type="checkbox" id="same-bpm"> Set to</label>
       <label><input type="number" id="bpm-target" min="60" max="200" step="0.5" inputmode="decimal" aria-label="Target BPM"> BPM</label>
-      <button class="link" id="bpm-auto" hidden></button>
-      <span class="tempo-note" id="tempo-note"></span>
+        <span class="tempo-note" id="tempo-note"></span>
     </div>
     <div class="error" id="error" hidden></div>
   </section>
@@ -383,8 +383,6 @@ function renderTempo() {
   $("same-bpm").checked = tempo.on;
   $("bpm-target").value = tempo.target ?? "";
   $("bpm-target").disabled = !tempo.on;
-  $("bpm-auto").hidden = tempo.bpm == null;                // my own BPM: also the tempo filter; Auto goes back
-  $("bpm-auto").textContent = `Auto (${tempo.auto})`;
 }
 async function saveTempo(on, bpm) {
   try {
@@ -401,7 +399,6 @@ async function saveTempo(on, bpm) {
   showTempoNote();
 }
 $("same-bpm").addEventListener("change", () => saveTempo($("same-bpm").checked, tempo.bpm));
-$("bpm-auto").addEventListener("click", () => saveTempo(tempo.on, null));
 $("bpm-target").addEventListener("change", () => {
   const v = Number($("bpm-target").value);
   saveTempo(true, v >= 60 && v <= 200 ? v : null);

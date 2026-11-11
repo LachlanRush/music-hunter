@@ -1,7 +1,7 @@
 // Colour from cover art (2026-11-11): a page takes its soft accent and the glow behind its header from the playlist's
-// cover, and the player bar its tint from the playing song's cover, instead of one fixed orange.
+// cover, and the player bar its solid colour from it too (--tint), instead of one fixed orange.
 // Tint.apply(url, el?) sets --accent, --accent-soft, --glow (and --tint-rgb) on `el` (default: the page root).
-const Tint = (() => {
+const Tint = window.Tint = (() => {
   const cache = new Map();
 
   function rgbToHsl(r, g, b) {
@@ -54,7 +54,7 @@ const Tint = (() => {
     el.style.setProperty("--accent", hsl(h, sat, 0.68));          // text, stars, the progress bar
     el.style.setProperty("--accent-soft", hsl(h, sat, 0.68, 0.16));
     el.style.setProperty("--glow", hsl(h, Math.min(sat, 0.6), 0.34, 0.85));   // behind the header
-    el.style.setProperty("--tint", hsl(h, Math.min(sat, 0.5), 0.2));         // the player bar
+    el.style.setProperty("--tint", hsl(h, Math.min(sat, 0.55), 0.24));       // the player bar, solid
   }
 
   return {

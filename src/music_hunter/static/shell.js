@@ -3,7 +3,7 @@
 // hidden, with its player bar shown over whatever page is on screen. Pressing play on another page hands the music
 // over to it (the old playing page is closed). The pages are unchanged: they ask `go()` (static/nav.js) to move, and
 // tell the bar what's playing (window.__nowPlaying / __control).
-const MHShell = (() => {
+const MHShell = window.MHShell = (() => {
   let current = null, owner = null, bar = null, seeking = false;
   const key = (u) => { const x = new URL(u, location.href); return (x.pathname.replace(/\/+$/, "") || "/") + x.search; };
   const win = (f) => { try { return f && f.contentWindow; } catch (e) { return null; } };
@@ -97,14 +97,15 @@ const MHShell = (() => {
     bar.id = "mh-bar"; bar.hidden = true;
     bar.innerHTML = `<div class="in">
       <img class="art" id="b-art" alt="">
-      <div class="t" id="b-open"><b id="b-title"></b><span id="b-artist"></span></div>
+      <div class="t" id="b-open"><b id="b-title"></b><span id="b-artist"></span><span class="note" id="b-note"></span></div>
       <div class="controls">
         <button class="round" data-c="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg></button>
         <button class="round primary" data-c="toggle" aria-label="Play"><svg viewBox="0 0 24 24" id="b-icon">${PLAY}</svg></button>
         <button class="round" data-c="next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg></button>
         <button class="round" data-c="shuffle" id="b-shuffle" aria-label="Shuffle" hidden><svg viewBox="0 0 24 24"><path d="M4 7h3.5l7 10H18v-2l3 3-3 3v-2h-4.5l-7-10H4zm10.5 0H18V5l3 3-3 3V9h-3.5l-1.6 2.3-1.2-1.7zM4 17h3.5l1.6-2.3 1.2 1.7L8.5 19H4z"/></svg></button>
       </div>
-      <div class="seek"><span id="b-pos">0:00</span><input type="range" id="b-seek" min="0" max="1000" value="0" aria-label="Position"><span id="b-dur">0:00</span></div>
+      <div class="seek"><span id="b-pos">0:00</span><input type="range" id="b-seek" min="0" max="1000" value="0" aria-label="Position"><span id="b-dur">0:00</span>
+        <input type="range" class="volume" id="b-volume" min="0" max="100" value="100" aria-label="Volume"></div>
     </div>`;
     document.body.appendChild(bar);
     const $ = (id) => bar.querySelector("#" + id);
@@ -112,10 +113,12 @@ const MHShell = (() => {
       const c = e.target.closest("[data-c]");
       if (c) { try { win(owner).__control(c.dataset.c); } catch (err) {} setTimeout(paint, 150); return; }
       if (e.target.closest("#b-open, #b-art") && owner) {                   // back to where it's playing
+        if (owner === current) { try { win(owner).__control("reveal"); } catch (err) {} return; }   // (feedback #38)
         try { history.pushState({}, "", win(owner).location.pathname + win(owner).location.search); } catch (err) {}
         show(owner);
       }
     });
+    $("b-volume").addEventListener("input", () => { try { win(owner).__control("volume", $("b-volume").value / 100); } catch (e) {} });
     const seek = $("b-seek");
     seek.addEventListener("input", () => { seeking = true; });
     seek.addEventListener("change", () => {
@@ -124,10 +127,15 @@ const MHShell = (() => {
     });
   }
   let lastArt = null;
+  // One bar for every page, so it doesn't change as I move around: over other pages, and on a playlist page in
+  // place of its own player (Find music's own controls are its player, so not there).
   function paint() {
     if (!bar) return;
     let s = null;
-    try { s = owner && owner !== current && win(owner).__nowPlaying ? win(owner).__nowPlaying() : null; } catch (e) {}
+    try {
+      const w = win(owner);
+      if (w && w.__nowPlaying && (owner !== current || w.__barOnPage)) s = w.__nowPlaying();
+    } catch (e) {}
     const on = !!(s && playing(owner));
     bar.hidden = !on;
     try { win(current).document.body.classList.toggle("mh-now-on", on); } catch (e) {}
@@ -137,8 +145,15 @@ const MHShell = (() => {
     if (lastArt !== (s.art || "")) {
       lastArt = s.art || "";
       $("b-art").src = lastArt; $("b-art").style.visibility = lastArt ? "visible" : "hidden";
-      if (window.Tint) Tint.apply(lastArt || null, bar);
     }
+    try {                                                                   // the playing playlist's colours
+      const cs = win(owner).getComputedStyle(win(owner).document.documentElement);
+      bar.style.background = cs.getPropertyValue("--tint");
+      bar.style.setProperty("--accent", cs.getPropertyValue("--accent"));
+    } catch (e) {}
+    $("b-note").textContent = s.note || "";
+    bar.querySelector('[data-c="toggle"]').classList.toggle("loading", !!s.loading);
+    if (s.volume !== undefined && document.activeElement !== $("b-volume")) $("b-volume").value = Math.round(s.volume * 100);
     $("b-icon").innerHTML = s.playing ? PAUSE : PLAY;
     bar.querySelector('[data-c="toggle"]').setAttribute("aria-label", s.playing ? "Pause" : "Play");
     const sh = $("b-shuffle"); sh.hidden = s.shuffle === null || s.shuffle === undefined; sh.classList.toggle("on", !!s.shuffle);
