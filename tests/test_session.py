@@ -13,7 +13,7 @@ import random
 import numpy as np
 
 import music_hunter.config as config
-from music_hunter import db, pool, web
+from music_hunter import db, pool, ratings, web
 from music_hunter.reweight import CFG as RW
 from music_hunter.scoring import COMPONENTS
 
@@ -114,6 +114,7 @@ class InlineThread:
 def test_session(conn, monkeypatch):
     monkeypatch.setitem(config.CONFIG["controls"], "rate_max", 0.1667)   # the v4 check keeps its controls
     monkeypatch.setitem(config.CONFIG["controls"], "rate_min", 0.10)
+    monkeypatch.setitem(config.CONFIG["ui"], "hide_names_until_rated", True)   # the blind mode still works (off since 2026-11-11)
     from fastapi.testclient import TestClient
 
     c = conn
@@ -332,3 +333,13 @@ def test_session(conn, monkeypatch):
           "spearman", cr["spearman"] and round(cr["spearman"], 2))
     for r in rws[::4]:
         print(f"  at {r['at_ratings']}: towards {r['target']:8s} fit {r['old_concordance']:.3f} -> {r['new_concordance']:.3f}")
+
+
+def test_thumb_taken_back_counts_as_heard(conn):
+    """2026-11-11: Find music has 👍 / 👎; tapping a thumb again takes it back to "heard" (as a skip), which isn't a like."""
+    play_id = ratings.show_next(conn)
+    ratings.rate(conn, play_id, 3, 10)
+    ratings.change_last_rating(conn, 2, heard=True)
+    assert tuple(conn.execute("SELECT rating, auto_rated FROM plays WHERE id = ?", (play_id,)).fetchone()) == (2, 1)
+    ratings.change_last_rating(conn, 1)
+    assert tuple(conn.execute("SELECT rating, auto_rated FROM plays WHERE id = ?", (play_id,)).fetchone()) == (1, 0)

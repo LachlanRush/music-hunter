@@ -33,6 +33,9 @@ iframe.page.behind { visibility: hidden; pointer-events: none; z-index: -1; }
   display: grid; place-items: center; padding: 0; }
 #mh-bar .round svg { width: 18px; height: 18px; fill: currentColor; }
 #mh-bar .round.primary { background: var(--fg); color: #111; }
+#mh-bar .round.thumb svg { width: 20px; height: 20px; }
+#mh-bar .round.thumb.on { background: var(--accent); color: #111; }
+#mh-bar .round[hidden] { display: none; }
 #mh-bar .round.on { color: var(--accent); }
 #mh-bar .t .note { font-size: 12px; color: rgba(255, 255, 255, 0.55); }
 #mh-bar .t .note:empty { display: none; }

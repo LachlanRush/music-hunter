@@ -47,6 +47,7 @@ h1 { font: 800 clamp(30px, 6vw, 56px)/1.05 var(--display); letter-spacing: -0.03
 #find { border: 0; background: rgba(255, 255, 255, 0.07); padding: 7px 14px; font: 600 13px var(--body); }   /* like All tracks */
 #find:hover:not(:disabled) { transform: none; background: rgba(255, 255, 255, 0.12); }
 #find.ready { background: var(--accent-soft); color: var(--accent); }
+#find.ready.on { background: var(--accent); color: #111; }       /* Find music playing in the bar */
 .tempo { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; font-size: 14px; color: var(--muted); }
 .tempo label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
 .tempo input[type=checkbox] { width: 16px; height: 16px; margin: 0; }
@@ -99,6 +100,9 @@ li.found { animation: found 1.4s ease-out; }
 .round svg { width: 18px; height: 18px; fill: currentColor; }
 .round.primary { background: var(--fg); color: #111; }
 .round.on { color: var(--accent); }
+.round.thumb svg { width: 20px; height: 20px; }
+.round[hidden] { display: none; }
+.round.thumb.on { color: #111; background: var(--accent); }
 .round.loading { position: relative; }
 .round.loading::after { content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 2px solid transparent;
   border-top-color: var(--fg); animation: spin .8s linear infinite; }
@@ -243,7 +247,9 @@ li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba
     <div class="t" id="p-open"><b id="p-title"></b><span id="p-artist"></span><span class="meta" id="p-tempo"></span></div>
     <div class="controls">
       <button class="round" id="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg></button>
+      <button class="round thumb" id="down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg></button>
       <button class="round primary" id="play" aria-label="Play"><svg viewBox="0 0 24 24" id="play-icon"><path d="M7 4l13 8-13 8z"/></svg></button>
+      <button class="round thumb" id="up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg></button>
       <button class="round" id="next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg></button>
       <button class="round" id="shuffle" aria-label="Shuffle" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 7h3.5l7 10H18v-2l3 3-3 3v-2h-4.5l-7-10H4zm10.5 0H18V5l3 3-3 3V9h-3.5l-1.6 2.3-1.2-1.7zM4 17h3.5l1.6-2.3 1.2 1.7L8.5 19H4z"/></svg></button>
     </div>
@@ -509,10 +515,11 @@ async function loadFind() {
     box.hidden = true; box.innerHTML = "";
   }
   btn.classList.toggle("ready", find.state === "ready");
+  btn.classList.toggle("on", !!fm);
 }
 $("find").addEventListener("click", async () => {
   if (!find) return;
-  if (find.state === "ready") { go(`/find/${PID}`); return; }
+  if (find.state === "ready") { fm ? Find.leave() : Find.start(); return; }
   if (find.state === "none" && !await ask(`Find music for "${data.name}"?`, {ok: "Find music",
       detail: `New tracks are found from your ${find.seeds} ${find.starred ? "starred " : ""}track${find.seeds > 1 ? "s" : ""}, `
         + `downloaded and analysed: a few minutes before the first ${find.early_start} are ready; the rest keep coming in the background.`})) return;
@@ -897,6 +904,7 @@ function playable() {                                    // in the order shown (
 }
 const round = ShuffleRound.create(PID);                // what's been heard this shuffle round, kept on this device
 function playTrack(id) {                               // the track already playing isn't restarted
+  if (fm) return Find.leave().then(() => startQueue(id));
   if (queue[pos] && queue[pos].id === id) { if (audio.paused) audio.play().catch(() => {}); return; }
   startQueue(id);
 }
@@ -951,29 +959,33 @@ function startQueue(firstId) {
   if (queue.length) playAt(0);
 }
 async function playAt(i) {
+  if (fm) await Find.leave();
   pos = i;
   const t = queue[i];
   if (!t) { audio.pause(); return; }
   fetch(`/api/playlists/${PID}/played`, {method: "POST"}).catch(() => {});   // home lists the most recently played first
   if (shuffle) round.mark(t.id);
   showNow(t);                                                      // the player shows it at once; sound follows
-  if (Media.desktop) {                                             // loudness levelling (static/media.js)
-    if (!ctx) {
-      ctx = new AudioContext(); gainNode = ctx.createGain(); volumeNode = ctx.createGain();
-      volumeNode.gain.value = Number($("volume").value) / 100;
-      ctx.createMediaElementSource(audio).connect(gainNode).connect(volumeNode).connect(ctx.destination);
-    }
-    if (ctx.state === "suspended") await ctx.resume();
-    gainNode.gain.value = Math.pow(10, (t.gain_db || 0) / 20);
-  } else {
-    audio.volume = Media.phoneVolume(t.gain_db, data.phone_headroom_db ?? 6);
-  }
+  await level(t.gain_db);
   Media.metadata({title: t.title, artist: t.artist, album: data.name, art: t.art});
   audio.src = await tempoPlayer.start(t.id, t.audio, fresh(t).rate);
   if (queue[pos] !== t) return;                                   // another track was chosen meanwhile
   const nextT = queue[pos + 1];
   if (nextT) tempoPlayer.prepare(nextT.id, fresh(nextT).rate);    // its copy first in line after this one
   try { await audio.play(); } catch (e) { setIcon(false); setLoading(false); }
+}
+async function level(gainDb) {                                     // loudness levelling (static/media.js)
+  if (Media.desktop) {
+    if (!ctx) {
+      ctx = new AudioContext(); gainNode = ctx.createGain(); volumeNode = ctx.createGain();
+      volumeNode.gain.value = Number($("volume").value) / 100;
+      ctx.createMediaElementSource(audio).connect(gainNode).connect(volumeNode).connect(ctx.destination);
+    }
+    if (ctx.state === "suspended") await ctx.resume();
+    gainNode.gain.value = Math.pow(10, (gainDb || 0) / 20);
+  } else {
+    audio.volume = Media.phoneVolume(gainDb, data.phone_headroom_db ?? 6);
+  }
 }
 function showNow(t) {
   $("player").hidden = false;
@@ -990,10 +1002,11 @@ audio.addEventListener("waiting", () => setLoading(true));
 audio.addEventListener("error", () => setLoading(false));
 audio.addEventListener("pause", () => setLoading(false));
 function setIcon(on) {
-  $("play-all").classList.toggle("on", on);               // pause while this playlist is playing
-  $("play-all-icon").innerHTML = on ? '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/>' : '<path d="M8 5l12 7-12 7z"/>';
-  $("play-all").setAttribute("aria-label", on ? "Pause" : "Play");
-  paintShuffleAll(on);
+  const mine = on && !fm;                                  // Play is the playlist's own (Find music has its button)
+  $("play-all").classList.toggle("on", mine);               // pause while this playlist is playing
+  $("play-all-icon").innerHTML = mine ? '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/>' : '<path d="M8 5l12 7-12 7z"/>';
+  $("play-all").setAttribute("aria-label", mine ? "Pause" : "Play");
+  paintShuffleAll(mine);
   $("play-icon").innerHTML = on ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M7 4l13 8-13 8z"/>';
   $("play").setAttribute("aria-label", on ? "Pause" : "Play");
 }
@@ -1002,11 +1015,11 @@ audio.addEventListener("pause", () => { setIcon(false); Media.playing(false); })
 audio.addEventListener("loadedmetadata", () => Media.position(audio));
 audio.addEventListener("seeked", () => Media.position(audio));
 Media.handlers({                                                    // lock screen / notification controls
-  play: () => audio.play(), pause: () => audio.pause(),
+  play: () => audio.play().catch(() => {}), pause: () => audio.pause(),
   nexttrack: () => $("next").click(), previoustrack: () => $("prev").click(),
   seekto: (d) => { audio.currentTime = d.seekTime; Media.position(audio); },
 });
-audio.addEventListener("ended", () => { if (pos + 1 < queue.length) playAt(pos + 1); });
+audio.addEventListener("ended", () => { if (fm) Find.ended(); else if (pos + 1 < queue.length) playAt(pos + 1); });
 audio.addEventListener("timeupdate", () => {
   if (seeking) return;
   $("pos").textContent = fmt(audio.currentTime); $("dur").textContent = fmt(audio.duration);
@@ -1015,14 +1028,16 @@ audio.addEventListener("timeupdate", () => {
 $("seek").addEventListener("input", () => { seeking = true; $("pos").textContent = fmt($("seek").value / 1000 * (audio.duration || 0)); });
 $("seek").addEventListener("change", () => { if (audio.duration) audio.currentTime = $("seek").value / 1000 * audio.duration; seeking = false; });
 $("play").addEventListener("click", () => {
+  if (fm) return audio.paused ? audio.play().catch(() => {}) : audio.pause();
   if (pos < 0) return startQueue(null);
   audio.paused ? audio.play() : audio.pause();
 });
-$("next").addEventListener("click", () => { if (pos + 1 < queue.length) playAt(pos + 1); });
+$("next").addEventListener("click", () => { if (fm) Find.skip(); else if (pos + 1 < queue.length) playAt(pos + 1); });
 // For the browser shell's player bar on other pages (static/shell.js): what's playing here, and its controls.
 window.__audio = audio;
 window.__barOnPage = true;                                // the shell's bar stands in for this page's player
 window.__playerState = () => {
+  if (fm) return Find.state();
   const t = queue[pos];
   return t ? {title: t.title, artist: t.artist, art: t.art, playing: !audio.paused, t: audio.currentTime,
               d: audio.duration || t.duration_s, shuffle, note: $("p-tempo").textContent, loading: $("play").classList.contains("loading"),
@@ -1032,16 +1047,18 @@ window.__playerControl = (action, value) => ({
   toggle: () => $("play").click(), next: () => $("next").click(), prev: () => $("prev").click(),
   shuffle: () => $("shuffle").click(), seek: () => { audio.currentTime = value; },
   reveal: () => $("p-open").click(),
+  up: () => $("up").click(), down: () => $("down").click(),
   volume: () => { $("volume").value = Math.round(value * 100); $("volume").dispatchEvent(new Event("input")); },
 })[action]?.();
 // Tapping the playing track (cover or names) shows it in the list (feedback #38).
 $("p-art").onclick = $("p-open").onclick = () => {
+  if (fm) return;
   const t = queue[pos], row = t && document.querySelector(`li[data-row="${t.id}"]`);
   if (!row) return;
   row.scrollIntoView({behavior: "smooth", block: "center"});
   row.classList.remove("found"); void row.offsetWidth; row.classList.add("found");
 };
-$("prev").addEventListener("click", () => { audio.currentTime >= (data.back_restart_s ?? 5) || pos === 0 ? (audio.currentTime = 0) : playAt(pos - 1); });
+$("prev").addEventListener("click", () => { if (fm) return Find.back(); audio.currentTime >= (data.back_restart_s ?? 5) || pos === 0 ? (audio.currentTime = 0) : playAt(pos - 1); });
 function paintShuffleAll(playing) {                       // like Play: filled only while this playlist is playing, shuffled
   const on = playing && shuffle;
   $("shuffle-all").classList.toggle("on", on); $("shuffle-all").setAttribute("aria-pressed", String(on));
@@ -1058,12 +1075,14 @@ function setShuffle(on) {
 }
 if (round.on()) setShuffle(true);                      // the mode survives a reload
 $("shuffle").addEventListener("click", () => setShuffle(!shuffle));
-$("shuffle-all").addEventListener("click", () => {     // not playing: as Play, shuffled; playing: switches the mode
+$("shuffle-all").addEventListener("click", async () => {     // not playing: as Play, shuffled; playing: switches the mode
+  if (fm) { await Find.leave(); setShuffle(true); return startQueue(null); }
   if (pos >= 0 && !audio.paused) return setShuffle(!shuffle);
   setShuffle(true);
   if (pos < 0) startQueue(null); else audio.play();
 });
 const playOrPause = () => {                               // Play and the cover
+  if (fm) return Find.leave().then(() => startQueue(null));  // Play plays the playlist (Find music stops)
   if (pos < 0) return startQueue(null);
   audio.paused ? audio.play() : audio.pause();
 };
@@ -1110,7 +1129,8 @@ $("volume").addEventListener("input", () => {
 // The playlist's own Same BPM setting, kept on the server (which renders every track's copy in the background).
 const tempoPlayer = SameBpm.player(audio, "", `pl=${PID}`, () => showTempoNote());
 const fresh = (t) => (data && data.tracks.find((x) => x.id === t.id)) || t;   // rates change with the setting
-function showTempoNote() { $("p-tempo").textContent = queue[pos] ? SameBpm.note(fresh(queue[pos]), tempoPlayer.rate()) : ""; }
+function showTempoNote() { if (fm) { $("p-tempo").textContent = SameBpm.note(Find.onAir(), Find.rate()); return; }
+  $("p-tempo").textContent = queue[pos] ? SameBpm.note(fresh(queue[pos]), tempoPlayer.rate()) : ""; }
 function renderTempo() {
   const s = data.tempo;
   $("same-bpm").checked = s.on;
@@ -1121,8 +1141,10 @@ async function saveTempo(on, bpm) {
   await load();
   renderTempo();
   retuneCurrent();
+  Find.followTempo();
 }
 function retuneCurrent() {                              // the playing track follows a new tempo setting
+  if (fm) return;
   const t = queue[pos];
   if (t) tempoPlayer.retune(t.id, t.audio, fresh(t).rate);
   showTempoNote();
@@ -1133,7 +1155,183 @@ $("bpm-target").addEventListener("change", () => {
   saveTempo(data.tempo.on, v >= 60 && v <= 200 ? v : null);   // (the box works with the tick off too)
 });
 
+
+// --- Find music in the bar (2026-11-11): its picks play here, in this page's player, names shown; 👍 adds the song to
+// this playlist (To rate) and it plays on, 👎 moves on at once, next / the end of a song without a thumb = heard. Back
+// as before: restarts after a few seconds, else the previous pick, whose thumb can still be changed.
+let fm = null;
+const Find = (() => {
+  const BASE = `/find/${PID}`;
+  const fmTempo = SameBpm.player(audio, BASE, "", () => showTempoNote());
+  const HEARD = 2, DOWN = 1, UP = 3, BACK_S = () => data.back_restart_s ?? 5;
+  async function call(path, body) {
+    const r = await fetch(BASE + path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"},
+                                                                  body: JSON.stringify(body)});
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    return r.json();
+  }
+  function report(kind, extra = {}) {
+    const t = onAir();
+    fetch(BASE + "/api/event", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({kind, play_id: t ? t.play_id : null, data: extra})}).catch(() => {});
+  }
+  const onAir = () => fm && (fm.viewing === "previous" ? fm.prev : fm.cur);
+  const thumb = (t) => (t && t.rating && !t.heard && t.rating !== HEARD ? t.rating : null);
+  function paint() {
+    const on = !!fm, t = onAir(), r = on ? thumb(t) : null;
+    $("down").hidden = $("up").hidden = !on;
+    $("shuffle").hidden = on;
+    $("down").classList.toggle("on", r === DOWN); $("up").classList.toggle("on", r === UP);
+    $("find").classList.toggle("on", on);
+  }
+  async function syncTempo() {                           // one tempo control: the playlist's Set to BPM
+    try { await fetch(BASE + "/api/tempo", {method: "PUT", headers: {"Content-Type": "application/json"},
+                                           body: JSON.stringify({on: data.tempo.on, bpm: data.tempo.bpm})}); } catch (e) {}
+  }
+  async function start() {
+    queue = []; pos = -1; upNext = [];
+    audio.pause();
+    fm = {cur: null, prev: null, viewing: "current", resume: null, played: 0, lastPos: 0, loadStart: 0, waiting: false};
+    paint();
+    await syncTempo();
+    await next();
+  }
+  async function leave() {                                // back to the playlist: an unrated pick counts as heard
+    if (!fm) return;
+    const t = fm.cur;
+    fm = null;
+    fmTempo.start(null, "", 1);                           // (cancels a copy still being followed)
+    audio.pause();
+    paint();
+    if (t && t.rating == null) call("/api/skip", {play_id: t.play_id, played_seconds: 0}).catch(() => {});
+    loadFind();
+  }
+  async function next() {
+    let err = null;
+    for (let i = 0; i < 3 && fm; i++) {
+      try { fm.cur = await call("/api/next", {}); err = null; break; }
+      catch (e) { err = e; await new Promise((r) => setTimeout(r, 1000)); }
+    }
+    if (!fm) return;
+    if (err) { toast(`Find music: ${err.message}`); return leave(); }
+    fm.viewing = "current"; fm.prev = null; fm.resume = null;
+    await load(fm.cur, 0, 0);
+  }
+  async function load(t, startAt, played) {
+    fm.played = played; fm.lastPos = startAt;
+    showNow({title: t.title || "", artist: t.artist || "", art: t.art, duration_s: t.duration_s});
+    paint();
+    await level(t.gain_db);
+    Media.metadata({title: t.title, artist: t.artist, album: `Finding music for ${data.name}`, art: t.art});
+    fetch(`/api/playlists/${PID}/played`, {method: "POST"}).catch(() => {});
+    const src = await fmTempo.start(t.track_id, t.audio, t.rate);
+    if (!fm || onAir() !== t) return;
+    audio.src = src;
+    const at = startAt / fmTempo.rate();
+    if (at) audio.addEventListener("loadedmetadata", () => { audio.currentTime = at; }, {once: true});
+    fm.loadStart = performance.now(); fm.waiting = true;
+    showTempoNote();
+    try { await audio.play(); } catch (e) { setIcon(false); setLoading(false); }
+  }
+  audio.addEventListener("playing", () => {
+    if (fm && fm.waiting) { fm.waiting = false; report("playing", {latency_ms: Math.round(performance.now() - fm.loadStart), preloaded: false}); }
+  });
+  audio.addEventListener("timeupdate", () => {
+    if (!fm) return;
+    const d = audio.currentTime - fm.lastPos;
+    if (!audio.paused && d > 0 && d < 1.5) fm.played += d;
+    fm.lastPos = audio.currentTime;
+  });
+  const tempoReport = () => {
+    const t = onAir(), r = fmTempo.rate();
+    return {played_bpm: t && t.bpm ? (r !== 1 ? data.tempo.target : t.bpm) : null, playback_rate: r};
+  };
+  // A thumb: on the current pick, or on the previous one (only while it's still the latest rated).
+  async function rate(r) {
+    if (!fm) return;
+    const t = onAir();
+    if (!t) return;
+    const was = thumb(t);
+    try {
+      let res;
+      if (fm.viewing === "previous") {
+        if (!t.can_change) { toast("Only the latest pick can still be changed"); return; }
+        res = await call("/api/change", was === r ? {rating: HEARD, heard: true} : {rating: r});
+      } else if (t.rating == null) {
+        res = await call("/api/rate", {play_id: t.play_id, rating: r, played_seconds: Math.round(fm.played), ...tempoReport()});
+      } else {
+        res = await call("/api/change", was === r ? {rating: HEARD, heard: true} : {rating: r});
+      }
+      Object.assign(t, res, {heard: was === r});
+      if (t.heard) t.rating = HEARD;
+    } catch (e) { toast(`Couldn't save: ${e.message}`); return; }
+    paint();
+    window.load && window.load();                         // a 👍 shows up in To rate (and leaves again if taken back)
+    if (r === UP && was !== UP) toast(`Added to ${data.name}`);
+    if (r === DOWN && was !== DOWN) return fm.viewing === "previous" ? forward() : next();   // 👎 moves on at once
+    if (audio.ended) fm.viewing === "previous" ? forward() : next();
+  }
+  async function skip() {
+    if (!fm) return;
+    if (fm.viewing === "previous") return forward();
+    const t = fm.cur;
+    if (t && t.rating == null) {
+      try { await call("/api/skip", {play_id: t.play_id, played_seconds: Math.round(fm.played)}); }
+      catch (e) { toast(`Couldn't skip: ${e.message}`); return; }
+    }
+    report("skipped", {});
+    next();
+  }
+  function ended() {
+    if (!fm) return;
+    report("ended", {rated: onAir() ? onAir().rating : null, played_s: Math.round(fm.played)});
+    if (fm.viewing === "previous") forward(); else skip();
+  }
+  async function back() {
+    if (!fm) return;
+    if (fm.viewing === "previous" || audio.currentTime >= BACK_S()) { audio.currentTime = 0; fm.lastPos = 0; return; }
+    let t;
+    try {
+      const ex = fm.cur && fm.cur.rating != null ? `?exclude=${fm.cur.play_id}` : "";
+      t = await call(`/api/previous${ex}`);
+    } catch (e) { audio.currentTime = 0; return; }
+    fm.resume = fm.cur ? {pos: audio.currentTime * fmTempo.rate(), played: fm.played} : null;
+    fm.viewing = "previous"; fm.prev = {...t, heard: t.rating === HEARD};
+    report("back", {to: t.play_id});
+    await load(fm.prev, 0, 0);
+  }
+  async function forward() {
+    if (!fm) return;
+    fm.viewing = "current"; fm.prev = null;
+    if (fm.cur && fm.cur.rating !== DOWN && fm.resume) { const r = fm.resume; fm.resume = null; await load(fm.cur, r.pos, r.played); }
+    else next();
+  }
+  function followTempo() {                                // the playlist's Set to BPM changed: Find music follows
+    if (!fm) return;
+    syncTempo().then(async () => {
+      const t = onAir();
+      if (!t) return;
+      try { Object.assign(t, await call(`/api/tempo/${t.track_id}`)); } catch (e) { return; }
+      fmTempo.retune(t.track_id, t.audio, t.rate);
+      showTempoNote();
+    });
+  }
+  function state() {
+    const t = onAir();
+    if (!t) return null;
+    return {title: t.title || "", artist: t.artist || "", art: t.art, playing: !audio.paused, t: audio.currentTime,
+            d: audio.duration || t.duration_s, shuffle: null, note: $("p-tempo").textContent,
+            loading: $("play").classList.contains("loading"), volume: Number($("volume").value) / 100,
+            find: true, thumb: thumb(t)};
+  }
+  $("up").addEventListener("click", () => rate(UP));
+  $("down").addEventListener("click", () => rate(DOWN));
+  return {start, leave, skip, back, ended, followTempo, state, onAir, rate: () => fmTempo.rate()};
+})();
+
 window.feedbackContext = () => {
+  if (fm && fm.cur) return {playlist_id: PID, play_id: Find.onAir().play_id, track_id: Find.onAir().track_id,
+                            position_s: Math.round(audio.currentTime || 0)};
   const t = queue[pos];
   return {playlist_id: PID, track_id: t ? t.id : null, position_s: Math.round(audio.currentTime || 0)};
 };

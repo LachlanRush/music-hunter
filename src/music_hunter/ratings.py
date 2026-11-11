@@ -288,8 +288,9 @@ def last_rated(conn: sqlite3.Connection):
                         ).fetchone()
 
 
-def change_last_rating(conn: sqlite3.Connection, rating: int) -> int:
-    """Correct the most recent rating (mis-tap). Returns the play ID."""
+def change_last_rating(conn: sqlite3.Connection, rating: int, heard: bool = False) -> int:
+    """Correct the most recent rating (mis-tap). Returns the play ID. `heard`: taken back to no rating (a thumb
+    tapped again, 2026-11-11) — stored as the unrated value, marked automatic like a skip."""
     _check(rating)
     play = last_rated(conn)
     if play is None:
@@ -298,8 +299,8 @@ def change_last_rating(conn: sqlite3.Connection, rating: int) -> int:
     keep = [t for t in json.loads(play["tags"] or "[]") if t in tag_options(rating)]   # tags that still fit
     with conn:
         _place(conn, play, rating)
-        conn.execute("UPDATE plays SET rating = ?, auto_rated = 0, tags = ? WHERE id = ?",
-                     (rating, json.dumps(keep) if keep else None, play["id"]))
+        conn.execute("UPDATE plays SET rating = ?, auto_rated = ?, tags = ? WHERE id = ?",
+                     (rating, int(bool(heard)), json.dumps(keep) if keep else None, play["id"]))
         conn.execute("UPDATE tracks SET rating = ? WHERE id = ?", (rating, play["track_id"]))
     return play["id"]
 

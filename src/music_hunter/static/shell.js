@@ -105,7 +105,9 @@ const MHShell = window.MHShell = (() => {
       <div class="t" id="b-open"><b id="b-title"></b><span id="b-artist"></span><span class="note" id="b-note"></span></div>
       <div class="controls">
         <button class="round" data-c="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg></button>
+        <button class="round thumb" data-c="down" id="b-down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg></button>
         <button class="round primary" data-c="toggle" aria-label="Play"><svg viewBox="0 0 24 24" id="b-icon">${PLAY}</svg></button>
+        <button class="round thumb" data-c="up" id="b-up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg></button>
         <button class="round" data-c="next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg></button>
         <button class="round" data-c="shuffle" id="b-shuffle" aria-label="Shuffle" hidden><svg viewBox="0 0 24 24"><path d="M4 7h3.5l7 10H18v-2l3 3-3 3v-2h-4.5l-7-10H4zm10.5 0H18V5l3 3-3 3V9h-3.5l-1.6 2.3-1.2-1.7zM4 17h3.5l1.6-2.3 1.2 1.7L8.5 19H4z"/></svg></button>
       </div>
@@ -157,6 +159,8 @@ const MHShell = window.MHShell = (() => {
     if (s.volume !== undefined && document.activeElement !== $("b-volume")) $("b-volume").value = Math.round(s.volume * 100);
     $("b-icon").innerHTML = s.playing ? PAUSE : PLAY;
     bar.querySelector('[data-c="toggle"]').setAttribute("aria-label", s.playing ? "Pause" : "Play");
+    $("b-down").hidden = $("b-up").hidden = !s.find;                  // Find music playing: its thumbs
+    $("b-down").classList.toggle("on", s.thumb === 1); $("b-up").classList.toggle("on", s.thumb === 3);
     const sh = $("b-shuffle"); sh.hidden = s.shuffle === null || s.shuffle === undefined; sh.classList.toggle("on", !!s.shuffle);
     $("b-dur").textContent = fmt(s.d);
     if (!seeking) { $("b-pos").textContent = fmt(s.t); $("b-seek").value = s.d ? Math.round(1000 * s.t / s.d) : 0; }

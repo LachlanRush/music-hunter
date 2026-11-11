@@ -271,6 +271,7 @@ class SkipBody(BaseModel):
 
 class ChangeBody(BaseModel):
     rating: int
+    heard: bool = False          # back to "heard, no rating" (counts as a skip)
 
 
 class TagsBody(BaseModel):
@@ -374,12 +375,6 @@ def home(request: Request) -> str:
 @app.get("/playlist/{playlist_id}", response_class=HTMLResponse)
 def playlist_page(playlist_id: int, request: Request) -> str:
     return _page("playlist.html", request)
-
-
-@app.get("/listen", response_class=HTMLResponse)
-def index(request: Request) -> str:
-    """The listening interface (Find music; per playlist from milestone 2)."""
-    return _page("index.html", request)
 
 
 # --- v5: playlists and the library (SPEC.md §18.1) -------------------------------------------
@@ -1361,9 +1356,8 @@ def admin_log(lines: int = 200):
 def find_page(playlist_id: int, request: Request):
     from fastapi.responses import RedirectResponse
 
-    if not find.started(playlist_id):
-        return RedirectResponse(f"/playlist/{playlist_id}")
-    return _page("index.html", request)
+    # Find music plays in the playlist page's bar now (2026-11-11): the old page goes to the playlist.
+    return RedirectResponse(f"/playlist/{playlist_id}")
 
 
 @app.get("/cover/{playlist_id}")
@@ -1520,7 +1514,8 @@ def skip(body: SkipBody) -> dict:
 def change(body: ChangeBody) -> dict:
     conn = db.connect()
     try:
-        play_id = ratings.change_last_rating(conn, body.rating)
+        heard = body.heard and body.rating == CONFIG["ratings"]["unrated_counts_as"]
+        play_id = ratings.change_last_rating(conn, body.rating, heard)
     except ValueError as e:
         raise HTTPException(400, str(e))
     _to_playlist(conn, play_id)                   # an Add joins the playlist / a changed-away Add leaves it
