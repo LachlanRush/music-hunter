@@ -226,7 +226,7 @@ class App : Application() {
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         val web = PageView(webContext)
         loadedAt[web] = android.os.SystemClock.elapsedRealtime()
-        web.setBackgroundColor(android.graphics.Color.parseColor("#111417"))   // never a white flash
+        web.setBackgroundColor(android.graphics.Color.parseColor("#161618"))   // never a white flash
         web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -279,7 +279,7 @@ class App : Application() {
 
     private fun offlinePage(retry: String) = """
         <!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
-        <body style="background:#111417;color:#e8eaed;font:16px sans-serif;padding:32px">
+        <body style="background:#161618;color:#e8eaed;font:16px sans-serif;padding:32px">
         <h2>Can't reach the Pi</h2><p>Check that Tailscale is on and you have a connection.</p>
         <button style="padding:10px 18px;font-size:16px" onclick="location.href='$retry'">Try again</button>
     """.trimIndent()

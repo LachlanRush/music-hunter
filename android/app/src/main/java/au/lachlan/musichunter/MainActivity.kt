@@ -17,7 +17,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (BuildConfig.DEBUG) intent.getStringExtra("server")?.let { app.server = it }
-        pages = FrameLayout(this).apply { setBackgroundColor(Color.parseColor("#111417")) }
+        pages = FrameLayout(this).apply { setBackgroundColor(Color.parseColor("#161618")) }
         setContentView(pages)
         app.attach(this)
         show(app.page())

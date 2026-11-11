@@ -3,8 +3,8 @@
   "short_name": "Music Hunter",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#111417",
-  "theme_color": "#111417",
+  "background_color": "#161618",
+  "theme_color": "#161618",
   "icons": [
     {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
     {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},
