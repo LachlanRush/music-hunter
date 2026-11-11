@@ -1021,3 +1021,5 @@ All 297 rated plays on the Pi (289 tracks) re-downloaded (256; YouTube refused t
 - **The coloured glow only on a playlist's page** (behind its header, from its cover), nowhere else; and none for a cover without a clear colour (no grey wash).
 - **App 0.3.8**: Add to queue across playlists (the app passes the song to the playing page); fixed a crash when a kept copy of a cover was half-written (a refresh and a page saving the same file at once shared one temporary name; a damaged copy is now dropped and fetched again).
 - **The player bar is see-through, the page blurred behind it** (frosted), instead of a grey with a hint of the song's colour.
+
+**Released as add-on 0.5.13 and app 0.3.8 (2026-11-11)**: everything since 0.5.12 — pushing code to the Pi, the new look and its follow-ups (sections and folders, drag and drop, the browser shell keeping music going between pages, Add to queue, Find similar, faster pages, the app's own question boxes), the d&b tempo fix, imports finding label uploads and fetching lost audio again, and the app's queue across playlists and cover-copy crash fix.
