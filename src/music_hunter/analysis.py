@@ -497,6 +497,9 @@ def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
         print(f"Downloading from {len(ls)} addresses: " + ", ".join(x["name"] for x in ls), flush=True)
     threads = [threading.Thread(target=_lane, args=(lane, server, base, session(), local, once, shared), daemon=True,
                                 name=f"lane-{lane['name']}") for lane in ls[1:]]
+    if not once:                                     # playlist songs' 256 kbps copies alongside the analysis
+        threads.append(threading.Thread(target=_quality_loop, args=(session(), base, local, shared), daemon=True,
+                                        name="quality"))
     for t in threads:
         t.start()
     _lane(ls[0], server, base, http, local, once, shared)
@@ -521,8 +524,8 @@ def _lane(lane: dict, server: str, base: str, http, local, once: bool, shared: d
             time.sleep(CFG["idle_poll_seconds"])
             continue
         if r.status_code == 204:
-            if home and time.monotonic() >= quality_next:
-                pause = _quality_one(http, base, local)       # nothing to analyse: playlist tracks' M4A files
+            if home and once and time.monotonic() >= quality_next:
+                pause = _quality_one(http, base, local)       # (--once: playlist tracks' M4A files only when idle)
                 if pause == 0:
                     worked()
                     continue
@@ -579,6 +582,21 @@ def _lane(lane: dict, server: str, base: str, http, local, once: bool, shared: d
                 if f is not None:
                     Path(f).unlink(missing_ok=True)       # the app keeps the copies
         worked()
+
+
+def _quality_loop(http, base: str, local, shared: dict) -> None:
+    """Playlist songs' 256 kbps copies, fetched alongside Find music's analysis (2026-11-11; before, only once the
+    queue was empty, so new playlists filling held them back for hours). They share the home address's pace with
+    its pool downloads (Local.paced), so home sees no more downloads an hour than before; they just take turns."""
+    while True:
+        try:
+            pause = _quality_one(http, base, local)
+        except Exception as e:  # noqa: BLE001 — never stops the worker
+            print(f"  M4A fetch: {str(e)[:120]}", flush=True)
+            pause = 60
+        if pause == 0:
+            shared["last_work"] = time.monotonic()
+        time.sleep(pause or 1)
 
 
 def _quality_one(http, base: str, local) -> float:
