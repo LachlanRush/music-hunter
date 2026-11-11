@@ -149,8 +149,10 @@ const MHShell = (() => {
 
   document.addEventListener("DOMContentLoaded", () => {
     build();
-    const f = frame(location.pathname + location.search + location.hash);
-    show(f);
+    // Arrived as /shell#<page>: the address bar shows the page itself from here on.
+    const target = (location.pathname === "/shell" ? location.hash.slice(1) : location.pathname + location.search) || "/";
+    history.replaceState({}, "", target);
+    show(frame(target));
   });
   return {open};
 })();

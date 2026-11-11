@@ -315,13 +315,16 @@ def _page(name: str, request: Request | None = None) -> HTMLResponse:
     def versioned(m):
         f = STATIC / m.group(2)
         return f'{m.group(1)}="/static/{m.group(2)}?v={f.stat().st_mtime_ns if f.exists() else 0}"'
-    # In a browser, a page opened directly (not in a frame) gets the shell, which shows it in a frame and keeps the
-    # playing page alive while I move around (static/shell.js); the phone app is its own shell.
-    if request is not None and request.headers.get("sec-fetch-dest") == "document" \
-            and "MusicHunterApp" not in request.headers.get("user-agent", ""):
-        name = "shell.html"
     html = re.sub(r'(src|href)="/static/([^"?]+)"', versioned, (STATIC / name).read_text())
-    return HTMLResponse(html, headers={"Cache-Control": "no-cache", "Vary": "Sec-Fetch-Dest, User-Agent"})
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/shell", response_class=HTMLResponse)
+def shell(request: Request):
+    """The browser shell (static/shell.js): a page opened directly in a browser comes here (its own first script sends
+    it, as /shell#<path>), and the shell shows it in a frame and keeps the playing page alive while I move around.
+    (Chrome sends no Sec-Fetch headers to a plain-http address like the Pi's, so the page decides, not the server.)"""
+    return _page("shell.html")
 
 
 @app.get("/", response_class=HTMLResponse)

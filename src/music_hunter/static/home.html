@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>/* In a browser, pages run inside the shell, which keeps the music going between pages (static/shell.js); the app is its own shell */
+if (window.top === window && !window.NativeAudioBridge) location.replace("/shell#" + location.pathname + location.search);</script>
 <title>Music Hunter</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
