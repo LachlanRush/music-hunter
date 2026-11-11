@@ -330,7 +330,8 @@ MIGRATIONS = [
     ("playlists", "folder_id", "INTEGER REFERENCES folders(id) ON DELETE SET NULL"),   # its folder on the home page
     ("playlists", "position", "INTEGER"),            # its place on the home page (dragged); NULL: after, oldest first
     ("folders", "position", "INTEGER"),
-    ("playlists", "played_at", "TEXT"),              # last time a song of it (or its Find music) started playing              # its place on the home page, among the playlists (dragged)
+    ("playlists", "played_at", "TEXT"),
+    ("tracks", "extended_checked_at", "TEXT"),       # looked for an extended mix of this playlist song (extended.py)              # last time a song of it (or its Find music) started playing              # its place on the home page, among the playlists (dragged)
     ("playlist_tracks", "position", "INTEGER"),          # my own order within the same stars (dragged); NULL: on top
     ("playlist_tracks", "bpm_override", "REAL"),        # v5: this track's own "Play at … BPM" in this playlist         # v5: when its stars were last set (order within the same stars)
     ("tracks", "veto_state", "TEXT"),                  # v4: NULL/'playable' or 'vetoed' (audio dropped, fingerprint kept);

@@ -245,6 +245,13 @@ cookies_file = "~/.config/music-hunter/youtube-cookies.txt"
 token_provider = "http://127.0.0.1:4416"
 retry_hours = 24
 
+[extended]
+# Feedback #41 (2026-11-11): playlist songs are swapped for their extended mix when YouTube Music has one (extended.py).
+enabled = true
+min_longer_s = 20        # at least this much longer than the version I have
+min_similarity = 0.85    # MAEST fingerprints this close (cosine): the same recording, not a namesake
+pause_seconds = 10       # between songs
+
 [sync]
 # §19: playlists with Sync on are kept here on the Pi: Playlists inside my Songs share (Syncthing, Send & Receive with
 # the laptop, which also backs up my other songs). laptop_folder is where they land there, for rekordbox.xml's paths.

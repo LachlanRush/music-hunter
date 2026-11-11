@@ -50,6 +50,7 @@ async def lifespan(app):
             session_worker(p["id"]).start_if_needed()
     jobs.requeue_interrupted(conn)                  # v5: a job cut off by a restart runs again (jobs are re-runnable)
     threading.Thread(target=_maintenance, daemon=True, name="maintenance").start()
+    _extended_soon()
     job_runner.kick()
     from . import tempo
     threading.Thread(target=tempo.sync_all, daemon=True).start()   # Same BPM copies for every playlist
@@ -870,6 +871,13 @@ def _rescore_all(skip: int | None = None) -> None:
     threading.Thread(target=run, daemon=True, name="rescore").start()
 
 
+def _extended_soon() -> None:
+    """Look for extended mixes of playlist songs not checked yet (extended.py), giving way to Find music."""
+    from . import extended
+    if CONFIG["worker"]["mode"] == "remote":
+        extended.request(busy=lambda: any(w.state == "running" for w in list(workers.values())))
+
+
 def _maintenance() -> None:
     """Hourly, so nothing waits for me to open a page or rate a track (SPEC.md §18.26): every Find music session is
     re-scored (grace periods run out by time too) and its background work restarted if any is due; Recently deleted
@@ -893,6 +901,7 @@ def _maintenance() -> None:
                 session_worker(p["id"]).start_if_needed()
             tempo.sync_all()
             sync.request()
+            _extended_soon()
             # Playlist tracks due for their M4A (SPEC.md §19): the PC only wakes for work.
             if CONFIG["worker"]["mode"] == "remote" and analysis.quality_waiting(lib) \
                     and not analysis.worker_connected(lib):
