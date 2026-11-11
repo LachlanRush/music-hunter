@@ -33,9 +33,13 @@ def _copy_embedding(src: sqlite3.Connection, src_id: int, dst: sqlite3.Connectio
 
 
 def sync_seeds(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: int) -> dict:
-    """Make the session's seeds match the playlist's starred tracks. Returns {'seeds', 'added', 'unstarred'}."""
+    """Make the session's seeds match the playlist's starred tracks — or, while none is starred, all its tracks (each
+    as [find] add_seed_stars; no minimum, 2026-11-11). Returns {'seeds', 'added', 'unstarred'}."""
     starred = lib.execute("SELECT t.*, pt.stars AS playlist_stars FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id"
                           " WHERE pt.playlist_id = ? AND pt.stars IS NOT NULL", (playlist_id,)).fetchall()
+    if not starred:
+        starred = lib.execute("SELECT t.*, ? AS playlist_stars FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id"
+                              " WHERE pt.playlist_id = ?", (CONFIG["find"]["add_seed_stars"], playlist_id)).fetchall()
     by_lib = {r["library_id"]: r for r in sess.execute("SELECT id, library_id, stars FROM tracks WHERE library_id IS NOT NULL")}
     added = 0
     with sess:

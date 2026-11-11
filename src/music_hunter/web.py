@@ -940,9 +940,10 @@ def find_state(playlist_id: int) -> dict:
     """Find music for this playlist: none (not started) / preparing (progress) / ready / error."""
     conn = db.connect()
     _playlist_or_404(conn, playlist_id)
-    seeds = conn.execute("SELECT count(*) FROM playlist_tracks WHERE playlist_id = ? AND stars IS NOT NULL",
-                         (playlist_id,)).fetchone()[0]
-    return {**find.state(playlist_id, workers.get(playlist_id)), "seeds": seeds}
+    starred, tracks = conn.execute("SELECT count(stars), count(*) FROM playlist_tracks WHERE playlist_id = ?",
+                                   (playlist_id,)).fetchone()
+    # No minimum of starred tracks: while none is starred, every track is a seed.
+    return {**find.state(playlist_id, workers.get(playlist_id)), "seeds": starred or tracks, "starred": starred}
 
 
 @app.post("/api/playlists/{playlist_id}/find")
@@ -950,9 +951,8 @@ def start_find(playlist_id: int) -> dict:
     """First time: create the playlist's session, copy its starred tracks in as seeds, start pulling and filling."""
     conn = db.connect()
     _playlist_or_404(conn, playlist_id)
-    if not conn.execute("SELECT 1 FROM playlist_tracks WHERE playlist_id = ? AND stars IS NOT NULL",
-                        (playlist_id,)).fetchone():
-        raise HTTPException(400, "Star at least one track first — starred tracks are the seeds")
+    if not conn.execute("SELECT 1 FROM playlist_tracks WHERE playlist_id = ?", (playlist_id,)).fetchone():
+        raise HTTPException(400, "Add a song first — Find music searches from the playlist's tracks")
     find.sync_seeds(conn, db.connect(playlist_id), playlist_id)
     session_worker(playlist_id).start_if_needed()
     return find_state(playlist_id)

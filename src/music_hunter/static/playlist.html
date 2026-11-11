@@ -41,7 +41,9 @@ h1 { font: 800 clamp(30px, 6vw, 56px)/1.05 var(--display); letter-spacing: -0.03
 .filter { appearance: none; -webkit-appearance: none; background: rgba(255, 255, 255, 0.07); border-radius: 999px;
   padding: 7px 14px; font: 600 13px var(--body); color: var(--fg); border: 0; cursor: pointer; }
 .filter.on { background: var(--accent-soft); color: var(--accent); }
-#find.ready { border-color: var(--accent); color: var(--accent); }
+#find { border: 0; background: rgba(255, 255, 255, 0.07); padding: 7px 14px; font: 600 13px var(--body); }   /* like All tracks */
+#find:hover:not(:disabled) { transform: none; background: rgba(255, 255, 255, 0.12); }
+#find.ready { background: var(--accent-soft); color: var(--accent); }
 .tempo { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; font-size: 14px; color: var(--muted); }
 .tempo label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
 .tempo input[type=checkbox] { width: 16px; height: 16px; margin: 0; }
@@ -140,7 +142,7 @@ li.found { animation: found 1.4s ease-out; }
   </section>
 
   <section class="actions">
-    <button class="btn" id="find" disabled>Find music</button>
+    <button class="btn" id="find">Find music</button>
     <div class="pl-menu"><button class="icon-btn" id="pl-more" aria-label="More for this playlist" aria-expanded="false">
       <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button></div>
     <span class="spacer"></span>
@@ -392,7 +394,7 @@ async function loadFind() {
   if (find.state === "none") {
     btn.disabled = !find.seeds;
     btn.textContent = "Find music";
-    btn.title = find.seeds ? "" : "Star at least one track first — starred tracks are the seeds";
+    btn.title = find.seeds ? "" : "Add a song first";
     box.hidden = true;
     box.innerHTML = "";
   } else if (find.state === "preparing") {
@@ -414,8 +416,8 @@ async function loadFind() {
 $("find").addEventListener("click", async () => {
   if (!find) return;
   if (find.state === "ready") { go(`/find/${PID}`); return; }
-  if (find.state === "none" && !confirm(`Find music for "${data.name}"?\n\nThis finds and downloads new tracks from your ${find.seeds} starred `
-      + `track${find.seeds > 1 ? "s" : ""} and analyses them — a few minutes before the first ${find.early_start} are ready; `
+  if (find.state === "none" && !confirm(`Find music for "${data.name}"?\n\nThis finds and downloads new tracks from your ${find.seeds} `
+      + `${find.starred ? "starred " : ""}track${find.seeds > 1 ? "s" : ""} and analyses them — a few minutes before the first ${find.early_start} are ready; `
       + "the rest keep coming in the background.")) return;
   try { await api(`/api/playlists/${PID}/find`, {}); } catch (e) { showError(`Couldn't start Find music: ${e.message}`); }
   loadFind();
@@ -480,7 +482,7 @@ document.addEventListener("click", async (e) => {
     menu.className = "menu";
     const tt = data.tracks.find((x) => x.id === tid);
     menu.innerHTML = `<button data-sound="${tid}">Sort by sound like this</button>`
-      + `<button data-similar="${tid}">Find similar (new radio playlist)</button>`
+      + `<button data-similar="${tid}">Find similar</button>`
       + (tt && tt.art ? `<button data-cover-from="${tid}">Use as playlist cover</button>` : "")
       + `<button data-own-bpm="${tid}">Play at … BPM</button>`
       + (data.others.length ? `<hr><div class="label">Add to playlist</div>` + data.others.map((o) =>

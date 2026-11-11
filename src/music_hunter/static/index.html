@@ -283,7 +283,7 @@ function renderGate(s) {
   } else if (s.seeds === 0) {
     $("gate-label").textContent = "No seeds yet";
     $("gate-title").textContent = "Add your seed tracks first";
-    $("gate-text").textContent = "Star some tracks in the playlist — starred tracks are the seeds.";
+    $("gate-text").textContent = "Add some songs to the playlist first — Find music searches from them.";
     $("gate-meter").hidden = true;
   } else if (s.unplayed === 0 && s.worker.state !== "running") {
     $("gate-label").textContent = "Pool empty";

@@ -991,3 +991,5 @@ All 297 rated plays on the Pi (289 tracks) re-downloaded (256; YouTube refused t
 - **Creating a playlist** asks only for a name; a picture is added from the playlist's ⋯ (Add picture).
 - **No "Music Hunter" heading** on any page, and less space at the top: the home page starts with a small "Playlists" heading (like "Add"); other pages keep only the back arrow (Find music also its "Finding music for …").
 - **The playlist cover no longer plays** when tapped (it did since §18.12); Play is the round button. The back arrow sits level with the top of the cover: in the margin to its left on a computer, at the left edge beside the centred cover on a phone (it first lay over the cover).
+- **No minimum for Find music**: it no longer needs a starred track. While none is starred, every track in the playlist is a seed (each counted as 3 stars); once any is starred, the starred ones are, as before. Only an empty playlist can't start it. The button is no longer greyed while its state loads.
+- **Find music button** looks like the All tracks pill (filled grey; tinted when ready). The track menu says just "Find similar".

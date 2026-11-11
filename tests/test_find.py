@@ -91,7 +91,7 @@ def test_find_api(setup, monkeypatch):
     monkeypatch.setattr(web.Worker, "start_if_needed", lambda self: None)
     with TestClient(web.app) as client:
         assert client.get(f"/api/playlists/{pid}/find").json()["state"] == "none"
-        assert client.post(f"/api/playlists/{pid}/find").status_code == 400            # nothing starred yet
+        assert client.get(f"/api/playlists/{pid}/find").json()["seeds"] == len(tracks)  # nothing starred: every track
         assert client.get(f"/find/{pid}/api/state").status_code == 404                  # no session yet
         client.put(f"/api/playlists/{pid}/tracks/{tracks[0]}", json={"stars": 5})
         st = client.post(f"/api/playlists/{pid}/find").json()
@@ -163,7 +163,7 @@ def test_changes_reach_find_music_straight_away(setup, monkeypatch):
     assert len(seeds(sess)) == 1                                                  # unstarred: not a seed, now
     client.delete(f"/api/playlists/{pid}/tracks/{tracks[0]}")
     web.wait_follow_ups()
-    assert seeds(sess) == []                                                      # removed: not a seed
+    assert stars() == {3.0}                     # removed: not a seed (none starred now, so every track is, as 3 stars)
     client.post(f"/api/playlists/{pid}/deleted/{tracks[0]}/restore")
     web.wait_follow_ups()
     assert stars() == {5.0}                                                       # restored with its stars
