@@ -102,6 +102,7 @@ li.found { animation: found 1.4s ease-out; }
 .round.on { color: var(--accent); }
 .round[hidden] { display: none; }
 /* Find music's − / + beside the song's name (2026-11-11; like Spotify's +): outlined, filled once chosen */
+.controls .slot { width: 72px; display: flex; justify-content: flex-end; align-items: center; }   /* shuffle, or − / + in Find music */
 .vote { flex: none; width: 34px; height: 34px; border: 0; padding: 0; background: none; color: rgba(255, 255, 255, 0.75); display: grid; place-items: center; cursor: pointer; }
 .vote[hidden] { display: none; }
 .vote svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
@@ -251,12 +252,14 @@ li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba
     <img class="art" id="p-art" alt="">
     <div class="t" id="p-open"><b id="p-title"></b><span id="p-artist"></span><span class="meta" id="p-tempo"></span></div>
     <div class="controls">
-      <button class="vote" id="down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
-      <button class="vote" id="up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></button>
+      <span class="slot">
+        <button class="round" id="shuffle" aria-label="Shuffle" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 7h3.5l7 10H18v-2l3 3-3 3v-2h-4.5l-7-10H4zm10.5 0H18V5l3 3-3 3V9h-3.5l-1.6 2.3-1.2-1.7zM4 17h3.5l1.6-2.3 1.2 1.7L8.5 19H4z"/></svg></button>
+        <button class="vote" id="down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+        <button class="vote" id="up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></button>
+      </span>
       <button class="round" id="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg></button>
       <button class="round primary" id="play" aria-label="Play"><svg viewBox="0 0 24 24" id="play-icon"><path d="M7 4l13 8-13 8z"/></svg></button>
       <button class="round" id="next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg></button>
-      <button class="round" id="shuffle" aria-label="Shuffle" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 7h3.5l7 10H18v-2l3 3-3 3v-2h-4.5l-7-10H4zm10.5 0H18V5l3 3-3 3V9h-3.5l-1.6 2.3-1.2-1.7zM4 17h3.5l1.6-2.3 1.2 1.7L8.5 19H4z"/></svg></button>
     </div>
     <div class="seek"><span id="pos">0:00</span><input type="range" id="seek" min="0" max="1000" value="0" aria-label="Position"><span id="dur">0:00</span>
       <input type="range" class="volume" id="volume" min="0" max="100" value="100" aria-label="Volume"></div>

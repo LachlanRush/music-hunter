@@ -104,12 +104,14 @@ const MHShell = window.MHShell = (() => {
       <img class="art" id="b-art" alt="">
       <div class="t" id="b-open"><b id="b-title"></b><span id="b-artist"></span><span class="note" id="b-note"></span></div>
       <div class="controls">
-        <button class="vote" data-c="down" id="b-down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
-        <button class="vote" data-c="up" id="b-up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></button>
+        <span class="slot">
+          <button class="round" data-c="shuffle" id="b-shuffle" aria-label="Shuffle" hidden><svg viewBox="0 0 24 24"><path d="M4 7h3.5l7 10H18v-2l3 3-3 3v-2h-4.5l-7-10H4zm10.5 0H18V5l3 3-3 3V9h-3.5l-1.6 2.3-1.2-1.7zM4 17h3.5l1.6-2.3 1.2 1.7L8.5 19H4z"/></svg></button>
+          <button class="vote" data-c="down" id="b-down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+          <button class="vote" data-c="up" id="b-up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></button>
+        </span>
         <button class="round" data-c="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg></button>
         <button class="round primary" data-c="toggle" aria-label="Play"><svg viewBox="0 0 24 24" id="b-icon">${PLAY}</svg></button>
         <button class="round" data-c="next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg></button>
-        <button class="round" data-c="shuffle" id="b-shuffle" aria-label="Shuffle" hidden><svg viewBox="0 0 24 24"><path d="M4 7h3.5l7 10H18v-2l3 3-3 3v-2h-4.5l-7-10H4zm10.5 0H18V5l3 3-3 3V9h-3.5l-1.6 2.3-1.2-1.7zM4 17h3.5l1.6-2.3 1.2 1.7L8.5 19H4z"/></svg></button>
       </div>
       <div class="seek"><span id="b-pos">0:00</span><input type="range" id="b-seek" min="0" max="1000" value="0" aria-label="Position"><span id="b-dur">0:00</span>
         <input type="range" class="volume" id="b-volume" min="0" max="100" value="100" aria-label="Volume"></div>
