@@ -97,6 +97,20 @@ class YouTubeMusic:
         results = self.stats.timed(self.api.search, query, filter="songs", limit=CFG["yt_search_limit"])
         return [self._item(r) for r in results[:CFG["yt_search_limit"]] if r.get("videoId")]
 
+    def search_videos(self, query: str) -> list[Item]:
+        """Uploads (e.g. a label's channel): artist and title from an 'Artist - Title' video title."""
+        _pause()
+        results = self.stats.timed(self.api.search, query, filter="videos", limit=CFG["yt_search_limit"])
+        out = []
+        for r in results[:CFG["yt_search_limit"]]:
+            if not r.get("videoId"):
+                continue
+            it = self._item(r)
+            if " - " in r["title"] and r.get("videoType") != "MUSIC_VIDEO_TYPE_UGC":
+                it = Item(*parse_upload(it.artist, r["title"]), it.duration_s, it.video_id)
+            out.append(it)
+        return out
+
     def radio(self, video_id: str) -> list[Item]:
         """Radio for a seed, excluding the seed itself, capped at ytmusic_radio_limit."""
         _pause()

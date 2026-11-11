@@ -402,6 +402,13 @@ def match_on_youtube(yt, artists: list[str], title: str, duration_s: float):
     same = [r for r in results if r.duration_s and names.song(r.artist, r.title).same_song(target)]
     close = [r for r in same if abs(r.duration_s - duration_s) <= TOLERANCE]
     if not close:
+        # Some releases are only on YouTube as uploads, e.g. a label's channel with "BETH - Keep It Movin'" as the
+        # video's title (2026-11-11: the import missed it, the link worked): look among videos too.
+        videos = [r for r in yt.search_videos(f"{artists[0]} {title}")
+                  if r.duration_s and names.song(r.artist, r.title).same_song(target)]
+        same += videos
+        close = [r for r in videos if abs(r.duration_s - duration_s) <= TOLERANCE]
+    if not close:
         return None, ("not on YouTube Music under this artist and title" if not same else
                       f"length differs (Spotify {duration_s:.0f}s; YouTube Music "
                       + ", ".join(f"{r.duration_s:.0f}s" for r in same) + ")")
