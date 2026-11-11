@@ -129,7 +129,6 @@ const card = (p) => `
   <a class="card" href="/playlist/${p.id}" data-id="${p.id}" draggable="false">
     <div class="cover">${p.image ? `<img src="${p.image}" alt="" draggable="false">` : esc((p.name || "?")[0].toUpperCase())}</div>
     <b>${esc(p.name)}</b>
-    <div class="meta">${p.tracks} track${p.tracks === 1 ? "" : "s"}</div>
     ${p.description ? `<div class="desc">${esc(p.description)}</div>` : ""}
     ${jobLine(p.job)}
   </a>`;
