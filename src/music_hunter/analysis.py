@@ -146,6 +146,9 @@ class Quality:
                         return download(video_id, folder, {
                             "format": q["format"], "cookiefile": str(Path(q["cookies_file"]).expanduser()),
                             "extractor_args": {"youtube": {"player_client": ["web_music"]}},
+                            # YouTube's web player needs its JavaScript challenge solved; yt-dlp only tries Deno by
+                            # default, which this PC hasn't got (2026-11-11: every premium fetch failed on it).
+                            "js_runtimes": {"node": {}, "deno": {}},
                         }), 2, None
                     except Exception as e:
                         if refusal(str(e)) == "blocked":

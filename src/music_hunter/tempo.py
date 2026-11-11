@@ -56,7 +56,16 @@ def core_from(items) -> dict | None:
         pick = [b for b, s in items if s] or [b for b, _ in items]
     if not pick:
         return None
-    first = float(sorted(pick)[len(pick) // 2])
+    # The tempo they agree on best: every reading is folded (half, double, 2:3) to its nearest point to a candidate,
+    # and the candidate with the least spread wins. (The plain median of the readings could itself be a misreading:
+    # Interesting d&b's 174 BPM tracks read as 173, 116 (2:3) and 87 (half); their median, 116, folded the 87s to
+    # 130, and every track showed ~116. Fixed 2026-11-11.)
+    import math
+
+    def spread(c):
+        return sum(min(abs(math.log(c / (b * f))) for f in FOLDS) for b in pick)
+    candidates = {round(b * f, 1) for b in pick for f in FOLDS if 60 <= b * f <= 200}
+    first = min(candidates or {float(sorted(pick)[len(pick) // 2])}, key=lambda c: (round(spread(c), 3), -c))
     folded = sorted(nearest(b, first) for b in pick)
     return {"center": round(folded[len(folded) // 2], 1), "lo": round(folded[0], 1), "hi": round(folded[-1], 1)}
 
