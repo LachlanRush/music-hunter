@@ -415,7 +415,11 @@ def connect(session=_CURRENT) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     for table, column, definition in MIGRATIONS:
         if column not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError as e:      # another connection (a background thread) added it first
+                if "duplicate column" not in str(e):
+                    raise
     _nullable_video_id(conn)
     return conn
 

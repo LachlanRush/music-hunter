@@ -22,6 +22,7 @@ else if (window.top !== window) document.documentElement.classList.add("framed")
 <style>
 body { padding-bottom: 150px; }
 main { overflow-anchor: none; }                   /* the page keeps its own place when rows move (keepView) */
+main > header { position: absolute; z-index: 2; }  /* the back arrow sits over the top, taking no row of its own */
 .head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 22px; align-items: end; padding-top: 8px; }
 .cover { width: 200px; height: 200px; border-radius: 6px; background: var(--raised); display: grid; place-items: center;
   overflow: hidden; font: 800 64px var(--display); color: var(--faint); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
@@ -123,7 +124,7 @@ li.found { animation: found 1.4s ease-out; }
 <body>
 <main>
   <header>
-    <nav><a class="brand" href="/">Music Hunter</a><a class="backlink" href="/" aria-label="Back to playlists">‹</a></nav>
+    <nav><a class="backlink" href="/" aria-label="Back to playlists">‹</a></nav>
     <div class="status" id="status"></div>
   </header>
 
