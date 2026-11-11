@@ -539,12 +539,14 @@ def rename_folder(folder_id: int, body: FolderBody) -> dict:
         library.rename_folder(db.connect(), folder_id, body.name)
     except ValueError as e:
         raise HTTPException(404, str(e))
+    sync.request()                                # the laptop folders follow
     return {"ok": True}
 
 
 @app.delete("/api/folders/{folder_id}")
 def delete_folder(folder_id: int) -> dict:
     library.delete_folder(db.connect(), folder_id)
+    sync.request()                                # the laptop folders follow
     return {"ok": True}
 
 
@@ -556,7 +558,8 @@ def move_playlist(playlist_id: int, body: MoveBody) -> dict:
         library.move_to_folder(conn, playlist_id, body.folder_id)
     except ValueError as e:
         raise HTTPException(404, str(e))
-    _after_membership_change(conn, playlist_id)    # its folder's Offs (#49) now count, or stop counting
+    _after_membership_change(conn, playlist_id)    # its folder's Offs (#49) now count, or stop counting (and the laptop
+                                                   # copy moves into the folder: _after_membership_change requests sync)
     return {"ok": True}
 
 

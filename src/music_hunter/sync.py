@@ -89,13 +89,19 @@ def _tag(src: Path, art: Path | None, dest: Path, title: str, artist: str, album
     tmp.replace(dest)
 
 
-def sync_playlist(lib, pid: int, name: str) -> dict:
-    """Bring one playlist's folder up to date. Returns what's in it: {track id: details}."""
+def sync_playlist(lib, pid: int, name: str, parent: str | None = None) -> dict:
+    """Bring one playlist's folder up to date (inside its home page folder's, if it's in one: `parent`). Returns
+    what's in it: {track id: details}."""
     root = Path(CFG["folder"])
-    folder = root / _safe(name)
+    rel = f"{_safe(parent)}/{_safe(name)}" if parent else _safe(name)
+    folder = root / rel
     st = _load(pid)
-    if st["folder"] and st["folder"] != folder.name and (root / st["folder"]).exists() and not folder.exists():
-        (root / st["folder"]).rename(folder)                     # the playlist was renamed
+    if st["folder"] and st["folder"] != rel and (root / st["folder"]).exists() and not folder.exists():
+        folder.parent.mkdir(parents=True, exist_ok=True)
+        (root / st["folder"]).rename(folder)                     # the playlist was renamed or moved to another folder
+        old_parent = (root / st["folder"]).parent
+        if old_parent != root and not any(old_parent.iterdir()):
+            old_parent.rmdir()                                   # (a folder it left empty)
     folder.mkdir(parents=True, exist_ok=True)
     kept = st["tracks"]
     wanted = {}
@@ -121,15 +127,17 @@ def sync_playlist(lib, pid: int, name: str) -> dict:
     for tid, d in kept.items():
         if tid not in wanted:
             (folder / d["file"]).unlink(missing_ok=True)         # it left the playlist
-    _save(pid, {"folder": folder.name, "tracks": wanted})
+    _save(pid, {"folder": rel, "tracks": wanted})
     return wanted
 
 
-def _rekordbox(playlists: list[tuple[str, str, dict]]) -> str:
-    """rekordbox.xml: every synced track with its stars (0, 51 … 255) and the playlists, for File > Import."""
+def _rekordbox(playlists: list[tuple]) -> str:
+    """rekordbox.xml: every synced track with its stars (0, 51 … 255) and the playlists, inside their home page
+    folders (as Rekordbox folders), for File > Import."""
     laptop = CFG["laptop_folder"].replace("\\", "/").rstrip("/")
     seen, entries, nodes = {}, [], []
-    for name, folder, tracks in playlists:
+    groups: dict = {}
+    for name, folder, tracks, *parent in playlists:
         keys = []
         for tid, d in tracks.items():
             if tid not in seen:
@@ -141,8 +149,15 @@ def _rekordbox(playlists: list[tuple[str, str, dict]]) -> str:
                     f' AverageBpm="{d["bpm"] or 0:.2f}" Rating="{(d["stars"] or 0) * 51}"'
                     f' Location="file://localhost/{where}"/>')
             keys.append(f'      <TRACK Key="{seen[tid]}"/>')
-        nodes.append(f'    <NODE Name={quoteattr(name)} Type="1" KeyType="0" Entries="{len(keys)}">\n'
-                     + "\n".join(keys) + "\n    </NODE>")
+        node = (f'    <NODE Name={quoteattr(name)} Type="1" KeyType="0" Entries="{len(keys)}">\n'
+                + "\n".join(keys) + "\n    </NODE>")
+        if parent and parent[0]:
+            groups.setdefault(parent[0], []).append(node)
+        else:
+            nodes.append(node)
+    for fname, inner in groups.items():
+        nodes.insert(0, f'    <NODE Type="0" Name={quoteattr(fname)} Count="{len(inner)}">\n' + "\n".join(inner)
+                     + "\n    </NODE>")
     return ('<?xml version="1.0" encoding="UTF-8"?>\n<DJ_PLAYLISTS Version="1.0.0">\n'
             '  <PRODUCT Name="Music Hunter" Version="1" Company=""/>\n'
             f'  <COLLECTION Entries="{len(entries)}">\n' + "\n".join(entries) + "\n  </COLLECTION>\n"
@@ -154,10 +169,12 @@ def run_once(lib) -> None:
     from . import library
 
     done = []
+    folders = {f["id"]: f["name"] for f in library.list_folders(lib)}
     for p in library.list_playlists(lib):
         if is_on(lib, p["id"]):
-            tracks = sync_playlist(lib, p["id"], p["name"])
-            done.append((p["name"], _safe(p["name"]), tracks))
+            parent = folders.get(p["folder_id"])                 # the home page's folder, if it's in one
+            tracks = sync_playlist(lib, p["id"], p["name"], parent)
+            done.append((p["name"], _load(p["id"])["folder"], tracks, parent))
     if done:
         xml = Path(CFG["folder"]) / "rekordbox.xml"
         tmp = _temp(xml)
