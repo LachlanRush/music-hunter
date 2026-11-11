@@ -127,6 +127,7 @@ class Quality:
         return PROJECT / Path(CONFIG["quality"]["cookies_file"]).expanduser()
 
     signed_in_at: tuple[float, bool] | None = None   # (when checked, signed in?)
+    announced = False                                # the app knows the sign-in works (it retries the ~130 kbps ones)
 
     @staticmethod
     def premium_ready() -> bool:
@@ -161,6 +162,8 @@ class Quality:
                 ok = False
         except Exception:
             pass
+        if not ok:
+            Quality.announced = False                    # tell the app again once the sign-in is back
         Quality.signed_in_at = (now, ok)
         return ok
 
@@ -517,6 +520,12 @@ def _quality_one(http, base: str, local) -> float:
 
     if not CONFIG["quality"]["enabled"]:
         return 3600
+    if Quality.premium_ready() and Quality.signed_in() and not Quality.announced:
+        try:                                             # signed in (again): the ~130 kbps tracks go first, not in 24 h
+            if http.post(f"{base}/quality/retry", timeout=60).status_code == 200:
+                Quality.announced = True
+        except requests.RequestException:
+            pass
     try:
         r = http.post(f"{base}/quality/claim", timeout=60)
     except requests.RequestException:
@@ -610,6 +619,14 @@ def quality_claim(lib) -> dict | None:
             return None
         lib.execute("UPDATE tracks SET quality_tried_at = datetime('now') WHERE id = ?", (w["id"],))
     return {"track_id": w["id"], "video_id": w["video_id"]}
+
+
+def quality_retry(lib) -> int:
+    with lib:
+        n = lib.execute("UPDATE tracks SET quality_tried_at = NULL WHERE coalesce(quality, 0) < 2"
+                        " AND quality_tried_at IS NOT NULL").rowcount
+    db.log_event(lib, "quality_retry", tracks=n)
+    return n
 
 
 def quality_receive(lib, track_id: int, body: bytes, ext: str, quality: int, lufs: float, peak: float, gain: float,

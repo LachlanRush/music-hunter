@@ -1166,6 +1166,12 @@ def quality_claim():
     return item if item else Response(status_code=204)
 
 
+@app.post("/api/worker/quality/retry", dependencies=[Depends(worker_auth)])
+def quality_retry():
+    """The worker's YouTube sign-in works again: tracks that only got the ~130 kbps file are tried again now."""
+    return {"retry": analysis.quality_retry(db.connect_library())}
+
+
 @app.post("/api/worker/quality/{track_id}", dependencies=[Depends(worker_auth)])
 async def quality_file(track_id: int, request: Request, ext: str, quality: int, lufs: float, peak: float, gain: float,
                        why: str = ""):

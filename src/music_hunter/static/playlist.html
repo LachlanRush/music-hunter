@@ -37,7 +37,8 @@ h1 { font: 800 clamp(30px, 6vw, 56px)/1.05 var(--display); letter-spacing: -0.03
 .desc { margin: 0 0 8px; color: var(--muted); font-size: 14px; line-height: 1.45; max-width: 60ch; white-space: pre-line; }
 .head .meta { font-size: 14px; color: var(--fg); opacity: .85; }
 .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.actions .spacer { flex: 1 1 auto; }
+.actions .play-big { width: 44px; height: 44px; }            /* Play first, smaller (2026-11-11) */
+.actions .play-big svg { width: 20px; height: 20px; }
 .pl-menu, .more { position: relative; }
 .pl-menu .menu { left: 0; right: auto; }
 .filter { appearance: none; -webkit-appearance: none; background: rgba(255, 255, 255, 0.07); border-radius: 999px;
@@ -170,6 +171,8 @@ li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba
   </section>
 
   <section class="actions">
+    <button class="play-big" id="play-all" aria-label="Play"><svg viewBox="0 0 24 24" id="play-all-icon"><path d="M8 5l12 7-12 7z"/></svg></button>
+    <button class="icon-btn" id="shuffle-all" aria-label="Shuffle" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 7h3.5l7 10H18v-2l3 3-3 3v-2h-4.5l-7-10H4zm10.5 0H18V5l3 3-3 3V9h-3.5l-1.6 2.3-1.2-1.7zM4 17h3.5l1.6-2.3 1.2 1.7L8.5 19H4z"/></svg></button>
     <button class="btn" id="find">Find music</button>
     <select class="filter" id="min-stars" aria-label="Play only tracks with at least">
       <option value="0">All tracks</option><option value="1">★ 1+</option><option value="2">★ 2+</option>
@@ -177,9 +180,6 @@ li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba
     </select>
     <div class="pl-menu"><button class="icon-btn" id="pl-more" aria-label="More for this playlist" aria-expanded="false">
       <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button></div>
-    <span class="spacer"></span>
-    <button class="icon-btn" id="shuffle-all" aria-label="Shuffle" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 7h3.5l7 10H18v-2l3 3-3 3v-2h-4.5l-7-10H4zm10.5 0H18V5l3 3-3 3V9h-3.5l-1.6 2.3-1.2-1.7zM4 17h3.5l1.6-2.3 1.2 1.7L8.5 19H4z"/></svg></button>
-    <button class="play-big" id="play-all" aria-label="Play"><svg viewBox="0 0 24 24" id="play-all-icon"><path d="M8 5l12 7-12 7z"/></svg></button>
     <input id="picture" type="file" accept="image/*" hidden>
   </section>
 
