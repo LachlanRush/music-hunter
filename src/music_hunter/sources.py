@@ -29,6 +29,7 @@ class Item:
     isrc: str | None = None       # Deezer (via details) and TIDAL: industry track ID (exact duplicates)
     release_date: str | None = None
     deezer_id: int | None = None
+    kind: str | None = None       # YouTube Music's video type: ATV (official track), OMV (official video), UGC (upload)
 
 
 def _pause() -> None:
@@ -90,12 +91,16 @@ class YouTubeMusic:
         if r.get("videoType") == "MUSIC_VIDEO_TYPE_UGC":
             artist, title = parse_upload(artist, title)
         duration = r.get("duration_seconds") or _seconds(r.get("length") or r.get("duration"))
-        return Item(artist, title, duration, r.get("videoId"))
+        kind = (r.get("videoType") or "").replace("MUSIC_VIDEO_TYPE_", "") or None
+        return Item(artist, title, duration, r.get("videoId"), kind=kind)
 
     def search_songs(self, query: str) -> list[Item]:
         _pause()
         results = self.stats.timed(self.api.search, query, filter="songs", limit=CFG["yt_search_limit"])
-        return [self._item(r) for r in results[:CFG["yt_search_limit"]] if r.get("videoId")]
+        items = [self._item(r) for r in results[:CFG["yt_search_limit"]] if r.get("videoId")]
+        for it in items:
+            it.kind = it.kind or "ATV"                   # the songs filter only returns official tracks
+        return items
 
     def search_videos(self, query: str) -> list[Item]:
         """Uploads (e.g. a label's channel): artist and title from an 'Artist - Title' video title."""
@@ -107,7 +112,7 @@ class YouTubeMusic:
                 continue
             it = self._item(r)
             if " - " in r["title"] and r.get("videoType") != "MUSIC_VIDEO_TYPE_UGC":
-                it = Item(*parse_upload(it.artist, r["title"]), it.duration_s, it.video_id)
+                it = Item(*parse_upload(it.artist, r["title"]), it.duration_s, it.video_id, kind=it.kind)
             out.append(it)
         return out
 

@@ -75,8 +75,12 @@ def _temp(dest: Path) -> Path:
     return dest.with_name(f".syncthing.{dest.name}.tmp")
 
 
-def _tag(src: Path, art: Path | None, dest: Path, title: str, artist: str, album: str) -> None:
-    """A copy with its names and cover written in (same audio, no re-encoding)."""
+TAGS = 2   # what's written into a copy; a copy made under an older version is written again (2: no album, 2026-11-12)
+
+
+def _tag(src: Path, art: Path | None, dest: Path, title: str, artist: str) -> None:
+    """A copy with its names and cover written in (same audio, no re-encoding). No album: we don't know the real one,
+    and the playlist's name there made every song look like it came from an album of that name (2026-11-12)."""
     tmp = _temp(dest)
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src)]
     if art is not None and art.exists():
@@ -84,7 +88,7 @@ def _tag(src: Path, art: Path | None, dest: Path, title: str, artist: str, album
     else:
         cmd += ["-map", "0:a"]
     cmd += ["-c", "copy", "-map_metadata", "-1", "-metadata", f"title={title}", "-metadata", f"artist={artist}",
-            "-metadata", f"album={album}", "-f", "mp4", str(tmp)]
+            "-f", "mp4", str(tmp)]
     subprocess.run(cmd, check=True, capture_output=True)
     tmp.replace(dest)
 
@@ -117,12 +121,13 @@ def sync_playlist(lib, pid: int, name: str, parent: str | None = None) -> dict:
         while file in names:
             file = f"{stem} ({n}).m4a"
             n += 1
-        same = have and have["source"] == src and have["file"] == file and (folder / file).exists()
+        same = (have and have["source"] == src and have["file"] == file and have.get("tags") == TAGS
+                and (folder / file).exists())
         if not same:
-            _tag(resolve(src), t["art_path"] and resolve(t["art_path"]), folder / file, t["title"], t["artist"], name)
+            _tag(resolve(src), t["art_path"] and resolve(t["art_path"]), folder / file, t["title"], t["artist"])
             if have and have["file"] != file:
                 (folder / have["file"]).unlink(missing_ok=True)
-        wanted[tid] = {"file": file, "source": src, "stars": t["stars"], "artist": t["artist"], "title": t["title"],
+        wanted[tid] = {"file": file, "source": src, "tags": TAGS, "stars": t["stars"], "artist": t["artist"], "title": t["title"],
                        "duration_s": t["duration_s"], "bpm": t["bpm"], "size": (folder / file).stat().st_size}
     for tid, d in kept.items():
         if tid not in wanted:

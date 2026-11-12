@@ -345,7 +345,7 @@ def test_sync_keeps_a_tagged_m4a_folder_and_a_rekordbox_file(tmp_path, monkeypat
     assert sorted(f.name for f in folder.iterdir()) == ["Art & Co - One.m4a", "Art - Two.m4a"]
     tags = js.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "json",
                                     str(folder / "Art & Co - One.m4a")], capture_output=True, text=True).stdout)
-    assert tags["format"]["tags"]["title"] == "One" and tags["format"]["tags"]["album"] == "pump: 140"
+    assert tags["format"]["tags"]["title"] == "One" and "album" not in tags["format"]["tags"]   # no album (2026-11-12)
     assert sync.state(conn, pid) == {"on": True, "tracks": 3, "ready": 2}
     xml = (tmp_path / "share" / "rekordbox.xml").read_text()
     assert 'Rating="255"' in xml and 'Name="pump: 140"' in xml and "Art &amp; Co" in xml
@@ -601,3 +601,20 @@ def test_folder_songs_are_not_offered_again(lib):
     assert len(songs) == 1 and find.folder_offs(conn, b) == (set(), [])   # B's own songs come from playlist_songs
     library.remove_from_playlist(conn, b, t)
     assert find.folder_offs(conn, a) == (set(), [])
+
+
+def test_one_recording_twice_is_merged(lib):
+    """2026-11-12: a song swapped for its extended mix became the same video as another library entry, and Find
+    similar then picked both. Entries sharing a video are merged into one; playlists keep the higher stars."""
+    conn, track, _ = lib
+    a, b = track("At Night", "Upper90"), track("At Night (Extended Version)", "Upper90, Baron Von Trax")
+    with conn:
+        conn.execute("UPDATE tracks SET video_id = 'xpo' WHERE id IN (?, ?)", (a, b))
+    p1, p2 = library.create_playlist(conn, "pump"), library.create_playlist(conn, "CAVE")
+    library.add_to_playlist(conn, p1, a); library.set_stars(conn, p1, a, 4)
+    library.add_to_playlist(conn, p2, a); library.add_to_playlist(conn, p2, b); library.set_stars(conn, p2, b, 2)
+    assert library.merge_duplicates(conn) == 1
+    rows = conn.execute("SELECT playlist_id, track_id, stars FROM playlist_tracks ORDER BY playlist_id").fetchall()
+    assert [tuple(r) for r in rows] == [(p1, b, 4), (p2, b, 2)]          # the extended name kept; one entry per playlist
+    assert conn.execute("SELECT merged_into FROM tracks WHERE id = ?", (a,)).fetchone()[0] == b
+    assert library.merge_duplicates(conn) == 0

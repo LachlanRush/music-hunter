@@ -331,6 +331,8 @@ MIGRATIONS = [
     ("playlists", "position", "INTEGER"),            # its place on the home page (dragged); NULL: after, oldest first
     ("folders", "position", "INTEGER"),
     ("playlists", "played_at", "TEXT"),
+    ("tracks", "upgrade_checked_at", "TEXT"),        # looked for an official 256 kbps version of this upload (2026-11-12)
+    ("tracks", "merged_into", "INTEGER"),            # the same recording as this library track (merged, 2026-11-12)
     ("tracks", "extended_checked_at", "TEXT"),       # looked for an extended mix of this playlist song (extended.py)              # last time a song of it (or its Find music) started playing              # its place on the home page, among the playlists (dragged)
     ("playlist_tracks", "position", "INTEGER"),          # my own order within the same stars (dragged); NULL: on top
     ("playlist_tracks", "bpm_override", "REAL"),        # v5: this track's own "Play at … BPM" in this playlist         # v5: when its stars were last set (order within the same stars)

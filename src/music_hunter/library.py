@@ -51,6 +51,64 @@ def list_folders(conn: sqlite3.Connection) -> list[dict]:
                                           " ORDER BY position IS NULL, position, created_at, id")]
 
 
+def merge_tracks(conn: sqlite3.Connection, keep: int, drop: int) -> None:
+    """Two library entries for one recording (e.g. a song swapped for its extended mix that was already in the
+    library under another name): `drop`'s places move to `keep` (a playlist holding both keeps the higher stars and
+    the earlier place), Find music sessions point at `keep`, and `drop` stays as a record (no playlists, no audio
+    unless something else uses it, `merged_into` set)."""
+    from . import find
+
+    with conn:
+        for r in conn.execute("SELECT * FROM playlist_tracks WHERE track_id = ?", (drop,)).fetchall():
+            have = conn.execute("SELECT * FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                                (r["playlist_id"], keep)).fetchone()
+            if have is None:
+                conn.execute("UPDATE playlist_tracks SET track_id = ? WHERE playlist_id = ? AND track_id = ?",
+                             (keep, r["playlist_id"], drop))
+            else:
+                stars = max(have["stars"] or 0, r["stars"] or 0) or None
+                status = "member" if "member" in (have["status"], r["status"]) else have["status"]
+                conn.execute("UPDATE playlist_tracks SET stars = ?, status = ?, added_at = min(added_at, ?)"
+                             " WHERE playlist_id = ? AND track_id = ?",
+                             (stars, status, r["added_at"], r["playlist_id"], keep))
+                conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?", (r["playlist_id"], drop))
+        for table in ("deleted_tracks", "removed_tracks"):
+            for (pid,) in conn.execute(f"SELECT playlist_id FROM {table} WHERE track_id = ?", (drop,)).fetchall():
+                if conn.execute(f"SELECT 1 FROM {table} WHERE playlist_id = ? AND track_id = ?", (pid, keep)).fetchone():
+                    conn.execute(f"DELETE FROM {table} WHERE playlist_id = ? AND track_id = ?", (pid, drop))
+                else:
+                    conn.execute(f"UPDATE {table} SET track_id = ? WHERE playlist_id = ? AND track_id = ?", (keep, pid, drop))
+        old = conn.execute("SELECT file_path FROM tracks WHERE id = ?", (drop,)).fetchone()["file_path"]
+        conn.execute("UPDATE tracks SET merged_into = ?, file_path = NULL WHERE id = ?", (keep, drop))
+    if old:
+        db.release_audio(conn, old)
+    for (pid,) in conn.execute("SELECT id FROM playlists").fetchall():
+        if find.started(pid):
+            s = db.connect(pid)
+            with s:
+                s.execute("UPDATE tracks SET library_id = ? WHERE library_id = ?", (keep, drop))
+    db.log_event(conn, "tracks_merged", keep=keep, drop=drop)
+
+
+def merge_duplicates(conn: sqlite3.Connection) -> int:
+    """Library entries sharing one YouTube video are the same recording: merge each group into one (the entry with
+    the most informative name kept: an extended title, a Spotify link, then the oldest)."""
+    from . import names
+
+    n = 0
+    for (vid,) in conn.execute("SELECT video_id FROM tracks WHERE origin = 'library' AND video_id IS NOT NULL"
+                               " AND merged_into IS NULL GROUP BY video_id HAVING count(*) > 1").fetchall():
+        rows = conn.execute("SELECT id, artist, title, spotify_id FROM tracks WHERE video_id = ? AND origin = 'library'"
+                            " AND merged_into IS NULL ORDER BY id", (vid,)).fetchall()
+        best = max(rows, key=lambda r: (names.song(r["artist"], r["title"]).is_extended, r["spotify_id"] is not None,
+                                        -r["id"]))
+        for r in rows:
+            if r["id"] != best["id"]:
+                merge_tracks(conn, best["id"], r["id"])
+                n += 1
+    return n
+
+
 def folder_totals(conn: sqlite3.Connection) -> dict[int, dict]:
     """Each folder's songs (one count per song, however many of its playlists have it) and their total length."""
     return {r["folder_id"]: {"tracks": r["tracks"], "duration_s": r["duration_s"] or 0} for r in conn.execute(
@@ -300,7 +358,14 @@ def similar_playlist(conn: sqlite3.Connection, track_id: int) -> int:
     picks = []
     if rows:
         sims = np.stack([db.from_blob(r["embedding"]) for r in rows]) @ db.from_blob(t["embedding"])
-        picks = [rows[i]["id"] for i in np.argsort(-sims)[:CONFIG["library"]["similar_count"]]]
+        picks, chosen = [], []
+        for i in np.argsort(-sims):                  # one version of each song (2026-11-12: an extended and a plain
+            song = names.song(rows[i]["artist"], rows[i]["title"])     # copy of At Night both came in)
+            if any(song.same_song(c) for c in chosen):
+                continue
+            picks.append(rows[i]["id"]); chosen.append(song)
+            if len(picks) >= CONFIG["library"]["similar_count"]:
+                break
 
     pid = create_playlist(conn, t["title"])
     add_to_playlist(conn, pid, track_id)
