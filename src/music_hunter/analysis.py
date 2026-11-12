@@ -463,8 +463,13 @@ class Inhibitor:
 
     def __init__(self):
         self.proc, self.unavailable = None, False
+        self.lock = threading.Lock()   # one address's loop releasing while another holds killed a loop (2026-11-12)
 
     def hold(self) -> None:
+        with self.lock:
+            self._hold()
+
+    def _hold(self) -> None:
         import subprocess
 
         if self.unavailable or (self.proc is not None and self.proc.poll() is None):
@@ -481,10 +486,11 @@ class Inhibitor:
             self.proc, self.unavailable = None, True
 
     def release(self) -> None:
-        if self.proc is not None:
-            self.proc.terminate()
-            self.proc.wait()
-            self.proc = None
+        with self.lock:
+            if self.proc is not None:
+                self.proc.terminate()
+                self.proc.wait()
+                self.proc = None
 
 
 def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
@@ -523,6 +529,21 @@ def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
 
 
 def _lane(lane: dict, server: str, base: str, http, local, once: bool, shared: dict) -> None:
+    """One address's loop; an unexpected error is printed and the loop starts again (a loop that died left that
+    address idle until the worker restarted, 2026-11-12)."""
+    while True:
+        try:
+            return _lane_loop(lane, server, base, http, local, once, shared)
+        except Exception as e:  # noqa: BLE001
+            import traceback
+            print(f"  {lane['name']} loop: {e!r}; starting it again", flush=True)
+            traceback.print_exc()
+            if once:
+                raise
+            time.sleep(10)
+
+
+def _lane_loop(lane: dict, server: str, base: str, http, local, once: bool, shared: dict) -> None:
     home = lane["name"] == "home"
     blocked_streak, attempts, quality_next, idle_since = 0, {}, 0.0, time.monotonic()
 
@@ -557,8 +578,7 @@ def _lane(lane: dict, server: str, base: str, http, local, once: bool, shared: d
             continue
         r.raise_for_status()
         item = r.json()
-        with shared["lock"]:
-            shared["inhibitor"].hold()
+        shared["inhibitor"].hold()
         wid = item["id"]
         try:
             res = (local.analyse(item["video_id"], item.get("bpm_prior"), lane=lane) if not home
