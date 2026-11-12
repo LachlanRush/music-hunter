@@ -178,6 +178,20 @@ class Quality:
             return False
 
     @staticmethod
+    def session_id() -> str:
+        """Which sign-in the cookies file holds (a hash of its SID cookie, which stays the same for a session)."""
+        import hashlib
+
+        try:
+            for line in Quality.cookies().read_text().splitlines():
+                f = line.split("\t")
+                if len(f) >= 7 and f[5] == "SID":
+                    return hashlib.sha256(f[6].encode()).hexdigest()[:16]
+        except OSError:
+            pass
+        return ""
+
+    @staticmethod
     def signed_in() -> bool:
         """Does the cookies file still sign in to YouTube Music? Checked at most once an hour (one page request).
         2026-11-10: YouTube signed the exported session out (cookies copied from a browser that kept using them get
@@ -606,11 +620,21 @@ def _quality_one(http, base: str, local) -> float:
     if not CONFIG["quality"]["enabled"]:
         return 3600
     if Quality.premium_ready() and Quality.signed_in() and not Quality.announced:
-        try:                                             # signed in (again): the ~130 kbps tracks go first, not in 24 h
-            if http.post(f"{base}/quality/retry", timeout=60).status_code == 200:
-                Quality.announced = True
-        except requests.RequestException:
-            pass
+        # A new sign-in (a freshly exported cookies file): the ~130 kbps songs go first, not in 24 h. Only once per
+        # sign-in: after a mere worker restart, songs YouTube has no 256 kbps file for were tried again for nothing.
+        mark = local.folder / ".quality_signin" if local.folder else None
+        sid = Quality.session_id()
+        if mark is not None and mark.exists() and mark.read_text() == sid:
+            Quality.announced = True
+        else:
+            try:
+                if http.post(f"{base}/quality/retry", timeout=60).status_code == 200:
+                    Quality.announced = True
+                    if mark is not None:
+                        mark.parent.mkdir(parents=True, exist_ok=True)
+                        mark.write_text(sid)
+            except requests.RequestException:
+                pass
     try:
         r = http.post(f"{base}/quality/claim", timeout=60)
     except requests.RequestException:
