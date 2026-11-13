@@ -642,7 +642,7 @@ def _grid_one(http, base: str, local) -> float:
         f.write_bytes(a.content)
         with Local.gpu:                                # (shares the CPU-heavy turn with the analysis)
             g = analyse(audio_mod.decode(f, SR), SR, item.get("bpm"))
-        out = None if g is None else {"bpm": round(g.bpm, 4), "first_beat": round(g.first_beat, 4),
+        out = None if g is None else {"v": GRID_VERSION, "bpm": round(g.bpm, 4), "first_beat": round(g.first_beat, 4),
                                       "drop": round(g.drop, 3), "phrase_bars": g.phrase_bars,
                                       "agreement": round(g.agreement, 3)}
         _post(http, f"{base}/grid/{item['track_id']}", json={"grid": out})
@@ -822,6 +822,9 @@ def quality_receive(lib, track_id: int, body: bytes, ext: str, quality: int, luf
     return True
 
 
+GRID_VERSION = 2   # grids worked out before this are done again (2: tempo read at the playlist's tempo)
+
+
 def grid_claim(lib) -> dict | None:
     """The next playlist song without a beat grid (synced playlists first): the PC works it out from the Pi's own copy
     of the audio, so no YouTube download is involved."""
@@ -831,14 +834,21 @@ def grid_claim(lib) -> dict | None:
     synced = [p["id"] for p in lib.execute("SELECT id FROM playlists").fetchall() if sync.is_on(lib, p["id"])] or [-1]
     with lib:
         w = lib.execute(
-            "SELECT t.id, t.bpm FROM tracks t JOIN playlist_tracks pt ON pt.track_id = t.id"
+            "SELECT t.id, t.bpm, pt.playlist_id FROM tracks t JOIN playlist_tracks pt ON pt.track_id = t.id"
             " WHERE t.file_path IS NOT NULL AND t.merged_into IS NULL AND (t.grid_checked_at IS NULL"
+            f"  OR (t.grid IS NOT NULL AND coalesce(json_extract(t.grid, '$.v'), 1) < {GRID_VERSION})"
             "  OR t.grid_checked_at < t.upgrade_checked_at OR t.grid_checked_at < t.extended_checked_at)"
             f" ORDER BY pt.playlist_id IN ({','.join('?' * len(synced))}) DESC, t.id LIMIT 1", synced).fetchone()
         if w is None:
             return None
         lib.execute("UPDATE tracks SET grid_checked_at = datetime('now') WHERE id = ?", (w["id"],))
-    return {"track_id": w["id"], "audio": f"/audio/{w['id']}", "bpm": w["bpm"]}
+    bpm = w["bpm"]
+    if bpm:                                          # read at the playlist's tempo: a half or 2:3 reading counts as the
+        from . import tempo                          # tempo it really is (Love Again's 93.6 is 140.4)
+        core = tempo.playlist_tempo(lib, w["playlist_id"])
+        if core and core.get("center"):
+            bpm = tempo.nearest(bpm, core["center"])
+    return {"track_id": w["id"], "audio": f"/audio/{w['id']}", "bpm": bpm}
 
 
 def grid_receive(lib, track_id: int, grid: dict | None) -> None:
