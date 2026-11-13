@@ -86,6 +86,28 @@ li.found { animation: found 1.4s ease-out; }
 .menu.sub-open .main-items { display: none; }
 
 /* The player: a bar along the bottom, the page blurred behind it */
+/* Now playing, full view (feedback #58/#59): tapping the song in the player bar opens it, like Spotify's. */
+.np { position: fixed; inset: 0; z-index: 30; display: flex; justify-content: center; overflow-y: auto;
+  background: linear-gradient(180deg, var(--glow, rgba(255,255,255,.06)) 0%, var(--bg) 70%), var(--bg); }
+.np[hidden] { display: none; }
+.np-in { width: min(100%, 480px); padding: 16px 20px 28px; display: flex; flex-direction: column; gap: 18px; }
+.np-top { display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; text-align: center; }
+.np-top .from { font-size: 12px; color: var(--muted); line-height: 1.3; }
+.np-top .from b { display: block; color: var(--fg); font-size: 14px; cursor: pointer; }
+.np-top .from b:hover { text-decoration: underline; }
+.np-art { width: 100%; aspect-ratio: 1; border-radius: 8px; object-fit: cover; background: var(--raised); box-shadow: 0 14px 40px rgba(0,0,0,.55); }
+.np-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.np-meta .t { min-width: 0; }
+.np-meta .t b { display: block; font: 700 22px/1.25 var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-meta .t span { display: block; color: var(--muted); font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-meta .stars button { font-size: 22px; }
+.np-seek { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; font-size: 12px; color: var(--muted); }
+.np-seek input { width: 100%; }
+.np-controls { display: flex; align-items: center; justify-content: center; gap: 14px; }
+.np-controls .round { width: 52px; height: 52px; }
+.np-controls .round svg, .np-controls .vote svg { width: 26px; height: 26px; }
+.np-controls .round.primary { width: 68px; height: 68px; }
+.np-controls .vote { width: 48px; height: 48px; }
 .player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: rgba(22, 22, 24, 0.55); -webkit-backdrop-filter: blur(30px) saturate(1.4); backdrop-filter: blur(30px) saturate(1.4);
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35); transition: background .6s; }
 .framed .player { display: none !important; }       /* in the browser shell its bar plays this part (static/shell.js) */
@@ -247,6 +269,18 @@ li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba
   </form>
 </dialog>
 
+<div class="np" id="np" hidden role="dialog" aria-label="Now playing">
+  <div class="np-in">
+    <div class="np-top">
+      <button class="icon-btn" id="np-close" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <div class="from" id="np-from"></div><span></span>
+    </div>
+    <img class="np-art" id="np-art" alt="" onerror="this.style.visibility='hidden'" onload="this.style.visibility='visible'">
+    <div class="np-meta"><div class="t"><b id="np-title"></b><span id="np-artist"></span></div><div id="np-stars"></div></div>
+    <div class="np-seek"><span id="np-pos">0:00</span><input type="range" id="np-seek" min="0" max="1000" value="0" aria-label="Position"><span id="np-dur">0:00</span></div>
+    <div class="np-controls" id="np-controls"></div>
+  </div>
+</div>
 <div class="player" id="player" hidden>
   <div class="player-in">
     <img class="art" id="p-art" alt="">
@@ -293,6 +327,11 @@ function placeMenu(m) {
     ? 8 : $("player").offsetHeight + 16;              // (in the browser shell its bar covers the bottom instead)
   const bottom = innerHeight - bar;
   m.style.maxHeight = `${Math.max(160, bottom - 24)}px`;
+  // Kept inside the screen sideways too (feedback #52: on a phone the playlist's ⋯ menu ran off the right edge,
+  // widening the page and pushing the player out of place).
+  const r0 = m.getBoundingClientRect(), edge = document.documentElement.clientWidth - 8;
+  if (r0.right > edge) m.style.transform = `translateX(${-Math.ceil(r0.right - edge)}px)`;
+  else if (r0.left < 8) m.style.transform = `translateX(${Math.ceil(8 - r0.left)}px)`;
   const over = m.getBoundingClientRect().bottom - bottom;
   if (over <= 0) return;
   const room = $("menu-room"), short = scrollY + innerHeight + over - document.documentElement.scrollHeight;
@@ -587,6 +626,7 @@ document.addEventListener("click", async (e) => {
       <button data-pl-action="delete" style="color:var(--bad)">Delete playlist</button>`;
     plMore.parentElement.appendChild(menu);
     renderToggles();
+    placeMenu(menu);
     return;
   }
   if (more) {
@@ -901,6 +941,12 @@ async function deletePlaylist() {
 }
 
 // --- player: a normal player (not blind), with shuffle -----------------------------------
+// What was playing last (feedback #60): reopening the app brings back that song and its playlist (or Find music),
+// loaded and paused; the place in the song isn't kept.
+const Last = {
+  save(mode, trackId) { try { localStorage.setItem("lastPlaying", JSON.stringify({pid: PID, mode, track_id: trackId, at: Date.now()})); } catch (e) {} },
+  get() { try { return JSON.parse(localStorage.getItem("lastPlaying") || "null"); } catch (e) { return null; } },
+};
 const audio = new Audio();
 let ctx = null, gainNode = null, queue = [], pos = -1, shuffle = false, seeking = false;
 
@@ -951,7 +997,7 @@ function toast(text) {
   el.textContent = text; el.classList.add("show");
   clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove("show"), 2200);
 }
-function startQueue(firstId) {
+function startQueue(firstId, autoplay = true) {
   let list = playable();
   if (shuffle) list = round.order(list);
   if (firstId != null && !list.some((t) => t.id === firstId)) {   // a tapped track below the star filter plays first
@@ -965,9 +1011,9 @@ function startQueue(firstId) {
   if (upNext.length) list = firstId != null ? [list[0], ...upNext, ...list.slice(1)] : [...upNext, ...list];
   upNext = [];
   queue = list; pos = 0;
-  if (queue.length) playAt(0);
+  if (queue.length) playAt(0, autoplay);
 }
-async function playAt(i) {
+async function playAt(i, autoplay = true) {
   if (fm) await Find.leave();
   pos = i;
   const t = queue[i];
@@ -975,12 +1021,15 @@ async function playAt(i) {
   fetch(`/api/playlists/${PID}/played`, {method: "POST"}).catch(() => {});   // home lists the most recently played first
   if (shuffle) round.mark(t.id);
   showNow(t);                                                      // the player shows it at once; sound follows
+  if (!audio.paused) audio.pause();             // the song being left stops now, not once the next one's ready (#53)
   await level(t.gain_db);
   Media.metadata({title: t.title, artist: t.artist, art: t.art});   // no album: we don't know it (not the playlist)
   audio.src = await tempoPlayer.start(t.id, t.audio, fresh(t).rate);
   if (queue[pos] !== t) return;                                   // another track was chosen meanwhile
   const nextT = queue[pos + 1];
   if (nextT) tempoPlayer.prepare(nextT.id, fresh(nextT).rate);    // its copy first in line after this one
+  Last.save("playlist", t.id);
+  if (!autoplay) { setIcon(false); setLoading(false); return; }
   try { await audio.play(); } catch (e) { setIcon(false); setLoading(false); }
 }
 async function level(gainDb) {                                     // loudness levelling (static/media.js)
@@ -1050,7 +1099,7 @@ window.__playerState = () => {
   const t = queue[pos];
   return t ? {title: t.title, artist: t.artist, art: t.art, playing: !audio.paused, t: audio.currentTime,
               d: audio.duration || t.duration_s, shuffle, note: $("p-tempo").textContent, loading: $("play").classList.contains("loading"),
-              tint: data.image,
+              tint: data.image, view: NowView.isOpen(),
               volume: Number($("volume").value) / 100 } : null;
 };
 window.__playerControl = (action, value) => ({
@@ -1060,14 +1109,9 @@ window.__playerControl = (action, value) => ({
   up: () => $("up").click(), down: () => $("down").click(),
   volume: () => { $("volume").value = Math.round(value * 100); $("volume").dispatchEvent(new Event("input")); },
 })[action]?.();
-// Tapping the playing track (cover or names) shows it in the list (feedback #38).
-$("p-art").onclick = $("p-open").onclick = () => {
-  if (fm) return;
-  const t = queue[pos], row = t && document.querySelector(`li[data-row="${t.id}"]`);
-  if (!row) return;
-  row.scrollIntoView({behavior: "smooth", block: "center"});
-  row.classList.remove("found"); void row.offsetWidth; row.classList.add("found");
-};
+// Tapping the playing song (cover or names) opens the full view (feedback #58; it used to show the song in the list,
+// #38, which the view's "Playing from" now does).
+$("p-art").onclick = $("p-open").onclick = () => NowView.show();
 $("prev").addEventListener("click", () => { if (fm) return Find.back(); audio.currentTime >= (data.back_restart_s ?? 5) || pos === 0 ? (audio.currentTime = 0) : playAt(pos - 1); });
 function paintShuffleAll(playing) {                       // like Play: filled only while this playlist is playing, shuffled
   const on = playing && shuffle;
@@ -1199,14 +1243,14 @@ const Find = (() => {
     try { await fetch(BASE + "/api/tempo", {method: "PUT", headers: {"Content-Type": "application/json"},
                                            body: JSON.stringify({on: data.tempo.on, bpm: data.tempo.bpm})}); } catch (e) {}
   }
-  async function start() {
+  async function start(autoplay = true) {
     queue = []; pos = -1; upNext = [];
     audio.pause();
     fm = {cur: null, prev: null, viewing: "current", resume: null, played: 0, lastPos: 0, loadStart: 0, waiting: false,
           step: 0, hist: null};
     paint();
     await syncTempo();
-    await next("/api/resume");
+    await next("/api/resume", autoplay);
   }
   // Leaving (Play, a song, Find music again) only pauses Find music: the pick on air stays where it was, and coming
   // back carries on from there (it used to count the pick as heard and move on: 2026-11-11).
@@ -1247,7 +1291,7 @@ const Find = (() => {
     load(shown, 0, 0);
     return true;
   }
-  async function next(path = "/api/next") {
+  async function next(path = "/api/next", autoplay = true) {
     let err = null;
     for (let i = 0; i < 3 && fm; i++) {
       try { const got = await call(path, {});
@@ -1259,15 +1303,16 @@ const Find = (() => {
     if (!fm) return;
     if (err) { toast(`Find music: ${err.message}`); return leave(); }
     fm.viewing = "current"; fm.prev = null; fm.resume = null; fm.step = 0; fm.hist = null;
-    if (!(shown && shown.track_id === fm.cur.track_id && onAir() === fm.cur)) await load(fm.cur, 0, 0);
+    if (!(shown && shown.track_id === fm.cur.track_id && onAir() === fm.cur)) await load(fm.cur, 0, 0, autoplay);
     else paint();
     shown = null;
     prefetch();
   }
-  async function load(t, startAt, played) {
+  async function load(t, startAt, played, autoplay = true) {
     fm.played = played; fm.lastPos = startAt;
     showNow({title: t.title || "", artist: t.artist || "", art: t.art, duration_s: t.duration_s});
     paint();
+    if (!audio.paused) audio.pause();           // the song being left stops now (#53)
     await level(t.gain_db);
     Media.metadata({title: t.title, artist: t.artist, art: t.art});
     fetch(`/api/playlists/${PID}/played`, {method: "POST"}).catch(() => {});
@@ -1278,6 +1323,8 @@ const Find = (() => {
     if (at) audio.addEventListener("loadedmetadata", () => { audio.currentTime = at; }, {once: true});
     fm.loadStart = performance.now(); fm.waiting = true;
     showTempoNote();
+    Last.save("find", t.track_id);
+    if (!autoplay) { fm.waiting = false; setIcon(false); setLoading(false); return; }
     try { await audio.play(); } catch (e) { setIcon(false); setLoading(false); }
   }
   audio.addEventListener("playing", () => {
@@ -1385,11 +1432,69 @@ const Find = (() => {
     return {title: t.title || "", artist: t.artist || "", art: t.art, playing: !audio.paused, t: audio.currentTime,
             d: audio.duration || t.duration_s, shuffle: null, note: $("p-tempo").textContent,
             loading: $("play").classList.contains("loading"), volume: Number($("volume").value) / 100,
-            find: true, thumb: thumb(t), tint: data.image};
+            find: true, thumb: thumb(t), tint: data.image, view: NowView.isOpen()};
   }
   $("up").addEventListener("click", () => rate(UP));
   $("down").addEventListener("click", () => rate(DOWN));
   return {start, leave, skip, back, ended, followTempo, state, onAir, rate: () => fmTempo.rate()};
+})();
+
+// --- Now playing, full view (feedback #58/#59): the song big, where it's playing from (tap to see it in the list),
+// its stars when it's in this playlist, and the usual controls (they're the player's own buttons, mirrored).
+const NowView = (() => {
+  let open = false, seeking = false, timer = null;
+  const ICON = (id) => document.getElementById(id).querySelector("svg").outerHTML;
+  function current() {
+    if (fm) { const t = Find.onAir(); return t ? {title: t.title, artist: t.artist, art: t.art, d: t.duration_s, find: true} : null; }
+    const t = queue[pos];
+    return t ? {title: t.title, artist: t.artist, art: t.art, d: t.duration_s, id: t.id} : null;
+  }
+  function inPlaylist(c) {                     // a playlist song, or a Find music pick that's been added (+)
+    if (c.id) return data.tracks.find((x) => x.id === c.id);
+    return data.tracks.find((x) => x.title === c.title && x.artist === c.artist);
+  }
+  function paint() {
+    if (!open) return;
+    const c = current();
+    if (!c) return hide();
+    $("np-title").textContent = c.title || ""; $("np-artist").textContent = c.artist || "";
+    if ($("np-art").dataset.src !== (c.art || "")) { $("np-art").dataset.src = c.art || ""; $("np-art").src = c.art || ""; }
+    $("np-from").innerHTML = `${c.find ? "Finding music for" : "Playing from"}<b id="np-go">${esc(data.name)}</b>`;
+    const t = inPlaylist(c);
+    const st = t ? stars(t) : "";
+    if ($("np-stars").innerHTML !== st) $("np-stars").innerHTML = st;
+    const d = audio.duration || c.d || 0;
+    if (!seeking) { $("np-seek").value = d ? Math.round(1000 * audio.currentTime / d) : 0; $("np-pos").textContent = fmt(audio.currentTime); }
+    $("np-dur").textContent = fmt(d);
+    const ctl = fm ? [["down", "Not for this playlist", "vote"], ["up", "Add to this playlist", "vote"], ["prev"], ["play"], ["next"]]
+                   : [["shuffle"], ["prev"], ["play"], ["next"]];
+    $("np-controls").innerHTML = ctl.map(([id, label, cls]) => {
+      const src = document.getElementById(id);
+      return `<button class="${cls || "round"} ${src.classList.contains("primary") ? "primary" : ""} ${src.classList.contains("on") ? "on" : ""}"
+        data-np="${id}" aria-label="${esc(label || src.getAttribute("aria-label") || id)}">${ICON(id)}</button>`;
+    }).join("");
+  }
+  function show() {
+    if (!current()) return;
+    open = true; $("np").hidden = false; document.body.classList.add("np-open");
+    paint(); clearInterval(timer); timer = setInterval(paint, 400);
+  }
+  function hide() { open = false; $("np").hidden = true; document.body.classList.remove("np-open"); clearInterval(timer); }
+  $("np-close").addEventListener("click", hide);
+  $("np").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-np]");
+    if (b) { document.getElementById(b.dataset.np).click(); setTimeout(paint, 150); return; }
+    if (e.target.closest("#np-go")) {                     // to the song in the list
+      const c = current(), t = c && inPlaylist(c);
+      hide();
+      const row = t && document.querySelector(`li[data-row="${t.id}"]`);
+      if (row) { row.scrollIntoView({behavior: "smooth", block: "center"}); row.classList.remove("found"); void row.offsetWidth; row.classList.add("found"); }
+    }
+  });
+  $("np-seek").addEventListener("input", () => { seeking = true; });
+  $("np-seek").addEventListener("change", () => { const d = audio.duration || 0; if (d) audio.currentTime = d * $("np-seek").value / 1000; seeking = false; });
+  document.addEventListener("keydown", (e) => { if (open && e.key === "Escape") hide(); });
+  return {show, hide, isOpen: () => open};
 })();
 
 window.feedbackContext = () => {
@@ -1404,7 +1509,12 @@ $("add-song").addEventListener("submit", async (e) => {
   catch (err) { showError(err.message); }
 });
 { const c = cached(); if (c) { data = c; render(); renderTempo(); } }   // as last seen, at once
-load().then(renderTempo);
+load().then(renderTempo).then(async () => {                 // opened to carry on (the app restarting, #60)
+  const last = Last.get();
+  if (!new URLSearchParams(location.search).has("resume") || !last || last.pid !== PID || pos >= 0 || fm) return;
+  if (last.mode === "find") { if (!find) await loadFind(); if (find && find.state === "ready") Find.start(false); return; }
+  if (data.tracks.some((t) => t.id === last.track_id && t.audio)) startQueue(last.track_id, false);
+});
 loadFind();
 </script>
 <script src="/static/feedback.js"></script>

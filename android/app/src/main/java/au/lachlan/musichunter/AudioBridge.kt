@@ -179,6 +179,7 @@ class AudioBridge(private val app: App) {
         if (owner !== web && owner != null && hasTrack) takeOver(web)
         else if (owner == null) owner = web
         app.connectService()
+        app.rememberPlaying(web.url)
         if (onSilence()) { endedSent = false; exo.seekTo(0, 0) }   // played again after it ended
         exo.play()
     }

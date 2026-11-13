@@ -61,10 +61,26 @@ class App : Application() {
     }
 
     /** The page on screen. The first one stays out of sight until it has its content, as later pages do. */
-    fun page(): WebView = front ?: createWeb("$server/").also {
+    fun page(): WebView = front ?: createWeb(startUrl()).also {
         front = it
         it.alpha = 0f
         main.postDelayed({ it.alpha = 1f }, 800)
+    }
+
+    /** Where the app opens (feedback #60, 0.4.3): the playlist that was playing last, its song loaded and paused
+     *  (the page does that for ?resume=1), within two weeks; otherwise the playlists. */
+    private fun startUrl(): String {
+        val p = getSharedPreferences("player", MODE_PRIVATE)
+        val last = p.getString("last_playing", null)
+        val at = p.getLong("last_playing_at", 0L)
+        return if (last != null && System.currentTimeMillis() - at < 14L * 86_400_000L) "$server$last?resume=1" else "$server/"
+    }
+
+    /** A page started playing: remember its playlist, to come back to when the app is opened again. */
+    fun rememberPlaying(url: String?) {
+        val path = url?.let { Regex("""/playlist/\d+""").find(it)?.value } ?: return
+        getSharedPreferences("player", MODE_PRIVATE).edit()
+            .putString("last_playing", path).putLong("last_playing_at", System.currentTimeMillis()).apply()
     }
 
     // --- moving between pages (SPEC.md §19): the next page is built behind the one on screen and swapped in once

@@ -121,10 +121,12 @@ const MHShell = window.MHShell = (() => {
     bar.addEventListener("click", (e) => {
       const c = e.target.closest("[data-c]");
       if (c) { try { win(owner).__playerControl(c.dataset.c); } catch (err) {} setTimeout(paint, 150); return; }
-      if (e.target.closest("#b-open, #b-art") && owner) {                   // back to where it's playing
-        if (owner === current) { try { win(owner).__playerControl("reveal"); } catch (err) {} return; }   // (feedback #38)
-        try { history.pushState({}, "", win(owner).location.pathname + win(owner).location.search); } catch (err) {}
-        show(owner);
+      if (e.target.closest("#b-open, #b-art") && owner) {                   // the song's full view, on its page (#58)
+        if (owner !== current) {
+          try { history.pushState({}, "", win(owner).location.pathname + win(owner).location.search); } catch (err) {}
+          show(owner);
+        }
+        try { win(owner).__playerControl("reveal"); } catch (err) {}
       }
     });
     $("b-volume").addEventListener("input", () => { try { win(owner).__playerControl("volume", $("b-volume").value / 100); } catch (e) {} });
@@ -145,7 +147,7 @@ const MHShell = window.MHShell = (() => {
       const w = win(owner);
       if (w && w.__playerState && (owner !== current || w.__barOnPage)) s = w.__playerState();
     } catch (e) {}
-    const on = !!(s && playing(owner));
+    const on = !!(s && playing(owner)) && !(s.view && owner === current);   // (hidden under the song's full view)
     bar.hidden = !on;
     try { win(current).document.body.classList.toggle("mh-now-on", on); } catch (e) {}
     if (!on) return;
