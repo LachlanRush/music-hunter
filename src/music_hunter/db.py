@@ -331,6 +331,8 @@ MIGRATIONS = [
     ("playlists", "position", "INTEGER"),            # its place on the home page (dragged); NULL: after, oldest first
     ("folders", "position", "INTEGER"),
     ("playlists", "played_at", "TEXT"),
+    ("tracks", "grid", "TEXT"),                      # beat grid and phrase marks for Rekordbox (grid.py, JSON; 2026-11-13)
+    ("tracks", "grid_checked_at", "TEXT"),
     ("tracks", "upgrade_checked_at", "TEXT"),        # looked for an official 256 kbps version of this upload (2026-11-12)
     ("tracks", "merged_into", "INTEGER"),            # the same recording as this library track (merged, 2026-11-12)
     ("tracks", "extended_checked_at", "TEXT"),       # looked for an extended mix of this playlist song (extended.py)              # last time a song of it (or its Find music) started playing              # its place on the home page, among the playlists (dragged)

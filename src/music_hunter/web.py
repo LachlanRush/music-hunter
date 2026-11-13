@@ -1207,6 +1207,22 @@ async def app_publish(request: Request, version_code: int, version_name: str):
     return info
 
 
+class GridBody(BaseModel):
+    grid: dict | None = None
+
+
+@app.post("/api/worker/grid/claim", dependencies=[Depends(worker_auth)])
+def grid_claim():
+    item = analysis.grid_claim(db.connect_library())
+    return item if item else Response(status_code=204)
+
+
+@app.post("/api/worker/grid/{track_id}", dependencies=[Depends(worker_auth)])
+def grid_result(track_id: int, body: GridBody) -> dict:
+    analysis.grid_receive(db.connect_library(), track_id, body.grid)
+    return {"ok": True}
+
+
 @app.post("/api/worker/quality/claim", dependencies=[Depends(worker_auth)])
 def quality_claim():
     item = analysis.quality_claim(db.connect_library())

@@ -618,6 +618,43 @@ def _lane_loop(lane: dict, server: str, base: str, http, local, once: bool, shar
         worked()
 
 
+def _grid_one(http, base: str, local) -> float:
+    """Work out one playlist song's beat grid from the Pi's copy of it. Returns seconds to wait before asking again."""
+    from . import audio as audio_mod
+    from .grid import SR, analyse
+
+    try:
+        r = http.post(f"{base}/grid/claim", timeout=60)
+    except requests.RequestException:
+        return 60
+    if r.status_code in (404, 204):
+        return 300 if r.status_code == 204 else 3600
+    r.raise_for_status()
+    item = r.json()
+    root = base.rsplit("/api/worker", 1)[0]
+    folder = local.folder or path("cache")
+    folder.mkdir(parents=True, exist_ok=True)
+    f = folder / f"grid-{item['track_id']}.audio"
+    try:
+        a = http.get(root + item["audio"], timeout=120) if hasattr(http, "get") else None
+        if a is None or a.status_code != 200:
+            raise RuntimeError(f"audio {a.status_code if a is not None else '-'}")
+        f.write_bytes(a.content)
+        with Local.gpu:                                # (shares the CPU-heavy turn with the analysis)
+            g = analyse(audio_mod.decode(f, SR), SR, item.get("bpm"))
+        out = None if g is None else {"bpm": round(g.bpm, 4), "first_beat": round(g.first_beat, 4),
+                                      "drop": round(g.drop, 3), "phrase_bars": g.phrase_bars,
+                                      "agreement": round(g.agreement, 3)}
+        _post(http, f"{base}/grid/{item['track_id']}", json={"grid": out})
+        print(f"  grid for song {item['track_id']}: " + (f"{g.bpm:.2f} BPM, drop {g.drop:.1f} s" if g else "none"), flush=True)
+        return 0
+    except Exception as e:  # noqa: BLE001
+        print(f"  grid for song {item['track_id']}: {str(e)[:120]}", flush=True)
+        return 30
+    finally:
+        f.unlink(missing_ok=True)
+
+
 def _quality_loop(http, base: str, local, shared: dict) -> None:
     """Playlist songs' 256 kbps copies, fetched alongside Find music's analysis (2026-11-11; before, only once the
     queue was empty, so new playlists filling held them back for hours). They share the home address's pace with
@@ -625,6 +662,8 @@ def _quality_loop(http, base: str, local, shared: dict) -> None:
     while True:
         try:
             pause = _quality_one(http, base, local)
+            if pause:                                  # no 256 kbps work: a beat grid instead (no YouTube needed)
+                pause = min(pause, _grid_one(http, base, local)) if CONFIG.get("grid", {}).get("enabled", True) else pause
         except Exception as e:  # noqa: BLE001 — never stops the worker
             print(f"  M4A fetch: {str(e)[:120]}", flush=True)
             pause = 60
@@ -781,6 +820,34 @@ def quality_receive(lib, track_id: int, body: bytes, ext: str, quality: int, luf
         db.release_audio(lib, old)
     db.log_event(lib, "track_quality", track_id=track_id, quality=quality, bytes=len(body), why=why[:200] or None)
     return True
+
+
+def grid_claim(lib) -> dict | None:
+    """The next playlist song without a beat grid (synced playlists first): the PC works it out from the Pi's own copy
+    of the audio, so no YouTube download is involved."""
+    from . import sync
+
+    db.set_setting(lib, "worker_seen", time.time(), log=False)
+    synced = [p["id"] for p in lib.execute("SELECT id FROM playlists").fetchall() if sync.is_on(lib, p["id"])] or [-1]
+    with lib:
+        w = lib.execute(
+            "SELECT t.id, t.bpm FROM tracks t JOIN playlist_tracks pt ON pt.track_id = t.id"
+            " WHERE t.file_path IS NOT NULL AND t.merged_into IS NULL AND (t.grid_checked_at IS NULL"
+            "  OR t.grid_checked_at < t.upgrade_checked_at OR t.grid_checked_at < t.extended_checked_at)"
+            f" ORDER BY pt.playlist_id IN ({','.join('?' * len(synced))}) DESC, t.id LIMIT 1", synced).fetchone()
+        if w is None:
+            return None
+        lib.execute("UPDATE tracks SET grid_checked_at = datetime('now') WHERE id = ?", (w["id"],))
+    return {"track_id": w["id"], "audio": f"/audio/{w['id']}", "bpm": w["bpm"]}
+
+
+def grid_receive(lib, track_id: int, grid: dict | None) -> None:
+    from . import sync
+
+    with lib:
+        lib.execute("UPDATE tracks SET grid = ? WHERE id = ?", (json.dumps(grid) if grid else None, track_id))
+    db.log_event(lib, "track_grid", track_id=track_id, **({k: grid[k] for k in ("bpm", "drop", "agreement")} if grid else {}))
+    sync.request()                                   # rekordbox.xml gets its marks
 
 
 def quality_waiting(lib) -> bool:

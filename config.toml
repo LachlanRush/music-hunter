@@ -408,3 +408,11 @@ cover_size = 600     # stored square, this many pixels a side
 # Closeness is sound alone (MAEST fingerprint); stars play no part.
 similar_count = 10
 similar_bpm_tolerance = 0.06   # Find similar: only songs within this share of the song's tempo (2026-11-11)
+
+# Beat grid and phrase marks for Rekordbox (2026-11-13, feedback #54; grid.py, sync.py). The PC works each playlist song
+# out from the Pi's own copy (no YouTube download), synced playlists first; rekordbox.xml then carries the grid, a hot
+# cue A on the drop and memory cues every cue_bars bars counted from the drop.
+[grid]
+enabled = true
+cue_bars = 16
+max_memory_cues = 10
