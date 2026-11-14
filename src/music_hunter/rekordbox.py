@@ -23,6 +23,7 @@ from .config import CONFIG, path
 
 OURS = re.compile(r"^([+-]\d+|0|Drop)$")      # names of the memory cues we write (and the hot cue A we once wrote)
 _failed: set = set()
+_seen: set = set()
 
 
 def inbox() -> Path:
@@ -138,8 +139,13 @@ def check() -> None:
     box = inbox()
     if not box.parent.exists():
         return                                       # (not on the Pi)
-    box.mkdir(exist_ok=True)
+    if not box.exists():
+        box.mkdir()
+        db.log_event(db.connect_library(), "rekordbox_inbox_made", folder=str(box))
     for f in sorted(box.iterdir()):
+        if f.name not in _seen:                      # what arrives (Syncthing's own temporary files included)
+            _seen.add(f.name)
+            db.log_event(db.connect_library(), "rekordbox_inbox_file", file=f.name, bytes=f.stat().st_size)
         if f.name.startswith(".") or f.suffix.lower() != ".xml" or not f.is_file():
             continue
         st = f.stat()
@@ -168,4 +174,7 @@ def _watch() -> None:
 
 
 def start() -> None:
+    box = inbox()
+    db.log_event(db.connect_library(), "rekordbox_inbox", folder=str(box), share=box.parent.exists(), exists=box.exists(),
+                 files=sorted(f.name for f in box.iterdir()) if box.exists() else None)
     threading.Thread(target=_watch, daemon=True, name="rekordbox-inbox").start()
