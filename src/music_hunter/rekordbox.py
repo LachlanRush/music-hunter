@@ -159,6 +159,7 @@ def check() -> None:
             db.log_event(lib, "rekordbox_import_failed", file=f.name, error=str(e)[:300])
             continue
         f.unlink(missing_ok=True)
+        db.set_setting(lib, "rekordbox_last_import", {"file": f.stem, **res})   # named in rekordbox.xml (sync.py)
         db.log_event(lib, "rekordbox_import", file=f.name, **res)
         from . import sync
         sync.request()

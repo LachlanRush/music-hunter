@@ -425,6 +425,7 @@ def test_rekordbox_export_brings_its_grid_back_for_phrase_marks(tmp_path, monkey
     sync.wait()
     sync.run_once(conn)
     xml = (tmp_path / "share" / "rekordbox.xml").read_text()
+    assert 'Name="Marks from rekordbox: 2 of 2 songs"' in xml               # the export I dropped in, back
     one = xml[xml.index('Name="One"'):xml.index('Name="Two"')]
     assert '<TEMPO Inizio="0.048" Bpm="120.00" Metro="4/4" Battito="2"/>' in one
     assert 'Start="97.548" Num="0" Red="255"' in one                       # my hot cue A, as it was

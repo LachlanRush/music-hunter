@@ -167,12 +167,14 @@ def _marks(grid: dict | None, duration: float, rb: dict | None = None, source: s
             f'\n      <POSITION_MARK Name="Drop" Type="0" Start="{grid["drop"]:.3f}" Num="0"/>\n' + "\n".join(cues) + "\n    ")
 
 
-def _rekordbox(playlists: list[tuple], grids: dict | None = None) -> str:
+def _rekordbox(playlists: list[tuple], grids: dict | None = None, last: dict | None = None) -> str:
     """rekordbox.xml: every synced track with its stars (0, 51 … 255) and the playlists, inside their home page
-    folders (as Rekordbox folders), for File > Import."""
+    folders (as Rekordbox folders), for File > Import. `last`: the latest Rekordbox export read back (rekordbox.py),
+    named at the top of the list with how many of its songs have their marks yet, so I can tell it has come back."""
     laptop = CFG["laptop_folder"].replace("\\", "/").rstrip("/")
     seen, entries, nodes = {}, [], []
     groups: dict = {}
+    marked = 0
     for name, folder, tracks, *parent in playlists:
         keys = []
         for tid, d in tracks.items():
@@ -186,6 +188,7 @@ def _rekordbox(playlists: list[tuple], grids: dict | None = None) -> str:
                     f' Location="file://localhost/{where}"'
                     + (f'>{marks}</TRACK>' if (marks := _marks((gr := (grids or {}).get(tid, (None, None)))[0],
                                                               d["duration_s"] or 0, gr[1], d["source"])) else '/>'))
+                marked += 'Num="-1"' in marks
             keys.append(f'      <TRACK Key="{seen[tid]}"/>')
         node = (f'    <NODE Name={quoteattr(name)} Type="1" KeyType="0" Entries="{len(keys)}">\n'
                 + "\n".join(keys) + "\n    </NODE>")
@@ -196,6 +199,9 @@ def _rekordbox(playlists: list[tuple], grids: dict | None = None) -> str:
     for fname, inner in groups.items():
         nodes.insert(0, f'    <NODE Type="0" Name={quoteattr(fname)} Count="{len(inner)}">\n' + "\n".join(inner)
                      + "\n    </NODE>")
+    if last:                                                     # (an empty playlist, just its name)
+        nodes.insert(0, f'    <NODE Name={quoteattr(f"Marks from {last['file']}: {marked} of {last['songs']} songs")}'
+                        ' Type="1" KeyType="0" Entries="0">\n    </NODE>')
     return ('<?xml version="1.0" encoding="UTF-8"?>\n<DJ_PLAYLISTS Version="1.0.0">\n'
             '  <PRODUCT Name="Music Hunter" Version="1" Company=""/>\n'
             f'  <COLLECTION Entries="{len(entries)}">\n' + "\n".join(entries) + "\n  </COLLECTION>\n"
@@ -218,7 +224,7 @@ def run_once(lib) -> None:
         tmp = _temp(xml)
         grids = {str(r["id"]): (json.loads(r["grid"]) if r["grid"] else None, json.loads(r["rb_grid"]) if r["rb_grid"] else None)
                  for r in lib.execute("SELECT id, grid, rb_grid FROM tracks WHERE grid IS NOT NULL OR rb_grid IS NOT NULL")}
-        tmp.write_text(_rekordbox(done, grids), encoding="utf-8")
+        tmp.write_text(_rekordbox(done, grids, db.get_setting(lib, "rekordbox_last_import")), encoding="utf-8")
         tmp.replace(xml)
 
 
