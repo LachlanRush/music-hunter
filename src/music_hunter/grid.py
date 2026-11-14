@@ -94,6 +94,66 @@ def _fine_phase(env: np.ndarray, t0: float, p: float, dur: float) -> float:
     return best[1] % p
 
 
+def _per(x: np.ndarray, times: np.ndarray, fps: float) -> np.ndarray:
+    """Mean of each stretch between the given times (1-D or 2-D, along the last axis)."""
+    fr = np.clip(np.round(times * fps).astype(int), 0, x.shape[-1] - 1)
+    edges = np.append(fr, x.shape[-1])
+    return np.stack([x[..., a:b].mean(-1) if b > a else x[..., a] for a, b in zip(edges[:-1], edges[1:])], -1)
+
+
+def _phrase(lowb: np.ndarray, fullb: np.ndarray, phrase_bars: int) -> tuple[int, float]:
+    """Phrases, from each bar's low end and overall level: of the `phrase_bars` possible phrase starts, the one that
+    sits on the biggest bar-to-bar changes across the whole track; the drop (the biggest rise of the low end after a
+    quieter stretch) counts double, as the strongest single landmark. Returns the drop's bar, moved onto the nearest
+    phrase start, and the share of the clearest changes that land on a phrase start.
+    Against hand-set drops on 14 songs (2026-11-14): on Rekordbox's bars, the phrase lines passed through 12."""
+    n = len(lowb)
+    nov = np.r_[0, np.abs(np.diff(np.log(lowb + 1e-9) + np.log(fullb + 1e-9)))]
+    rise = np.full(n, -np.inf)                         # the drop: low end over the next 8 bars vs the previous 4
+    for i in range(4, n - 8):
+        rise[i] = lowb[i:i + 8].mean() / (lowb[i - 4:i].mean() + 1e-9)
+    drop_bar = int(np.argmax(rise)) if n > 12 else 0
+    weights = nov.copy()
+    weights[drop_bar] += nov.max()
+    k = int(np.argmax([weights[j::phrase_bars].sum() for j in range(phrase_bars)]))
+    drop_bar = k + phrase_bars * int(round((drop_bar - k) / phrase_bars))
+    drop_bar = min(max(drop_bar, k), k + phrase_bars * ((n - 1 - k) // phrase_bars))
+    top = np.argsort(-nov)[:max(4, n // 16)]
+    agree = float(np.mean([(b - k) % phrase_bars == 0 for b in top]))
+    return drop_bar, agree
+
+
+def rekordbox_downbeats(markers: list, duration: float) -> list[float]:
+    """Every bar's first beat from Rekordbox's grid: its TEMPO markers [(Inizio, Bpm, Battito)], each holding until
+    the next (Rekordbox adds one where the bars shift mid-track); Battito is the beat's place in its bar (1–4).
+    Times as Rekordbox gives them."""
+    out = []
+    ms = sorted(markers)
+    for i, (start, bpm, beat) in enumerate(ms):
+        end = ms[i + 1][0] if i + 1 < len(ms) else duration
+        p = 60.0 / bpm
+        t = start + ((5 - int(beat)) % 4) * p
+        while t < end - 1e-6:
+            out.append(round(t, 4))
+            t += 4 * p
+    return out
+
+
+def phrases(y: np.ndarray, sr: int, downbeats: list[float], phrase_bars: int = 8) -> tuple[int, float] | None:
+    """Phrases on bars someone else found (Rekordbox's): the drop's bar index and the agreement, as in analyse."""
+    import librosa
+
+    if sr != SR:
+        y = librosa.resample(y, orig_sr=sr, target_sr=SR)
+    low, full, _ = _bands(y, SR)
+    keep = [i for i, t in enumerate(downbeats) if 0 <= t < len(y) / SR - 1]
+    if len(keep) < 2 * phrase_bars:
+        return None
+    bars, i0, fps = np.asarray([downbeats[i] for i in keep]), keep[0], SR / HOP
+    drop_bar, agree = _phrase(_per(low, bars, fps), _per(full, bars, fps), phrase_bars)
+    return i0 + drop_bar, agree
+
+
 def analyse(y: np.ndarray, sr: int, bpm_hint: float | None = None, phrase_bars: int = 8) -> Grid | None:
     import librosa
 
@@ -114,10 +174,7 @@ def analyse(y: np.ndarray, sr: int, bpm_hint: float | None = None, phrase_bars: 
     bpm, t0 = _tempo_phase(_flux(low), bpm_hint, dur)
     period = 60.0 / bpm
     t0 = _fine_phase(_flux(full), t0, period, dur)
-    def per(x, times):                                  # mean of each stretch between the given times
-        fr = np.clip(np.round(times * fps).astype(int), 0, x.shape[-1] - 1)
-        edges = np.append(fr, x.shape[-1])
-        return np.stack([x[..., a:b].mean(-1) if b > a else x[..., a] for a, b in zip(edges[:-1], edges[1:])], -1)
+    per = lambda x, times: _per(x, times, fps)
     # Bar 1: the beat where the notes change most (chords move on the bar) and the low end changes most, beat by
     # beat. Against Rekordbox's bar 1 on 32 songs (2026-11-14): 27 the same, against 21 from bar-level loudness.
     beats_t = np.arange(t0, dur - period, period)
@@ -130,33 +187,10 @@ def analyse(y: np.ndarray, sr: int, bpm_hint: float | None = None, phrase_bars: 
     z = lambda v: (v - v.mean()) / (v.std() + 1e-9)
     r = int(np.argmax(z(np.array([chord[i::4].mean() for i in range(4)])) +
                       z(np.array([bass[i::4].mean() for i in range(4)]))))
-    # Phrases: of the 8 possible phrase starts, the one that sits on the biggest bar-to-bar changes in the music (low
-    # end and overall loudness) across the whole track; the drop (the biggest rise of the low end after a quieter
-    # stretch) counts double, as the strongest single landmark.
     bars_t = np.arange(t0 + r * period, dur - 4 * period, 4 * period)
     if len(bars_t) < 2 * phrase_bars:
         return None
-    lowb, fullb = per(low, bars_t), per(full, bars_t)
-    e = np.log(lowb + 1e-9) + np.log(fullb + 1e-9)
-    nov = np.r_[0, np.abs(np.diff(e))]
-    rise = np.full(len(bars_t), -np.inf)               # the drop: low end over the next 8 bars vs the previous 4
-    for i in range(4, len(bars_t) - 8):
-        rise[i] = lowb[i:i + 8].mean() / (lowb[i - 4:i].mean() + 1e-9)
-    drop_bar = int(np.argmax(rise))
-    weights = nov.copy()
-    weights[drop_bar] += nov.max()
-    best = None
-    for k in range(phrase_bars):
-        sc = weights[k::phrase_bars].sum() / weights.sum()
-        if best is None or sc > best[0]:
-            best = (sc, r, k, bars_t, nov, drop_bar)
-    if best is None:
-        return None
-    _, r, k, bars_t, nov, drop_bar = best
     first_bar = float(bars_t[0])
-    # The drop moved onto the nearest phrase start; how many of the clearest changes land on phrase starts.
-    drop_bar = k + phrase_bars * int(round((drop_bar - k) / phrase_bars))
-    drop = float(bars_t[min(max(drop_bar, 0), len(bars_t) - 1)])
-    top = np.argsort(-nov)[:max(4, len(nov) // 16)]
-    agree = float(np.mean([(b - k) % phrase_bars == 0 for b in top]))
+    drop_bar, agree = _phrase(per(low, bars_t), per(full, bars_t), phrase_bars)
+    drop = float(bars_t[drop_bar])
     return Grid(bpm=bpm, first_beat=float(first_bar), drop=drop, phrase_bars=phrase_bars, agreement=agree)

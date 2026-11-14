@@ -136,13 +136,20 @@ def sync_playlist(lib, pid: int, name: str, parent: str | None = None) -> dict:
     return wanted
 
 
-def _marks(grid: dict | None, duration: float) -> str:
-    """A track's beat grid and phrase marks for Rekordbox (feedback #54): the grid (TEMPO: the first bar's first beat
-    and the tempo), a hot cue A on the drop, and memory cues every [grid] cue_bars bars counted from the drop, named
-    by their distance from it ("-16", "Drop", "+16" …), at most [grid] max_memory_cues."""
-    if not grid or not CONFIG.get("grid", {}).get("write_xml", True):
-        return ""
+def _marks(grid: dict | None, duration: float, rb: dict | None = None, source: str | None = None) -> str:
+    """A track's beat grid and phrase marks for Rekordbox (feedback #54). On Rekordbox's own grid when it has sent it
+    (rekordbox.py; [grid] only_on_rekordbox: only then); else our grid (TEMPO: the first bar's first beat and the
+    tempo), a hot cue A on the drop, and memory cues every [grid] cue_bars bars counted from the drop, named by their
+    distance from it ("-16", "Drop", "+16" …), at most [grid] max_memory_cues."""
+    from . import rekordbox
+
     g = CONFIG.get("grid", {})
+    if not g.get("write_xml", True):
+        return ""
+    if rekordbox.valid(rb, source):
+        return rekordbox.marks(rb, grid, duration)
+    if not grid or grid.get("rb") or g.get("only_on_rekordbox", False):
+        return ""
     # Rekordbox counts time from the start of the M4A's audio including the encoder's lead-in (2112 samples, 48 ms),
     # which our decoder skips: measured on 32 songs, its beats sat 48 ms after ours (2026-11-14).
     shift = g.get("rekordbox_shift_s", 0.048)
@@ -177,7 +184,8 @@ def _rekordbox(playlists: list[tuple], grids: dict | None = None) -> str:
                     f' Kind="M4A File" Size="{d["size"]}" TotalTime="{round(d["duration_s"] or 0)}"'
                     f' AverageBpm="{d["bpm"] or 0:.2f}" Rating="{(d["stars"] or 0) * 51}"'
                     f' Location="file://localhost/{where}"'
-                    + (f'>{marks}</TRACK>' if (marks := _marks((grids or {}).get(tid), d["duration_s"] or 0)) else '/>'))
+                    + (f'>{marks}</TRACK>' if (marks := _marks((gr := (grids or {}).get(tid, (None, None)))[0],
+                                                              d["duration_s"] or 0, gr[1], d["source"])) else '/>'))
             keys.append(f'      <TRACK Key="{seen[tid]}"/>')
         node = (f'    <NODE Name={quoteattr(name)} Type="1" KeyType="0" Entries="{len(keys)}">\n'
                 + "\n".join(keys) + "\n    </NODE>")
@@ -208,7 +216,8 @@ def run_once(lib) -> None:
     if done:
         xml = Path(CFG["folder"]) / "rekordbox.xml"
         tmp = _temp(xml)
-        grids = {str(r["id"]): json.loads(r["grid"]) for r in lib.execute("SELECT id, grid FROM tracks WHERE grid IS NOT NULL")}
+        grids = {str(r["id"]): (json.loads(r["grid"]) if r["grid"] else None, json.loads(r["rb_grid"]) if r["rb_grid"] else None)
+                 for r in lib.execute("SELECT id, grid, rb_grid FROM tracks WHERE grid IS NOT NULL OR rb_grid IS NOT NULL")}
         tmp.write_text(_rekordbox(done, grids), encoding="utf-8")
         tmp.replace(xml)
 

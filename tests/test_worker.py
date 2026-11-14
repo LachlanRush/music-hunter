@@ -303,6 +303,8 @@ def test_grid_from_the_pis_copy_into_rekordbox(remote, tmp_path, monkeypatch):
     monkeypatch.setitem(CONFIG["grid"], "write_xml", False)
     assert sync._marks(grid, 200) == ""                              # off while compared with Rekordbox's (2026-11-14)
     monkeypatch.setitem(CONFIG["grid"], "write_xml", True)
+    assert sync._marks(grid, 200) == ""                              # only on Rekordbox's own grid (2026-11-14)
+    monkeypatch.setitem(CONFIG["grid"], "only_on_rekordbox", False)
     xml = sync._marks(grid, 200)
     # (Rekordbox's times include the M4A encoder's 48 ms lead-in, so everything is written 48 ms later)
     assert 'Inizio="0.548" Bpm="120.00"' in xml and 'Name="Drop" Type="0" Start="64.548" Num="0"' in xml

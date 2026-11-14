@@ -107,7 +107,7 @@ class InlineThread:
         self.target, self.args, self.name = target, args, name
 
     def start(self):
-        if self.name != "maintenance":             # the hourly loop never ends: not run inline
+        if self.name not in ("maintenance", "rekordbox-inbox"):   # loops that never end: not run inline
             self.target(*self.args)
 
 

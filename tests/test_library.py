@@ -367,6 +367,91 @@ def test_sync_keeps_a_tagged_m4a_folder_and_a_rekordbox_file(tmp_path, monkeypat
     assert (tmp_path / "share" / "pumped" / "Art & Co - One.m4a").exists()
 
 
+def test_rekordbox_export_brings_its_grid_back_for_phrase_marks(tmp_path, monkeypatch):
+    """2026-11-14 (#54): Rekordbox's collection export dropped in the Songs share is read for each synced song's grid
+    and my cues, then deleted; the PC finds the phrases on those bars, and rekordbox.xml writes the grid and my cues
+    back as they were, plus memory cues every 16 bars from my hot cue A (else from the PC's drop)."""
+    import os
+    import re
+    import time as tm
+
+    from music_hunter import analysis, rekordbox
+    from music_hunter.config import CONFIG
+    sync, conn, pid, track, m4a = _sync_setup(tmp_path, monkeypatch)
+    monkeypatch.setitem(CONFIG["sync"], "rekordbox_inbox", str(tmp_path / "Rekordbox export"))
+    m4a("a.m4a"); m4a("b.m4a")
+    a = track("Art", "One", stars=5, file="library/a.m4a")
+    b = track("Art", "Two", stars=4, file="library/b.m4a")
+    with conn:
+        conn.execute("UPDATE tracks SET duration_s = 200")
+    db.set_setting(conn, sync.setting(pid), True)
+    sync.run_once(conn)
+    assert "POSITION_MARK" not in (tmp_path / "share" / "rekordbox.xml").read_text()   # our own grid isn't written
+    loc = "file://localhost/C:/Users/lachl/Music/Songs/Playlists/pump_%20140/Art%20-%20{}.m4a"
+    export = f"""<?xml version="1.0" encoding="UTF-8"?>
+<DJ_PLAYLISTS Version="1.0.0"><COLLECTION Entries="3">
+  <TRACK TrackID="1" Name="One" TotalTime="200" Location="{loc.format('One')}">
+    <TEMPO Inizio="0.048" Bpm="120.00" Metro="4/4" Battito="2"/>
+    <POSITION_MARK Name="" Type="0" Start="97.548" Num="0" Red="255" Green="55" Blue="111"/>
+    <POSITION_MARK Name="+16" Type="0" Start="1.548" Num="-1"/>
+  </TRACK>
+  <TRACK TrackID="2" Name="Two" TotalTime="200" Location="{loc.format('Two')}">
+    <TEMPO Inizio="0.048" Bpm="120.00" Metro="4/4" Battito="1"/>
+    <TEMPO Inizio="100.548" Bpm="120.00" Metro="4/4" Battito="3"/>
+  </TRACK>
+  <TRACK TrackID="3" Name="Elsewhere" Location="file://localhost/C:/Music/x.mp3"><TEMPO Inizio="0" Bpm="128" Battito="1"/></TRACK>
+</COLLECTION></DJ_PLAYLISTS>"""
+    rekordbox.check()                                             # the folder is made where the share is
+    box = tmp_path / "Rekordbox export"
+    assert box.is_dir()
+    f = box / "rekordbox.xml"
+    f.write_text(export)
+    rekordbox.check()
+    assert f.exists()                                             # still being written (changed in the last 15 s)
+    os.utime(f, (tm.time() - 60, tm.time() - 60))
+    rekordbox.check()
+    assert not f.exists()                                         # read, then deleted
+    rb = js_load(conn, a)
+    assert rb["markers"] == [[0.048, 120.0, 2]] and [c["Num"] for c in rb["cues"]] == ["0"]   # our old cue dropped
+    # The PC is given Rekordbox's bars (without its 48 ms lead-in) and finds the drop's bar on them.
+    items = {}
+    while (item := analysis.grid_claim(conn)) is not None:
+        items[item["track_id"]] = item
+    assert items[a]["downbeats"][:2] == [1.5, 3.5]                 # beat 2 at 0.048: the bar starts 3 beats later
+    db2 = items[b]["downbeats"]
+    assert db2[:2] == [0.0, 2.0] and 100.0 in db2 and 101.5 in db2 and 102.0 not in db2   # the second marker shifts the bars
+    analysis.grid_receive(conn, a, {"rb": items[a]["rb"], "anchor_bar": 3, "phrase_bars": 8, "agreement": 0.5})
+    analysis.grid_receive(conn, b, {"rb": items[b]["rb"], "anchor_bar": 8, "phrase_bars": 8, "agreement": 0.5})
+    sync.wait()
+    sync.run_once(conn)
+    xml = (tmp_path / "share" / "rekordbox.xml").read_text()
+    one = xml[xml.index('Name="One"'):xml.index('Name="Two"')]
+    assert '<TEMPO Inizio="0.048" Bpm="120.00" Metro="4/4" Battito="2"/>' in one
+    assert 'Start="97.548" Num="0" Red="255"' in one                       # my hot cue A, as it was
+    mem = re.findall(r'Name="([^"]*)" Type="0" Start="([\d.]+)" Num="-1"', one)
+    # From my hot cue A (bar 48 at 97.548), not the PC's bar 3: every 16 bars = 32 s at 120 BPM.
+    assert mem == [("-48", "1.548"), ("-32", "33.548"), ("-16", "65.548"), ("Drop", "97.548"), ("+16", "129.548"),
+                   ("+32", "161.548"), ("+48", "193.548")]
+    two = xml[xml.index('Name="Two"'):]
+    assert two.count("<TEMPO") == 2
+    mem = re.findall(r'Name="([^"]*)" Type="0" Start="([\d.]+)" Num="-1"', two)
+    assert mem[0] == ("0", "16.048") and ("+48", "111.548") in mem      # the PC's drop; counted across the shift
+    # A song swapped for another version: Rekordbox's grid no longer fits, so no marks until it's analysed again.
+    m4a("c.m4a")
+    with conn:
+        conn.execute("UPDATE tracks SET file_path = 'library/c.m4a' WHERE id = ?", (a,))
+    sync.run_once(conn)
+    xml = (tmp_path / "share" / "rekordbox.xml").read_text()
+    assert "<TEMPO" not in xml[xml.index('Name="One"'):xml.index('Name="Two"')]
+    import xml.dom.minidom as md
+    md.parseString(xml)
+
+
+def js_load(conn, tid):
+    import json as js
+    return js.loads(conn.execute("SELECT rb_grid FROM tracks WHERE id = ?", (tid,)).fetchone()[0])
+
+
 def test_sync_switch_through_the_api(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from music_hunter import web

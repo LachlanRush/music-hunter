@@ -263,6 +263,10 @@ upgrade_max_shorter = 0.25
 # the laptop, which also backs up my other songs). laptop_folder is where they land there, for rekordbox.xml's paths.
 folder = "/share/syncthing/Songs/Playlists"
 laptop_folder = "C:/Users/lachl/Music/Songs/Playlists"
+# Rekordbox's collection exported here (File > Export Collection in xml format) is read for its grids and my cues,
+# then deleted (rekordbox.py); checked every rekordbox_check_s seconds.
+rekordbox_inbox = "/share/syncthing/Songs/Rekordbox export"
+rekordbox_check_s = 30
 
 [vocals]
 # §18.34: the PC worker measures each new track's vocal share (Demucs) and mood (Essentia) in the taste-test
@@ -414,9 +418,11 @@ similar_bpm_tolerance = 0.06   # Find similar: only songs within this share of t
 # cue A on the drop and memory cues every cue_bars bars counted from the drop.
 [grid]
 enabled = true
-# Off while our grids are compared with Rekordbox's own analysis (2026-11-14): rekordbox.xml then carries only
-# playlists, folders and stars, so importing it doesn't replace Rekordbox's grid and cues. Grids are still worked out.
-write_xml = false
+write_xml = true
+# Phrase marks only on Rekordbox's own grid (2026-11-14, my choice): its bar 1 is right more often than ours, so a song
+# gets marks once Rekordbox's export has brought its grid back (rekordbox.py); Rekordbox's grid and my own cues are
+# written back unchanged. false: songs without it get our own grid and cues.
+only_on_rekordbox = true
 rekordbox_shift_s = 0.048          # Rekordbox's times include the M4A encoder's lead-in (2112 samples), ours don't
 cue_bars = 16
-max_memory_cues = 10
+max_memory_cues = 20

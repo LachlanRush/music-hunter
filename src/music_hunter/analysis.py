@@ -640,6 +640,16 @@ def _grid_one(http, base: str, local) -> float:
         if a is None or a.status_code != 200:
             raise RuntimeError(f"audio {a.status_code if a is not None else '-'}")
         f.write_bytes(a.content)
+        if item.get("downbeats"):                      # Rekordbox's bars: only the phrases to find
+            from .grid import phrases
+            with Local.gpu:
+                ph = phrases(audio_mod.decode(f, SR), SR, item["downbeats"])
+            out = None if ph is None else {"v": GRID_VERSION, "rb": item["rb"], "anchor_bar": ph[0],
+                                           "phrase_bars": 8, "agreement": round(ph[1], 3)}
+            _post(http, f"{base}/grid/{item['track_id']}", json={"grid": out})
+            print(f"  phrases for song {item['track_id']} on Rekordbox's grid: "
+                  + (f"drop at bar {ph[0]}" if ph else "none"), flush=True)
+            return 0
         with Local.gpu:                                # (shares the CPU-heavy turn with the analysis)
             g = analyse(audio_mod.decode(f, SR), SR, item.get("bpm"))
         out = None if g is None else {"v": GRID_VERSION, "bpm": round(g.bpm, 4), "first_beat": round(g.first_beat, 4),
@@ -834,8 +844,10 @@ def grid_claim(lib) -> dict | None:
     synced = [p["id"] for p in lib.execute("SELECT id FROM playlists").fetchall() if sync.is_on(lib, p["id"])] or [-1]
     with lib:
         w = lib.execute(
-            "SELECT t.id, t.bpm, pt.playlist_id FROM tracks t JOIN playlist_tracks pt ON pt.track_id = t.id"
+            "SELECT t.id, t.bpm, t.file_path, t.duration_s, t.rb_grid, pt.playlist_id"
+            " FROM tracks t JOIN playlist_tracks pt ON pt.track_id = t.id"
             " WHERE t.file_path IS NOT NULL AND t.merged_into IS NULL AND (t.grid_checked_at IS NULL"
+            "  OR t.grid_checked_at < t.rb_grid_at"
             f"  OR (t.grid IS NOT NULL AND coalesce(json_extract(t.grid, '$.v'), 1) < {GRID_VERSION})"
             "  OR t.grid_checked_at < t.upgrade_checked_at OR t.grid_checked_at < t.extended_checked_at)"
             f" ORDER BY pt.playlist_id IN ({','.join('?' * len(synced))}) DESC, t.id LIMIT 1", synced).fetchone()
@@ -848,7 +860,13 @@ def grid_claim(lib) -> dict | None:
         core = tempo.playlist_tempo(lib, w["playlist_id"])
         if core and core.get("center"):
             bpm = tempo.nearest(bpm, core["center"])
-    return {"track_id": w["id"], "audio": f"/audio/{w['id']}", "bpm": bpm}
+    item = {"track_id": w["id"], "audio": f"/audio/{w['id']}", "bpm": bpm}
+    rb = json.loads(w["rb_grid"]) if w["rb_grid"] else None
+    from . import rekordbox
+    if rekordbox.valid(rb, w["file_path"]):         # phrases on Rekordbox's bars (in our time: without its lead-in)
+        item["rb"] = rekordbox.key(rb)
+        item["downbeats"] = [round(t - rekordbox._shift(), 4) for t in rekordbox.downbeats(rb, w["duration_s"] or 0)]
+    return item
 
 
 def grid_receive(lib, track_id: int, grid: dict | None) -> None:
@@ -856,7 +874,8 @@ def grid_receive(lib, track_id: int, grid: dict | None) -> None:
 
     with lib:
         lib.execute("UPDATE tracks SET grid = ? WHERE id = ?", (json.dumps(grid) if grid else None, track_id))
-    db.log_event(lib, "track_grid", track_id=track_id, **({k: grid[k] for k in ("bpm", "drop", "agreement")} if grid else {}))
+    db.log_event(lib, "track_grid", track_id=track_id,
+                 **({k: grid[k] for k in ("bpm", "drop", "anchor_bar", "agreement") if k in grid} if grid else {}))
     sync.request()                                   # rekordbox.xml gets its marks
 
 

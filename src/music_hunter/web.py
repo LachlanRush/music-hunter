@@ -51,6 +51,8 @@ async def lifespan(app):
             session_worker(p["id"]).start_if_needed()
     jobs.requeue_interrupted(conn)                  # v5: a job cut off by a restart runs again (jobs are re-runnable)
     threading.Thread(target=_maintenance, daemon=True, name="maintenance").start()
+    from . import rekordbox
+    rekordbox.start()                               # Rekordbox exports dropped in the Songs share (its grids)
     _extended_soon()
     job_runner.kick()
     from . import tempo

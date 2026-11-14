@@ -333,6 +333,8 @@ MIGRATIONS = [
     ("playlists", "played_at", "TEXT"),
     ("tracks", "grid", "TEXT"),                      # beat grid and phrase marks for Rekordbox (grid.py, JSON; 2026-11-13)
     ("tracks", "grid_checked_at", "TEXT"),
+    ("tracks", "rb_grid", "TEXT"),                   # Rekordbox's own grid and my cues, from its export (rekordbox.py)
+    ("tracks", "rb_grid_at", "TEXT"),                # …when that grid last changed (the PC finds the phrases again)
     ("tracks", "upgrade_checked_at", "TEXT"),        # looked for an official 256 kbps version of this upload (2026-11-12)
     ("tracks", "merged_into", "INTEGER"),            # the same recording as this library track (merged, 2026-11-12)
     ("tracks", "extended_checked_at", "TEXT"),       # looked for an extended mix of this playlist song (extended.py)              # last time a song of it (or its Find music) started playing              # its place on the home page, among the playlists (dragged)
