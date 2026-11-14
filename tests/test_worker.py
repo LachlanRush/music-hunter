@@ -287,7 +287,7 @@ def test_two_addresses_share_the_queue(remote, monkeypatch):
     assert [x["name"] for x in analysis.lanes()] == ["home"]           # no login: home only
 
 
-def test_grid_from_the_pis_copy_into_rekordbox(remote, tmp_path):
+def test_grid_from_the_pis_copy_into_rekordbox(remote, tmp_path, monkeypatch):
     """2026-11-13 (#54): the PC asks for a playlist song without a beat grid, works it out from the Pi's copy, and
     rekordbox.xml carries the grid, a hot cue on the drop and memory cues every 16 bars counted from it."""
     from music_hunter import analysis, db, sync
@@ -298,7 +298,12 @@ def test_grid_from_the_pis_copy_into_rekordbox(remote, tmp_path):
     assert item["track_id"] == tid and item["audio"] == f"/audio/{tid}"
     assert analysis.grid_claim(lib) is None                          # asked once
     analysis.grid_receive(lib, tid, {"bpm": 120.0, "first_beat": 0.5, "drop": 64.5, "phrase_bars": 8, "agreement": 0.5})
-    xml = sync._marks(json.loads(lib.execute("SELECT grid FROM tracks WHERE id = ?", (tid,)).fetchone()[0]), 200)
+    grid = json.loads(lib.execute("SELECT grid FROM tracks WHERE id = ?", (tid,)).fetchone()[0])
+    from music_hunter.config import CONFIG
+    monkeypatch.setitem(CONFIG["grid"], "write_xml", False)
+    assert sync._marks(grid, 200) == ""                              # off while compared with Rekordbox's (2026-11-14)
+    monkeypatch.setitem(CONFIG["grid"], "write_xml", True)
+    xml = sync._marks(grid, 200)
     assert 'Inizio="0.500" Bpm="120.00"' in xml and 'Name="Drop" Type="0" Start="64.500" Num="0"' in xml
     starts = [float(x) for x in __import__("re").findall(r'Start="([\d.]+)" Num="-1"', xml)]
     assert starts == [0.5, 32.5, 64.5, 96.5, 128.5, 160.5, 192.5]    # 16 bars = 32 s at 120 BPM, through the drop
