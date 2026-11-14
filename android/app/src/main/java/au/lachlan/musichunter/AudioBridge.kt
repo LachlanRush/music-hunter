@@ -286,7 +286,10 @@ class PageBridge(private val app: App, private val web: WebView) {
     @JavascriptInterface fun npAction(name: String) = on { if (name == "nexttrack" || name == "previoustrack") audio.action(name) }
     @JavascriptInterface fun npSeek(ms: Long) = on { audio.seekFromBar(ms) }
     @JavascriptInterface fun npShuffle() = on { app.toggleOwnerShuffle() }
-    @JavascriptInterface fun npOpen() = on { app.showPlaying() }
+    // The bar on another page: the playing song's full view over it (#62). From that view, "Playing from …": its page.
+    @JavascriptInterface fun npOpen() = on { if (web === app.overlay) app.focusOverlay() else app.showPlayingView() }
+    @JavascriptInterface fun npClosed() = on { app.overlayClosed(web) }
+    @JavascriptInterface fun npView(open: Boolean) = on { app.viewOpen(web, open) }
     @JavascriptInterface fun pageReady() = on { app.pageReady(web) }
     // "Add to queue" on a page the music doesn't come from: the song joins the playing page's queue (as the browser
     // shell does). "" when nothing plays elsewhere (the page queues it itself), "unsupported" while Find music plays.

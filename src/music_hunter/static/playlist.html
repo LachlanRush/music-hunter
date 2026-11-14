@@ -86,28 +86,45 @@ li.found { animation: found 1.4s ease-out; }
 .menu.sub-open .main-items { display: none; }
 
 /* The player: a bar along the bottom, the page blurred behind it */
-/* Now playing, full view (feedback #58/#59): tapping the song in the player bar opens it, like Spotify's. */
-.np { position: fixed; inset: 0; z-index: 30; display: flex; justify-content: center; overflow-y: auto;
-  background: linear-gradient(180deg, var(--glow, rgba(255,255,255,.06)) 0%, var(--bg) 70%), var(--bg); }
-.np[hidden] { display: none; }
-.np-in { width: min(100%, 480px); padding: 16px 20px 28px; display: flex; flex-direction: column; gap: 18px; }
+/* Now playing, full view (feedback #58/#59; #61: fills the screen, play in the middle, slides up, swipe the cover to
+   change song, drag down to close). */
+.np { position: fixed; inset: 0; z-index: 30; display: flex; justify-content: center; overflow: hidden auto;
+  background: linear-gradient(180deg, var(--glow, rgba(255,255,255,.06)) 0%, var(--bg) 70%), var(--bg);
+  transform: translateY(100%); transition: transform .34s cubic-bezier(.2, .8, .2, 1); will-change: transform; touch-action: none; }
+.np.in { transform: none; }
+.np.drag { transition: none; }
+.np-in { width: min(100%, 520px); height: 100vh; height: 100dvh; min-height: 520px; display: flex; flex-direction: column; gap: 18px;
+  padding: max(12px, env(safe-area-inset-top)) 22px calc(22px + env(safe-area-inset-bottom)); }
 .np-top { display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; text-align: center; }
 .np-top .from { font-size: 12px; color: var(--muted); line-height: 1.3; }
 .np-top .from b { display: block; color: var(--fg); font-size: 14px; cursor: pointer; }
 .np-top .from b:hover { text-decoration: underline; }
-.np-art { width: 100%; aspect-ratio: 1; border-radius: 8px; object-fit: cover; background: var(--raised); box-shadow: 0 14px 40px rgba(0,0,0,.55); }
+.np-stage { flex: 1 1 0; min-height: 140px; container-type: size; display: grid; place-items: center; cursor: grab; }
+.np-art { width: min(100cqw, 100cqh); aspect-ratio: 1; border-radius: 8px; object-fit: cover; background: var(--raised);
+  box-shadow: 0 14px 40px rgba(0,0,0,.55); user-select: none; -webkit-user-drag: none; will-change: transform; }
+.np-art.slide { transition: transform .26s cubic-bezier(.2, .8, .2, 1), opacity .26s; }
 .np-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
 .np-meta .t { min-width: 0; }
 .np-meta .t b { display: block; font: 700 22px/1.25 var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .np-meta .t span { display: block; color: var(--muted); font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-meta .side { display: flex; align-items: center; gap: 4px; flex: none; }
 .np-meta .stars button { font-size: 22px; }
+.np-meta .vote { width: 44px; height: 44px; }
+.np-meta .vote svg { width: 26px; height: 26px; }
+.np-stars2 { margin: -10px 0 0 -10px; }
+.np-stars2 .stars button { font-size: 22px; }
 .np-seek { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; font-size: 12px; color: var(--muted); }
 .np-seek input { width: 100%; }
-.np-controls { display: flex; align-items: center; justify-content: center; gap: 14px; }
+.np-controls { display: grid; grid-template-columns: 1fr auto auto auto 1fr; align-items: center; gap: 18px; }
+.np-controls > :first-child { justify-self: start; }
+.np-controls > :last-child { justify-self: end; }
 .np-controls .round { width: 52px; height: 52px; }
-.np-controls .round svg, .np-controls .vote svg { width: 26px; height: 26px; }
-.np-controls .round.primary { width: 68px; height: 68px; }
-.np-controls .vote { width: 48px; height: 48px; }
+.np-controls .round svg { width: 26px; height: 26px; }
+.np-controls .round.primary { width: 72px; height: 72px; }
+/* Opened over another page (the bar there, #62): only the view shows; the page it belongs to stays out of sight. */
+html.np-solo, html.np-solo body { background: transparent !important; }
+html.np-solo body::before { display: none; }
+html.np-solo body > :not(#np) { visibility: hidden !important; }
 .player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: rgba(22, 22, 24, 0.55); -webkit-backdrop-filter: blur(30px) saturate(1.4); backdrop-filter: blur(30px) saturate(1.4);
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35); transition: background .6s; }
 .framed .player { display: none !important; }       /* in the browser shell its bar plays this part (static/shell.js) */
@@ -271,12 +288,13 @@ li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba
 
 <div class="np" id="np" hidden role="dialog" aria-label="Now playing">
   <div class="np-in">
-    <div class="np-top">
+    <div class="np-top" id="np-top">
       <button class="icon-btn" id="np-close" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <div class="from" id="np-from"></div><span></span>
     </div>
-    <img class="np-art" id="np-art" alt="" onerror="this.style.visibility='hidden'" onload="this.style.visibility='visible'">
-    <div class="np-meta"><div class="t"><b id="np-title"></b><span id="np-artist"></span></div><div id="np-stars"></div></div>
+    <div class="np-stage" id="np-stage"><img class="np-art" id="np-art" alt="" draggable="false" onerror="this.style.visibility='hidden'" onload="this.style.visibility='visible'"></div>
+    <div class="np-meta"><div class="t"><b id="np-title"></b><span id="np-artist"></span></div><div class="side" id="np-side"></div></div>
+    <div class="np-stars2" id="np-stars2"></div>
     <div class="np-seek"><span id="np-pos">0:00</span><input type="range" id="np-seek" min="0" max="1000" value="0" aria-label="Position"><span id="np-dur">0:00</span></div>
     <div class="np-controls" id="np-controls"></div>
   </div>
@@ -1105,13 +1123,14 @@ window.__playerState = () => {
 window.__playerControl = (action, value) => ({
   toggle: () => $("play").click(), next: () => $("next").click(), prev: () => $("prev").click(),
   shuffle: () => $("shuffle").click(), seek: () => { audio.currentTime = value; },
-  reveal: () => $("p-open").click(),
+  reveal: () => NowView.show(value || {}), close: () => NowView.hide(),
   up: () => $("up").click(), down: () => $("down").click(),
   volume: () => { $("volume").value = Math.round(value * 100); $("volume").dispatchEvent(new Event("input")); },
 })[action]?.();
 // Tapping the playing song (cover or names) opens the full view (feedback #58; it used to show the song in the list,
 // #38, which the view's "Playing from" now does).
-$("p-art").onclick = $("p-open").onclick = () => NowView.show();
+// Anywhere on the bar but its buttons and sliders (#62).
+$("player").addEventListener("click", (e) => { if (!e.target.closest("button, input, a, select, .seek")) NowView.show(); });
 $("prev").addEventListener("click", () => { if (fm) return Find.back(); audio.currentTime >= (data.back_restart_s ?? 5) || pos === 0 ? (audio.currentTime = 0) : playAt(pos - 1); });
 function paintShuffleAll(playing) {                       // like Play: filled only while this playlist is playing, shuffled
   const on = playing && shuffle;
@@ -1387,9 +1406,9 @@ const Find = (() => {
   }
   // Back: a few seconds into a song it restarts; else it steps back through the last [ui] back_steps picks, whose
   // + / − can still be changed. Next steps forward again, then returns to the pick on air.
-  async function back() {
+  async function back(force = false) {               // force: the previous pick, never a restart (swiping the cover)
     if (!fm) return;
-    if (audio.currentTime >= BACK_S()) { audio.currentTime = 0; fm.lastPos = 0; return; }
+    if (!force && audio.currentTime >= BACK_S()) { audio.currentTime = 0; fm.lastPos = 0; return; }
     if (!fm.hist || fm.viewing === "current") {
       try { fm.hist = await call(`/api/recent${fm.cur ? `?exclude=${fm.cur.play_id}` : ""}`); }
       catch (e) { fm.hist = []; }
@@ -1439,54 +1458,160 @@ const Find = (() => {
   return {start, leave, skip, back, ended, followTempo, state, onAir, rate: () => fmTempo.rate()};
 })();
 
-// --- Now playing, full view (feedback #58/#59): the song big, where it's playing from (tap to see it in the list),
-// its stars when it's in this playlist, and the usual controls (they're the player's own buttons, mirrored).
+// --- Now playing, full view (feedback #58/#59/#61): the song big, where it's playing from (tap to see it in the list),
+// its stars when it's in this playlist, and the usual controls (they're the player's own buttons, mirrored). It slides
+// up from the bottom; dragging it down closes it; swiping the cover changes song. Opened from another page's bar
+// (#62), it shows over that page ("solo") and closing it goes back there.
 const NowView = (() => {
-  let open = false, seeking = false, timer = null;
+  let open = false, solo = false, seeking = false, timer = null, shownKey = null, busy = false, enterFrom = 1, closing = null;
+  const np = $("np"), art = $("np-art");
   const ICON = (id) => document.getElementById(id).querySelector("svg").outerHTML;
+  const bridge = window.NativeAudioBridge;
   function current() {
-    if (fm) { const t = Find.onAir(); return t ? {title: t.title, artist: t.artist, art: t.art, d: t.duration_s, find: true} : null; }
+    if (fm) { const t = Find.onAir(); return t ? {title: t.title, artist: t.artist, art: t.art, d: t.duration_s, find: true, key: "f" + t.play_id} : null; }
     const t = queue[pos];
-    return t ? {title: t.title, artist: t.artist, art: t.art, d: t.duration_s, id: t.id} : null;
+    return t ? {title: t.title, artist: t.artist, art: t.art, d: t.duration_s, id: t.id, key: `p${pos}:${t.id}`} : null;
   }
   function inPlaylist(c) {                     // a playlist song, or a Find music pick that's been added (+)
     if (c.id) return data.tracks.find((x) => x.id === c.id);
     return data.tracks.find((x) => x.title === c.title && x.artist === c.artist);
   }
+  const button = (id, cls, label) => {
+    const src = document.getElementById(id);
+    return `<button class="${cls || "round"} ${src.classList.contains("primary") ? "primary" : ""} ${src.classList.contains("on") ? "on" : ""}"
+      data-np="${id}" aria-label="${esc(label || src.getAttribute("aria-label") || id)}">${ICON(id)}</button>`;
+  };
+  const setHTML = (el, h) => { if (el.innerHTML !== h) el.innerHTML = h; };
   function paint() {
     if (!open) return;
     const c = current();
     if (!c) return hide();
     $("np-title").textContent = c.title || ""; $("np-artist").textContent = c.artist || "";
-    if ($("np-art").dataset.src !== (c.art || "")) { $("np-art").dataset.src = c.art || ""; $("np-art").src = c.art || ""; }
+    if (art.dataset.src !== (c.art || "")) { art.dataset.src = c.art || ""; art.src = c.art || ""; }
+    if (shownKey !== c.key) {                             // a new song: the cover slides in (unless a swipe is doing it)
+      if (shownKey !== null && !busy) slideIn(enterFrom);
+      shownKey = c.key; enterFrom = 1;
+    }
     $("np-from").innerHTML = `${c.find ? "Finding music for" : "Playing from"}<b id="np-go">${esc(data.name)}</b>`;
     const t = inPlaylist(c);
-    const st = t ? stars(t) : "";
-    if ($("np-stars").innerHTML !== st) $("np-stars").innerHTML = st;
+    // Find music: − / + beside the title, like Spotify's +; its stars below once it's been added. A playlist song: its stars.
+    setHTML($("np-side"), c.find ? button("down", "vote", "Not for this playlist") + button("up", "vote", "Add to this playlist") : (t ? stars(t) : ""));
+    setHTML($("np-stars2"), c.find && t ? stars(t) : "");
     const d = audio.duration || c.d || 0;
     if (!seeking) { $("np-seek").value = d ? Math.round(1000 * audio.currentTime / d) : 0; $("np-pos").textContent = fmt(audio.currentTime); }
     $("np-dur").textContent = fmt(d);
-    const ctl = fm ? [["down", "Not for this playlist", "vote"], ["up", "Add to this playlist", "vote"], ["prev"], ["play"], ["next"]]
-                   : [["shuffle"], ["prev"], ["play"], ["next"]];
-    $("np-controls").innerHTML = ctl.map(([id, label, cls]) => {
-      const src = document.getElementById(id);
-      return `<button class="${cls || "round"} ${src.classList.contains("primary") ? "primary" : ""} ${src.classList.contains("on") ? "on" : ""}"
-        data-np="${id}" aria-label="${esc(label || src.getAttribute("aria-label") || id)}">${ICON(id)}</button>`;
-    }).join("");
+    // Play in the middle: the sides hold shuffle (a playlist) or nothing (Find music).
+    setHTML($("np-controls"), (fm ? "<span></span>" : button("shuffle")) + button("prev") + button("play") + button("next") + "<span></span>");
   }
-  function show() {
+  function show(opts = {}) {
     if (!current()) return;
-    open = true; $("np").hidden = false; document.body.classList.add("np-open");
-    paint(); clearInterval(timer); timer = setInterval(paint, 400);
+    clearTimeout(closing); closing = null;
+    solo = !!opts.solo;
+    document.documentElement.classList.toggle("np-solo", solo);
+    if (!open) {
+      open = true; shownKey = null;
+      np.classList.remove("in", "drag"); np.style.transform = "";
+      np.hidden = false; document.body.classList.add("np-open");
+      paint();
+      void np.offsetHeight;                               // start from below the screen, then slide up
+      requestAnimationFrame(() => np.classList.add("in"));
+    } else paint();
+    clearInterval(timer); timer = setInterval(paint, 400);
+    if (bridge && bridge.npView) bridge.npView(true);
   }
-  function hide() { open = false; $("np").hidden = true; document.body.classList.remove("np-open"); clearInterval(timer); }
-  $("np-close").addEventListener("click", hide);
-  $("np").addEventListener("click", (e) => {
+  // Slide down and away. `focus`: going to the song in the list, so this page stays (even when opened elsewhere).
+  function hide(focus = false) {
+    if (!open) return;
+    open = false; clearInterval(timer);
+    const wasSolo = solo; solo = false;
+    np.classList.remove("drag"); np.style.transform = ""; np.classList.remove("in");
+    document.body.classList.remove("np-open");
+    if (bridge && bridge.npView) bridge.npView(false);
+    const done = () => {
+      closing = null; np.hidden = true;
+      if (!open) document.documentElement.classList.remove("np-solo");
+      if (wasSolo && !focus) {                            // back to the page it was opened over
+        if (bridge && bridge.npClosed) bridge.npClosed();
+        else if (window.__npSoloClosed) window.__npSoloClosed();
+      }
+    };
+    if (focus) { document.documentElement.classList.remove("np-solo"); np.hidden = true; return; }
+    closing = setTimeout(done, 340);
+  }
+  // --- gestures: drag the view down to close it; swipe the cover sideways to change song ------------------------
+  function slideIn(from) {                                // the new cover comes in from one side
+    art.classList.remove("slide");
+    art.style.transform = `translateX(${from * (art.offsetWidth + 40)}px)`; art.style.opacity = "0.4";
+    void art.offsetWidth;
+    art.classList.add("slide"); art.style.transform = ""; art.style.opacity = "";
+  }
+  function canGo(dir) {
+    if (fm) return true;
+    return dir > 0 ? pos + 1 < queue.length : pos > 0;
+  }
+  async function go(dir) {                                // dir 1: next, -1: previous (never just a restart)
+    if (fm) return dir > 0 ? $("next").click() : Find.back(true);
+    return playAt(pos + dir);
+  }
+  let g = null;
+  function down(e) {
+    if (e.button || e.target.closest("button, input, a, #np-go")) return;
+    g = {x: e.clientX, y: e.clientY, t: performance.now(), axis: null, onArt: !!e.target.closest("#np-stage"), id: e.pointerId};
+  }
+  function move(e) {
+    if (!g || e.pointerId !== g.id) return;
+    const dx = e.clientX - g.x, dy = e.clientY - g.y;
+    if (!g.axis) {
+      if (Math.hypot(dx, dy) < 8) return;
+      g.axis = Math.abs(dx) > Math.abs(dy) && g.onArt && !busy ? "x" : dy > 0 ? "y" : "none";
+      try { np.setPointerCapture(e.pointerId); } catch (err) {}
+      if (g.axis === "y") np.classList.add("drag");
+      if (g.axis === "x") art.classList.remove("slide");
+    }
+    if (g.axis === "y") np.style.transform = `translateY(${Math.max(0, dy)}px)`;
+    if (g.axis === "x") {
+      const resist = canGo(dx < 0 ? 1 : -1) ? 1 : 0.25;  // nothing that way: it gives a little, then springs back
+      art.style.transform = `translateX(${dx * resist}px) rotate(${dx * resist / 60}deg)`;
+    }
+  }
+  function up(e) {
+    if (!g || e.pointerId !== g.id) return;
+    const dx = e.clientX - g.x, dy = e.clientY - g.y, v = (g.axis === "x" ? Math.abs(dx) : dy) / Math.max(1, performance.now() - g.t);
+    const axis = g.axis; g = null;
+    if (axis === "y") {
+      np.classList.remove("drag");
+      if (dy > 140 || (dy > 40 && v > 0.6)) hide(); else np.style.transform = "";
+    } else if (axis === "x") {
+      const dir = dx < 0 ? 1 : -1, w = art.offsetWidth + 40;
+      art.classList.add("slide");
+      if ((Math.abs(dx) > art.offsetWidth * 0.28 || (Math.abs(dx) > 40 && v > 0.5)) && canGo(dir)) {
+        busy = true;
+        art.style.transform = `translateX(${-dir * w}px) rotate(${-dir * 6}deg)`; art.style.opacity = "0";
+        setTimeout(async () => {
+          try { await go(dir); } catch (err) {}
+          shownKey = (current() || {}).key ?? null; paint();
+          slideIn(dir); busy = false;
+        }, 200);
+      } else art.style.transform = "";
+    }
+  }
+  np.addEventListener("pointerdown", down);
+  np.addEventListener("pointermove", move);
+  np.addEventListener("pointerup", up);
+  np.addEventListener("pointercancel", up);
+  $("np-close").addEventListener("click", () => hide());
+  np.addEventListener("click", (e) => {
     const b = e.target.closest("[data-np]");
-    if (b) { document.getElementById(b.dataset.np).click(); setTimeout(paint, 150); return; }
+    if (b) {
+      if (b.dataset.np === "next") enterFrom = 1; else if (b.dataset.np === "prev") enterFrom = -1;
+      document.getElementById(b.dataset.np).click(); setTimeout(paint, 150); return;
+    }
     if (e.target.closest("#np-go")) {                     // to the song in the list
       const c = current(), t = c && inPlaylist(c);
-      hide();
+      if (solo) {                                         // opened over another page: this page comes on screen
+        if (bridge && bridge.npOpen) bridge.npOpen(); else if (window.__npFocus) window.__npFocus();
+      }
+      hide(true);
       const row = t && document.querySelector(`li[data-row="${t.id}"]`);
       if (row) { row.scrollIntoView({behavior: "smooth", block: "center"}); row.classList.remove("found"); void row.offsetWidth; row.classList.add("found"); }
     }

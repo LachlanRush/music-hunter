@@ -46,6 +46,14 @@ class MainActivity : Activity() {
         pages.addView(web, 0, fill())
     }
 
+    /** The playing page's full view, laid over the page on screen (#62). */
+    fun overlay(web: WebView) {
+        (web.parent as? ViewGroup)?.removeView(web)
+        pages.addView(web, fill())
+    }
+
+    fun removeOverlay(web: WebView) { if (web.parent === pages) pages.removeView(web) }
+
     /** Swap `web` in once it has drawn, then take the others away (`done`). */
     fun reveal(web: WebView, done: () -> Unit) {
         stage(web)

@@ -110,7 +110,7 @@
   const CSS = `
 #mh-now { position: fixed; left: 0; right: 0; bottom: 0; z-index: 50; background: var(--surface); border-top: 1px solid var(--line);
   padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); font: 400 15px/1.5 var(--body); color: var(--fg); }
-#mh-now .in { max-width: 760px; margin: 0 auto; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+#mh-now .in { cursor: pointer; max-width: 760px; margin: 0 auto; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
 #mh-now .art { width: 44px; height: 44px; border-radius: 4px; background: var(--surface); object-fit: cover; display: block; }
 #mh-now .t { min-width: 0; }
 #mh-now .t b { display: block; font: 600 14px/1.3 var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -149,7 +149,8 @@ body.mh-now-on { padding-bottom: 140px !important; }`;
     $("mh-prev").onclick = () => B.npAction("previoustrack");
     $("mh-next").onclick = () => B.npAction("nexttrack");
     $("mh-shuffle").onclick = () => B.npShuffle();
-    $("mh-open").onclick = $("mh-art").onclick = () => B.npOpen();
+    // Anywhere on the bar but its buttons and slider: the song's full view, over this page (#62).
+    bar.addEventListener("click", (e) => { if (!e.target.closest("button, input, .seek")) B.npOpen(); });
     const seek = $("mh-seek");
     seek.addEventListener("input", () => { seeking = true; if (last && last.d) $("mh-pos").textContent = fmt(seek.value / 1000 * last.d); });
     seek.addEventListener("change", () => { if (last && last.d) B.npSeek(Math.round(seek.value / 1000 * last.d * 1000)); seeking = false; });

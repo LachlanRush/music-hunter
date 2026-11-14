@@ -199,12 +199,55 @@ class App : Application() {
         main.postDelayed({ syncOffline() }, 30 * 60_000L)
     }
 
-    /** Back to the playing page (the bar, the notification). */
-    fun showPlaying() { playingBehind?.let { reveal(it) } }
+    /** Back to the playing page (the notification). */
+    fun showPlaying() {
+        overlay?.let { overlay = null; it.setBackgroundColor(PAGE_BG) }
+        playingBehind?.let { reveal(it) }
+    }
+
+    // --- the playing song's full view over another page (#62): the playing page shows only its view, see-through
+    // around it, laid over the page on screen; closing it takes it away again. ---------------------------------
+    var overlay: WebView? = null
+        private set
+    private val viewOpen = java.util.Collections.newSetFromMap(java.util.WeakHashMap<WebView, Boolean>())
+
+    fun showPlayingView() {
+        val owner = playingBehind ?: return
+        val a = activity ?: return showPlaying()
+        if (overlay === owner) return
+        // The page hides all but the view first (and it starts below the screen), then it's laid on top and slides up.
+        owner.evaluateJavascript("window.__playerControl&&__playerControl('reveal',{solo:true})") {
+            if (playingBehind !== owner || activity !== a) return@evaluateJavascript
+            overlay = owner
+            owner.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            a.overlay(owner)
+        }
+    }
+
+    fun overlayClosed(web: WebView) {
+        if (overlay !== web) return
+        overlay = null
+        activity?.removeOverlay(web)
+        web.setBackgroundColor(PAGE_BG)
+    }
+
+    /** "Playing from …" in the view: the playing page comes on screen. */
+    fun focusOverlay() {
+        val o = overlay ?: return
+        overlay = null
+        o.setBackgroundColor(PAGE_BG)
+        reveal(o)
+    }
+
+    fun viewOpen(web: WebView, open: Boolean) { if (open) viewOpen.add(web) else viewOpen.remove(web) }
 
     /** Back goes up a level, not to wherever I was before: Find music and Results to their playlist, a playlist to
      *  the playlists. Returns false at the top (the app then goes to the background). */
     fun back(): Boolean {
+        // The song's full view closes first.
+        (overlay ?: front?.takeIf { it in viewOpen })?.let {
+            it.evaluateJavascript("window.__playerControl&&__playerControl('close')", null); return true
+        }
         val path = Uri.parse(front?.url ?: return false).path.orEmpty().trimEnd('/')
         val up = Regex("^/find/(\\d+)").find(path)?.let { "/playlist/${it.groupValues[1]}" }
             ?: Regex("^/playlist/(\\d+)/.+").find(path)?.let { "/playlist/${it.groupValues[1]}" }
@@ -226,6 +269,7 @@ class App : Application() {
     }
 
     private fun close(web: WebView) {
+        if (overlay === web) { overlay = null; activity?.removeOverlay(web) }
         kept.values.remove(web)
         audio.forget(web)
         (web.parent as? ViewGroup)?.removeView(web)
@@ -242,7 +286,7 @@ class App : Application() {
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         val web = PageView(webContext)
         loadedAt[web] = android.os.SystemClock.elapsedRealtime()
-        web.setBackgroundColor(android.graphics.Color.parseColor("#161618"))   // never a white flash
+        web.setBackgroundColor(PAGE_BG)   // never a white flash
         web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -303,6 +347,7 @@ class App : Application() {
     companion object {
         private const val TAG = "MusicHunter"
         private const val MAX_KEPT = 4
+        val PAGE_BG = android.graphics.Color.parseColor("#161618")
         private const val MAX_KEPT_AGE_MS = 600_000L
         fun of(context: Context) = context.applicationContext as App
     }
