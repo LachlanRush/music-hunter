@@ -417,5 +417,6 @@ enabled = true
 # Off while our grids are compared with Rekordbox's own analysis (2026-11-14): rekordbox.xml then carries only
 # playlists, folders and stars, so importing it doesn't replace Rekordbox's grid and cues. Grids are still worked out.
 write_xml = false
+rekordbox_shift_s = 0.048          # Rekordbox's times include the M4A encoder's lead-in (2112 samples), ours don't
 cue_bars = 16
 max_memory_cues = 10

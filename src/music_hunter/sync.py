@@ -143,6 +143,10 @@ def _marks(grid: dict | None, duration: float) -> str:
     if not grid or not CONFIG.get("grid", {}).get("write_xml", True):
         return ""
     g = CONFIG.get("grid", {})
+    # Rekordbox counts time from the start of the M4A's audio including the encoder's lead-in (2112 samples, 48 ms),
+    # which our decoder skips: measured on 32 songs, its beats sat 48 ms after ours (2026-11-14).
+    shift = g.get("rekordbox_shift_s", 0.048)
+    grid = {**grid, "first_beat": grid["first_beat"] + shift, "drop": grid["drop"] + shift}
     bar = 60.0 / grid["bpm"] * 4
     step = bar * g.get("cue_bars", 16)
     first = grid["drop"] - step * int(grid["drop"] // step)

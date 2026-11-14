@@ -822,7 +822,7 @@ def quality_receive(lib, track_id: int, body: bytes, ext: str, quality: int, luf
     return True
 
 
-GRID_VERSION = 2   # grids worked out before this are done again (2: tempo read at the playlist's tempo)
+GRID_VERSION = 3   # grids worked out before this are done again (2: tempo read at the playlist's tempo)
 
 
 def grid_claim(lib) -> dict | None:

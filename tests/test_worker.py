@@ -304,6 +304,7 @@ def test_grid_from_the_pis_copy_into_rekordbox(remote, tmp_path, monkeypatch):
     assert sync._marks(grid, 200) == ""                              # off while compared with Rekordbox's (2026-11-14)
     monkeypatch.setitem(CONFIG["grid"], "write_xml", True)
     xml = sync._marks(grid, 200)
-    assert 'Inizio="0.500" Bpm="120.00"' in xml and 'Name="Drop" Type="0" Start="64.500" Num="0"' in xml
+    # (Rekordbox's times include the M4A encoder's 48 ms lead-in, so everything is written 48 ms later)
+    assert 'Inizio="0.548" Bpm="120.00"' in xml and 'Name="Drop" Type="0" Start="64.548" Num="0"' in xml
     starts = [float(x) for x in __import__("re").findall(r'Start="([\d.]+)" Num="-1"', xml)]
-    assert starts == [0.5, 32.5, 64.5, 96.5, 128.5, 160.5, 192.5]    # 16 bars = 32 s at 120 BPM, through the drop
+    assert starts == [0.548, 32.548, 64.548, 96.548, 128.548, 160.548, 192.548]   # 16 bars = 32 s at 120 BPM
