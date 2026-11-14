@@ -414,5 +414,8 @@ similar_bpm_tolerance = 0.06   # Find similar: only songs within this share of t
 # cue A on the drop and memory cues every cue_bars bars counted from the drop.
 [grid]
 enabled = true
+# Off while our grids are compared with Rekordbox's own analysis (2026-11-14): rekordbox.xml then carries only
+# playlists, folders and stars, so importing it doesn't replace Rekordbox's grid and cues. Grids are still worked out.
+write_xml = false
 cue_bars = 16
 max_memory_cues = 10

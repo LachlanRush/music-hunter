@@ -140,7 +140,7 @@ def _marks(grid: dict | None, duration: float) -> str:
     """A track's beat grid and phrase marks for Rekordbox (feedback #54): the grid (TEMPO: the first bar's first beat
     and the tempo), a hot cue A on the drop, and memory cues every [grid] cue_bars bars counted from the drop, named
     by their distance from it ("-16", "Drop", "+16" …), at most [grid] max_memory_cues."""
-    if not grid:
+    if not grid or not CONFIG.get("grid", {}).get("write_xml", True):
         return ""
     g = CONFIG.get("grid", {})
     bar = 60.0 / grid["bpm"] * 4
