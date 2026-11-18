@@ -1049,11 +1049,11 @@ def wait_follow_ups(timeout: float = 30) -> None:
 
 
 @app.delete("/api/playlists/{playlist_id}/tracks/{track_id}")
-def remove_track(playlist_id: int, track_id: int) -> dict:
-    """Move a track to the playlist's Recently deleted list."""
+def remove_track(playlist_id: int, track_id: int, moved: int = 0) -> dict:
+    """Move a track to the playlist's Recently deleted list (`moved`: to another playlist, so just out of this one)."""
     conn = db.connect()
     try:
-        library.remove_from_playlist(conn, playlist_id, track_id)
+        library.remove_from_playlist(conn, playlist_id, track_id, moved=bool(moved))
     except ValueError as e:
         raise HTTPException(404, str(e))
     _after_membership_change(conn, playlist_id)
@@ -1276,6 +1276,7 @@ class WorkDone(BaseModel):
     published: str | None = None
     timings: dict = {}
     notes: dict = {}
+    lane: str | None = None                       # the PC's address it came through ("home", "pia")
 
 
 @app.post("/api/worker/{work_id}/done", dependencies=[Depends(worker_auth)])

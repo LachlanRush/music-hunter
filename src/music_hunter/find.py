@@ -135,23 +135,29 @@ def mark_owned(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: i
 
 def follow_removed_adds(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: int) -> dict:
     """An Add I later remove from the playlist counts as Close from then on (a mild like, not a seed); restoring it
-    makes it an Add again. Returns {'demoted', 'restored'}."""
+    makes it an Add again. Moving it to another playlist isn't removing it (#76): only an Add that's in this
+    playlist's Recently deleted, removed from it for good, or in no playlist at all counts. Returns {'demoted',
+    'restored'}."""
     from .ratings import ADD
 
     CLOSE = CONFIG["ratings"]["unrated_counts_as"] or 2          # Close
 
-    in_playlist = {r[0] for r in lib.execute("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?",
-                                             (playlist_id,))}
+    here = {r[0] for r in lib.execute("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?", (playlist_id,))}
+    anywhere = {r[0] for r in lib.execute("SELECT DISTINCT track_id FROM playlist_tracks")}
+    binned = {r[0] for r in lib.execute("SELECT track_id FROM deleted_tracks WHERE playlist_id = ?"
+                                        " UNION SELECT track_id FROM removed_tracks WHERE playlist_id = ?",
+                                        (playlist_id, playlist_id))}
+    gone = lambda lid: lid not in here and (lid in binned or lid not in anywhere)   # noqa: E731
     rows = sess.execute("SELECT p.id, p.rating, p.demoted, t.library_id FROM plays p JOIN tracks t ON t.id = p.track_id"
                         " WHERE t.library_id IS NOT NULL AND p.is_control = 0"
                         f" AND (p.rating = {ADD} OR p.demoted = 1)").fetchall()
     demoted = restored = 0
     with sess:
         for r in rows:
-            if r["rating"] == ADD and not r["demoted"] and r["library_id"] not in in_playlist:
+            if r["rating"] == ADD and not r["demoted"] and gone(r["library_id"]):
                 sess.execute("UPDATE plays SET rating = ?, demoted = 1 WHERE id = ?", (CLOSE, r["id"]))
                 demoted += 1
-            elif r["demoted"] and r["library_id"] in in_playlist:
+            elif r["demoted"] and not gone(r["library_id"]):
                 sess.execute("UPDATE plays SET rating = ?, demoted = 0 WHERE id = ?", (ADD, r["id"]))
                 restored += 1
     if demoted or restored:

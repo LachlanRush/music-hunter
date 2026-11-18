@@ -220,6 +220,13 @@ def test_removed_add_counts_as_close(setup):
     library.restore_track(lib, pid, lid)
     find.sync_seeds(lib, sess, pid)
     assert rating() == ADD
+    # Moved to another playlist (#76): not a delete — it stays an Add, and isn't in Recently deleted.
+    other = library.create_playlist(lib, "Elsewhere")
+    library.add_to_playlist(lib, other, lid)
+    library.remove_from_playlist(lib, pid, lid, moved=True)
+    find.sync_seeds(lib, sess, pid)
+    assert rating() == ADD
+    assert not lib.execute("SELECT 1 FROM deleted_tracks WHERE playlist_id = ? AND track_id = ?", (pid, lid)).fetchone()
 
 
 def test_tracks_already_in_the_playlist_are_not_offered(setup):

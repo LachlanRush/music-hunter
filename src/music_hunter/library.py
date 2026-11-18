@@ -271,13 +271,18 @@ def add_to_playlist(conn: sqlite3.Connection, playlist_id: int, track_id: int, s
                             (playlist_id, track_id, status)).rowcount > 0
 
 
-def remove_from_playlist(conn: sqlite3.Connection, playlist_id: int, track_id: int) -> None:
-    """Move a track to the playlist's Recently deleted list (stars and audio kept, restorable)."""
+def remove_from_playlist(conn: sqlite3.Connection, playlist_id: int, track_id: int, moved: bool = False) -> None:
+    """Move a track to the playlist's Recently deleted list (stars and audio kept, restorable). `moved`: it went to
+    another playlist (Add to playlist…, unticked here): it just leaves this one, not into Recently deleted (#76)."""
     with conn:
-        n = conn.execute("INSERT OR REPLACE INTO deleted_tracks (playlist_id, track_id, stars, status, added_at,"
-                         " starred_at, bpm_override) SELECT playlist_id, track_id, stars, status, added_at, starred_at,"
-                         " bpm_override FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
-                         (playlist_id, track_id)).rowcount
+        if moved:
+            n = conn.execute("SELECT count(*) FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                             (playlist_id, track_id)).fetchone()[0]
+        else:
+            n = conn.execute("INSERT OR REPLACE INTO deleted_tracks (playlist_id, track_id, stars, status, added_at,"
+                             " starred_at, bpm_override) SELECT playlist_id, track_id, stars, status, added_at, starred_at,"
+                             " bpm_override FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                             (playlist_id, track_id)).rowcount
         conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?", (playlist_id, track_id))
     if not n:
         raise ValueError("That track isn't in this playlist")

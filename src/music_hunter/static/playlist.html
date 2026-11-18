@@ -849,19 +849,20 @@ $("sheet-done").addEventListener("click", async () => {
   const tid = sheetTrack, now = new Set([...$("sheet-list").querySelectorAll("li.on")].map((li) => Number(li.dataset.pick)));
   $("sheet").close();
   const add = [...now].filter((id) => !sheetWas.has(id)), drop = [...sheetWas].filter((id) => !now.has(id));
+  // Still in another playlist: a move, not a delete — it just leaves the unticked ones (#76). Unticked everywhere:
+  // into each one's Recently deleted, as removing it does.
+  const moved = now.size > 0 ? "?moved=1" : "";
   if (drop.includes(PID)) {                               // taken out of this playlist: gone from the list at once
     const t = data.tracks.find((x) => x.id === tid);
     if (t) {
       data.tracks = data.tracks.filter((x) => x.id !== tid);
-      data.deleted = [{...t, deleted_at: nowStamp().slice(0, 19)}, ...(data.deleted || [])];
+      if (!moved) data.deleted = [{...t, deleted_at: nowStamp().slice(0, 19)}, ...(data.deleted || [])];
       render();
     }
   }
   try {
-    await Promise.all([
-      ...add.map((id) => api(`/api/playlists/${id}/tracks`, {track_id: tid})),
-      ...drop.map((id) => api(`/api/playlists/${id}/tracks/${tid}`, undefined, "DELETE")),
-    ]);
+    await Promise.all(add.map((id) => api(`/api/playlists/${id}/tracks`, {track_id: tid})));    // there first, then out
+    await Promise.all(drop.map((id) => api(`/api/playlists/${id}/tracks/${tid}${moved}`, undefined, "DELETE")));
     if (add.length || drop.length) settleLater(300);
   } catch (err) { showError(`Couldn't change the playlists: ${err.message}`); load(); }
 });

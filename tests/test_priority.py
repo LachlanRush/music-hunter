@@ -70,3 +70,11 @@ def test_far_off_song_doesnt_stretch_the_tempo_range():
     assert core["lo"] >= 135 and core["hi"] == 142.2
     few = [(127.0, 5), (142.0, 5), (143.0, 5)]                    # too few left without it: kept
     assert tempo.core_from(few)["lo"] == 127.0
+
+
+def test_age_restricted_video_isnt_youtube_blocking_us():
+    """#77: one age-restricted video paused every download for up to 40 min at a time."""
+    from music_hunter.analysis import refusal
+    assert refusal("ERROR: [youtube] tpzcD8krTrU: Sign in to confirm your age. This video may be inappropriate") is None
+    assert refusal("ERROR: [youtube] x: Sign in to confirm you're not a bot.") == "blocked"
+    assert refusal("ERROR: unable to download video data: HTTP Error 403: Forbidden") == "temporary"

@@ -388,7 +388,10 @@ def youtube_paused(pause_minutes: float | None = None) -> bool:
     return time.time() < (db.get_setting(lib, "worker_paused_until") or 0)
 
 
-BLOCKED = ("confirm you’re not a bot", "confirm you're not a bot", "Sign in to confirm")
+# Only YouTube's bot check means it's refusing this address. "Sign in to confirm your age" (2026-11-18) is one
+# age-restricted video: counted as blocked, it paused both addresses for 5, 10, 20, then 40 min while that one video
+# was handed back again and again, holding up everything behind it (an import waited ~45 min, #77).
+BLOCKED = ("confirm you’re not a bot", "confirm you're not a bot")
 TEMPORARY = ("HTTP Error 403", "HTTP Error 429")
 
 
@@ -604,7 +607,7 @@ def _lane_loop(lane: dict, server: str, base: str, http, local, once: bool, shar
             continue
         blocked_streak = 0
         try:
-            _send(http, base, wid, res)
+            _send(http, base, wid, res, lane["name"])
             with shared["lock"]:
                 shared["done"] += 1
                 n = shared["done"]
@@ -749,7 +752,7 @@ def _post(http, url, **kw):
     return r
 
 
-def _send(http, base: str, wid: int, res: Result) -> None:
+def _send(http, base: str, wid: int, res: Result, lane: str | None = None) -> None:
     import io
 
     buf = io.BytesIO()
@@ -763,7 +766,8 @@ def _send(http, base: str, wid: int, res: Result) -> None:
             _post(http, f"{base}/{wid}/file/art", data=f)
     _post(http, f"{base}/{wid}/file/embedding", data=buf.getvalue())
     meta = {"duration_s": res.duration_s, "lufs": res.lufs, "peak": res.peak, "gain": res.gain, "bpm": res.bpm,
-            "model": res.model, "published": res.published, "timings": res.timings, "notes": res.notes}
+            "model": res.model, "published": res.published, "timings": res.timings, "notes": res.notes,
+            "lane": lane}
     _post(http, f"{base}/{wid}/done", json=meta)
 
 
@@ -931,6 +935,9 @@ def finish(lib, wid: int, meta: dict | None = None, error: str | None = None) ->
     with lib:
         lib.execute("UPDATE work SET state = ?, result = ?, error = ?, updated_at = datetime('now') WHERE id = ?",
                     ("failed" if error is not None else "done", json.dumps(meta or {}), error, wid))
+    if error is None and (meta or {}).get("lane") == "home" and youtube_paused():
+        db.set_setting(lib, "worker_paused_until", 0, log=False)   # home's downloads work again: so do the app's
+        db.log_event(lib, "youtube_unpaused", work_id=wid)
     return True
 
 
