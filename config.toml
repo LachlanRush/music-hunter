@@ -51,7 +51,7 @@ tidal = "tidal"
 [pool]
 # SPEC.md §4.1 steps 5–7
 min_duration_s = 90               # shorter videos are previews or clips (a 30 s "Lose Ya Mind", 2026-11-06): skipped
-target_size = 200                # playable tracks to keep ready (v5: above the gate; 250 in v3–v4, 150 v2, 75 v1)
+target_size = 70                 # playable tracks to keep ready (2026-11-18: above the gate at +1 SD; 200 above the median 11-03 to 11-18, 250 in v3–v4)
 # v3 (SPEC.md §16.4): each seed has its own share of the pool (by seed average, with the floor below), so
 # seeds that few sources know (new, obscure releases) are as present as well-known ones. A share is filled
 # from the top of each of the seed's source lists, by source average.
@@ -64,10 +64,11 @@ multi_source_first = false
 multi_source_always_added = true    # only used when multi_source_first is on
 min_seed_share = 0.3333          # floor on a seed's share, as a fraction of an equal share
 surplus_factor = 1.5             # v5: a seed share holding more than this × its target parks the rest (pool.park_surplus)
+make_room_max = 40               # 2026-11-18 (#67): seeds short of their share get places from seeds over theirs, at most this many at a time
 download_delay_seconds = 5       # minimum gap between downloads (analysis runs in the gap)
 download_format = "bestaudio"    # yt-dlp format; kept in its original container, no re-encode
 # SPEC.md §4.2 refills (run in the background while listening)
-refill_below = 100               # pull a new generation when fewer playable tracks remain and no candidates are left
+refill_below = 40                # pull a new generation when fewer playable tracks remain and no candidates are left (below target_size: 2026-11-18)
 # v4 placeholder Add-seed rule (§17.8, to be discussed): pull when this many seeds haven't been pulled for yet,
 # or when at least one has and refill_min_plays plays have passed since the last pull.
 refill_new_seeds = 5
@@ -118,12 +119,12 @@ add_seed_stars = 3               # an Add's one-off pull is weighted like a seed
 enabled = true
 # v5 (2026-11-03): the gate moved from 1.25 SD below the median to the median itself — only tracks scoring above
 # the middle of everything analysed are played (in pump, pump-like playlists: Off 55% just below vs 25% above).
-cut_sd = 0.0                     # vetoed when the veto score is this many robust SDs below the run's median…
-return_sd = -0.2                 # …and playable again only above this (here: +0.2 SD; two lines: no flip-flopping)
+cut_sd = -1.0                    # vetoed when the veto score is this many robust SDs below the run's median… (2026-11-18: -1 = below +1 SD; was 0, the median)
+return_sd = -1.2                 # …and playable again only above this (here: +1.2 SD; two lines: no flip-flopping)
 grace_ratings = 15               # a track that was playable and falls below keeps its audio this many ratings…
 grace_days = 3                   # …or this many days, whichever comes first (a playlist I'm not using doesn't hold it)
 max_redownloads = 2              # a track whose audio was deleted is downloaded again at most this often…
-redownload_exempt_sd = 1.25      # …unless it rises into the top band
+redownload_exempt_sd = 1.75      # …unless it rises into the top band
 backstop_sd = 2.5                # also vetoed: closeness to seeds this far below the median (clearly out of the area)
 min_analysed = 40                # no vetoes until this many tracks are analysed (statistics need a base)
 seed_top_k = 3                   # closeness to the k nearest seeds (original seeds and Adds)
@@ -139,6 +140,7 @@ rescore_every = 10               # while filling, re-run the veto after this man
 tempo_margin_bpm = 6.0
 tempo_core_stars = 4
 tempo_core_min = 3
+tempo_core_outlier_pct = 6.0       # 2026-11-18 (#71): a 4–5★ song more than this far from the others' typical tempo doesn't widen the range
 tempo_hysteresis_bpm = 2.0
 # v5 (2026-11-06, §18.29): artist history. The average of every earlier rating of songs by the track's artists (Add +1,
 # Close 0, Off −1; several artists pooled; its own song not counted) is artist_share of the veto score, the other parts
@@ -158,8 +160,12 @@ tempo = 1.0                      # closeness to the seeds' typical tempo (log ra
 # SPEC.md §17.5 (v4) — a control is a random *vetoed* track slipped in to test the veto, at a rate the run draws
 # for itself (uniform between these), stores and never shows; each play independently.
 # v5 (2026-11-03): off — vetoed tracks are no longer slipped in (72% Off over 25 plays was enough).
-rate_min = 0.0
-rate_max = 0.0
+# 2026-11-18: back on, as a check on the +1 SD gate — 1 in 8 plays is a random track scoring 0 to +1 (the old gate's
+# playable band; not ones the tempo band or backstop shut out), its audio fetched just in time. Equal min and max: a
+# fixed rate, whatever a run drew before.
+rate_min = 0.125
+rate_max = 0.125
+min_z = 0.0                      # controls come from vetoed tracks scoring at least this
 target = 0                       # 0 = no automatic end: `music-hunter end-run` ends the run and unseals results
                                  # (v3 ended at 25 rated controls; the first v3 run was ended early at 9)
 
@@ -426,3 +432,9 @@ only_on_rekordbox = true
 rekordbox_shift_s = 0.048          # Rekordbox's times include the M4A encoder's lead-in (2112 samples), ours don't
 cue_bars = 16
 max_memory_cues = 20
+
+[priority]
+# 2026-11-18 (priority.py): background work waits while the player asks for something (next song, audio, tempo copy,
+# a rating), until the player has been quiet this long, and never more than max_wait_s at a time.
+quiet_s = 1.5
+max_wait_s = 10.0

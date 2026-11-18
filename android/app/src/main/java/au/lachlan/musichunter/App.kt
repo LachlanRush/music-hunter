@@ -162,6 +162,7 @@ class App : Application() {
             s.put("title", audio.title).put("artist", audio.artist).put("art", audio.art)
                 .put("playing", audio.exo.playWhenReady).put("t", audio.positionS).put("d", audio.durationS)
                 .put("shuffle", ownerShuffle ?: org.json.JSONObject.NULL)
+                .put("votes", audio.votes ?: org.json.JSONObject.NULL)   // Find music: − / + (null otherwise)
         }
         web.evaluateJavascript("window.__nowPlaying&&__nowPlaying($s)", null)
     }

@@ -177,6 +177,8 @@ def update(conn: sqlite3.Connection) -> dict:
 
     Returns counts: {analysed, playable, vetoed, newly_vetoed, returned, active}.
     """
+    from .priority import yield_to_player
+    yield_to_player()                                  # (in the background: after the player's request)
     details = compute(conn)
     if not details:
         return {"analysed": 0, "playable": 0, "vetoed": 0, "newly_vetoed": 0, "returned": 0, "active": False}
@@ -191,7 +193,7 @@ def update(conn: sqlite3.Connection) -> dict:
         for tid, d in details.items():
             r = rows[tid]
             state = r["veto_state"] or "playable"
-            if state in ("dropped", "owned", "surplus"):  # v5: its seeds left the playlist (find.drop_orphans), it's
+            if state in ("dropped", "owned", "surplus", "unavailable"):   # (unavailable: taken down on YouTube)  # v5: its seeds left the playlist (find.drop_orphans), it's
                 pass                                  # already in the playlist (find.mark_owned), or its seed's share
                                                       # was over-full (pool.park_surplus)
             elif active and not r["played"]:

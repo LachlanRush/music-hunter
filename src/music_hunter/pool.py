@@ -156,6 +156,8 @@ class Filler:
 
     def process(self, cid: int, seed: int | None = None) -> bool:
         """Match, download, measure and analyse one candidate for `seed`'s share. True if it joined the pool."""
+        from .priority import yield_to_player
+        yield_to_player()
         if self.conn.execute("SELECT status FROM candidates WHERE id = ?", (cid,)).fetchone()[0] != "candidate":
             return False                      # already handled, e.g. merged into or as a duplicate
         try:
@@ -311,13 +313,16 @@ def park_surplus(conn: sqlite3.Connection) -> int:
         by_owner.setdefault(r["owner"], []).append(r)
     ids = sorted({s.track_id for s in seeds(conn)} | {o for o in by_owner if o is not None})
     target = seed_targets(conn, ids)
+    z = lambda r: json.loads(r["veto"])["z"] if r["veto"] else 0.0   # noqa: E731
     park = []
     for owner, rs in by_owner.items():
+        rs.sort(key=z, reverse=True)
         cap = math.ceil(target.get(owner, 0) * CFG["surplus_factor"])
         if owner is None or len(rs) <= cap:
             continue
-        rs.sort(key=lambda r: json.loads(r["veto"])["z"] if r["veto"] else 0.0, reverse=True)
         park += rs[cap:]
+        by_owner[owner] = rs[:cap]
+    park += make_room(conn, by_owner, target, {s.track_id for s in seeds(conn)})
     if not park:
         return 0
     gone = []
@@ -331,6 +336,47 @@ def park_surplus(conn: sqlite3.Connection) -> int:
     db.log_event(conn, "surplus_parked", tracks=len(park))
     print(f"  Parked {len(park)} tracks over their seed's share")
     return len(park)
+
+
+def make_room(conn: sqlite3.Connection, by_owner: dict, target: dict, current: set) -> list:
+    """Room for seeds short of their share (2026-11-18, feedback #67): with the pool full, a newly starred track (or an
+    Add) only got the places other seeds' tracks gave up as they were played — No More's two new seeds had 6 of their
+    21 places after their pull. Seeds over their share (unstarred ones first) give up their lowest-scoring tracks,
+    down to their share, for as many places as the short seeds have candidates to fill. At most
+    [pool] make_room_max at a time (each place is a download)."""
+    room_max = CFG.get("make_room_max", 40)
+    if not room_max:
+        return []
+    playable = sum(len(rs) for rs in by_owner.values())
+    short = 0
+    for s in current:
+        gap = target.get(s, 0) - len(by_owner.get(s, []))
+        if gap <= 0:
+            continue
+        left = conn.execute(
+            "SELECT count(DISTINCT c.id) FROM candidates c JOIN suggestions g ON g.candidate_id = c.id"
+            " WHERE c.status IN ('candidate', 'not_selected') AND g.seed_track_id = ?", (s,)).fetchone()[0]
+        tried, passed = conn.execute(                    # a seed whose finds mostly fail the veto (e.g. off-tempo)
+            "SELECT count(*), sum(coalesce(t.veto_state, 'playable') != 'vetoed') FROM candidates c"   # would only
+            " JOIN tracks t ON t.id = c.track_id WHERE c.pool_seed = ?", (s,)).fetchone()   # churn downloads
+        if tried >= 10 and (passed or 0) / tried < 0.15:
+            continue
+        short += min(gap, left)
+    need = min(room_max, playable + short - CFG["target_size"], short)
+    out = []
+    while need > 0:
+        over = [(o, len(rs) - target.get(o, 0)) for o, rs in by_owner.items()
+                if o is not None and len(rs) > target.get(o, 0)]
+        if not over:
+            break
+        owner = max(over, key=lambda x: (x[0] not in current, x[1]))[0]   # not a seed any more first, then most over
+        out.append(by_owner[owner].pop())                                   # its lowest-scoring track
+        need -= 1
+    return out
+
+
+GONE = ("Video unavailable", "This video is not available", "Private video", "has been removed",
+        "account associated with this video has been terminated")
 
 
 def restore_audio(conn: sqlite3.Connection, track_id: int) -> bool:
@@ -349,6 +395,10 @@ def restore_audio(conn: sqlite3.Connection, track_id: int) -> bool:
     except Exception as e:
         reason = re.sub(r"\x1b\[[0-9;]*m", "", str(e))
         db.log_event(conn, "audio_restore_failed", track_id=track_id, reason=reason[:200])
+        if any(k in reason for k in GONE):     # taken down: never offered again (it was retried hourly for days)
+            with conn:
+                conn.execute("UPDATE tracks SET veto_state = 'unavailable' WHERE id = ?", (track_id,))
+            return False
         if refusal(reason) == "blocked":       # the Pi shares the PC's address: pause both
             youtube_paused(pause_minutes=CONFIG["worker"]["blocked_pause_minutes"][1])
         return False

@@ -195,6 +195,7 @@ def test_controls_are_random(conn, monkeypatch):
     at that rate; a control is a random pool track."""
     monkeypatch.setitem(config.CONFIG["controls"], "rate_max", 0.1667)       # controls are off in v5 config
     monkeypatch.setitem(config.CONFIG["controls"], "rate_min", 0.10)
+    monkeypatch.setitem(config.CONFIG["controls"], "min_z", None)            # any vetoed track
     from music_hunter import db
     from music_hunter.ratings import control_rate
 
@@ -220,13 +221,15 @@ def test_upcoming_matches_next_play(conn, monkeypatch):
     monkeypatch.setitem(config.CONFIG["controls"], "rate_max", 0.1667)       # controls are off in v5 config
     monkeypatch.setitem(config.CONFIG["controls"], "rate_min", 0.10)
     from music_hunter import veto
+    from music_hunter import ratings
     from music_hunter.ratings import show_next, upcoming
 
     counts = veto.update(conn)
     assert counts["active"] and counts["vetoed"] > 0
     rng = random.Random(5)
     controls = 0
-    for _ in range(40):
+    n = min(40, len(ratings.playable_ids(conn)) - 1)                          # (the +1 SD gate: a small pool)
+    for _ in range(n):
         predicted = upcoming(conn, rng)
         assert upcoming(conn, rng) == predicted            # asking again doesn't redraw
         play = show_next(conn, rng)
@@ -236,7 +239,7 @@ def test_upcoming_matches_next_play(conn, monkeypatch):
         assert (row["veto_state"] == "vetoed") == bool(row["is_control"])
         controls += row["is_control"]
         skip(conn, play)
-    assert 0 < controls < 40
+    assert 0 < controls < n
 
 
 def test_run_ends_and_results_unseal(conn, monkeypatch):

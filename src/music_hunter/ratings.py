@@ -123,6 +123,8 @@ def learning_ratings(conn: sqlite3.Connection) -> int:
 
 def control_rate(conn: sqlite3.Connection, rng=random) -> float:
     """This run's secret control rate: drawn once (uniform in [controls] rate_min–rate_max), stored, never shown."""
+    if CONFIG["controls"]["rate_min"] == CONFIG["controls"]["rate_max"]:   # a fixed rate (2026-11-18)
+        return CONFIG["controls"]["rate_max"]
     rate = db.get_setting(conn, "control_rate")
     if rate is None:
         rate = rng.uniform(CONFIG["controls"]["rate_min"], CONFIG["controls"]["rate_max"])
@@ -161,8 +163,23 @@ def playable_ids(conn: sqlite3.Connection) -> list[int]:
 
 
 def vetoed_ids(conn: sqlite3.Connection) -> list[int]:
-    """Unplayed vetoed tracks — injected controls come from these (SPEC.md §17.5)."""
-    return _ids(conn, "t.origin = 'pool' AND t.veto_state = 'vetoed' AND t.id NOT IN (SELECT track_id FROM plays)")
+    """Unplayed vetoed tracks — injected controls come from these (SPEC.md §17.5): since 2026-11-18 only those
+    scoring at least [controls] min_z and not shut out by the tempo band or the backstop (a check on the +1 SD
+    gate, not on the hard rules). Tracks still holding their audio first, when there are any."""
+    min_z = CONFIG["controls"].get("min_z")
+    out, ready = [], []
+    for tid, v, fp in conn.execute(
+            "SELECT t.id, t.veto, t.file_path FROM tracks t WHERE t.origin = 'pool' AND t.veto_state = 'vetoed'"
+            " AND t.id NOT IN (SELECT track_id FROM plays) ORDER BY t.id"):
+        if min_z is not None:
+            d = json.loads(v) if v else {}
+            rules = d.get("rules", {})
+            if d.get("z", -99) < min_z or rules.get("backstop") or rules.get("tempo_band"):
+                continue
+        out.append(tid)
+        if fp:
+            ready.append(tid)
+    return ready or out
 
 
 def upcoming(conn: sqlite3.Connection, rng=random) -> int | None:

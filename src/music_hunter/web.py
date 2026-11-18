@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from fastapi.staticfiles import StaticFiles
 
-from . import analysis, db, find, jobs, library, ratings, reweight, sync, veto
+from . import analysis, db, find, jobs, library, priority, ratings, reweight, sync, veto
 from .config import CONFIG, path, resolve
 from .results import results as results_data
 from .scoring import pool_tracks
@@ -62,6 +62,7 @@ async def lifespan(app):
 
 
 app = FastAPI(title="music-hunter", lifespan=lifespan)
+app.add_middleware(priority.Middleware)              # background work gives way to the player (priority.py)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -167,6 +168,7 @@ class Worker:
             todo = missing_audio(conn)
             for i, tid in enumerate(todo, 1):
                 self.message = f"Bringing back {i} of {len(todo)} tracks that passed the veto again…"
+                priority.yield_to_player()
                 restore_audio(conn, tid)
                 time.sleep(CONFIG["pool"]["download_delay_seconds"])
             self.state, self.message = "idle", ""
@@ -759,6 +761,20 @@ def set_playlist_tempo(playlist_id: int, body: TempoBody) -> dict:
     return view
 
 
+@app.get("/api/playlists/{playlist_id}/rate/{track_id}")
+def playlist_rate(playlist_id: int, track_id: int) -> dict:
+    """The rate a song from elsewhere plays at in this playlist's Set to BPM (one queued from another playlist's page:
+    it used to play at its own tempo, #63)."""
+    from . import tempo
+
+    conn = db.connect()
+    t = conn.execute("SELECT bpm FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if t is None:
+        raise HTTPException(404, "No such track")
+    rate, note = tempo.rate_for(t["bpm"], tempo.playlist_settings(conn, playlist_id))
+    return {"rate": rate, "tempo_note": note}
+
+
 class OverrideBody(BaseModel):
     bpm: float
 
@@ -911,6 +927,7 @@ def _rescore_all(skip: int | None = None) -> None:
             for p in library.list_playlists(db.connect_library()):
                 if p["id"] == skip or not find.started(p["id"]) or session_worker(p["id"]).state == "running":
                     continue
+                priority.yield_to_player()
                 token = db.SESSION.set(p["id"])
                 try:
                     find.mark_owned(db.connect_library(), db.connect(p["id"]), p["id"])   # a folder's Offs (#49)
@@ -1001,6 +1018,7 @@ def _follow_up(playlist_id: int) -> None:
     while True:
         token = db.SESSION.set(playlist_id)
         try:
+            priority.yield_to_player()
             lib, sess = db.connect_library(), db.connect(playlist_id)
             find.sync_seeds(lib, sess, playlist_id)
             veto.update(sess)
@@ -1153,6 +1171,7 @@ def worker_auth(request: Request) -> None:
 
 @app.post("/api/worker/claim", dependencies=[Depends(worker_auth)])
 def worker_claim():
+    priority.yield_to_player(max_wait=5)              # the PC's next track waits while the player is busy
     item = analysis.claim(db.connect_library())
     return item if item is not None else Response(status_code=204)
 
@@ -1478,8 +1497,13 @@ def next_track() -> dict:
             session_worker().start_if_needed()
             raise HTTPException(409, "No playable tracks in the pool")
         if not restore_audio(conn, track_id):          # an injected vetoed track's audio, if not fetched ahead
-            db.set_setting(conn, "next_draw", None, log=False)
-            raise HTTPException(503, "Couldn't fetch the next track's audio; try again")
+            draw = db.get_setting(conn, "next_draw") or {}
+            playable = ratings.playable_ids(conn)
+            if not (draw.get("control") and playable):
+                db.set_setting(conn, "next_draw", None, log=False)
+                raise HTTPException(503, "Couldn't fetch the next track's audio; try again")
+            import random                              # (YouTube refusing, say): a normal pick instead, at once
+            db.set_setting(conn, "next_draw", {"control": False, "track_id": random.choice(playable)}, log=False)
         play_id = ratings.show_next(conn)
         play = conn.execute("SELECT * FROM plays WHERE id = ?", (play_id,)).fetchone()
     return track_info(conn, play)
@@ -1706,7 +1730,7 @@ def tempo_status(track_id: int, rate: float, pl: int | None = None, ahead: int =
     if rel is None:
         raise HTTPException(404, "Audio not available")
     scope = tempo.scope_for(db.SESSION.get(), pl)
-    st = tempo.status(scope, track_id, rel, rate, urgent=not ahead)
+    st = tempo.status(scope, track_id, rel, rate, urgent=tempo.NEXT if ahead else tempo.NOW)
     q = f"rate={rate}" + (f"&pl={pl}" if pl is not None else "")
     return {"state": st, "url": f"{_base()}/tempo/{track_id}/audio?{q}" if st == "ready" else None}
 
@@ -1738,8 +1762,11 @@ def set_find_tempo(body: TempoBody) -> dict:
     if body.bpm is not None and not 60 <= body.bpm <= 200:
         raise HTTPException(400, "BPM between 60 and 200")
     conn = db.connect()
-    bpm = body.bpm if "bpm" in body.model_fields_set else tempo.session_settings(conn)["bpm"]
-    tempo.save(conn, "same_bpm", body.on, bpm)
+    now = tempo.session_settings(conn)
+    bpm = body.bpm if "bpm" in body.model_fields_set else now["bpm"]
+    if bool(body.on) == bool(now["on"]) and bpm == now["bpm"] and (now.get("engaged") or not body.on):
+        return _tempo_view(now)                              # unchanged (every Find music start sends it): nothing
+    tempo.save(conn, "same_bpm", body.on, bpm)               # to redo, and the song starts sooner (2026-11-18)
     tempo.sync_session(conn, db.SESSION.get())               # copies at another target are deleted
     pid = db.SESSION.get()
 

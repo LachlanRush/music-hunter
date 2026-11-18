@@ -165,7 +165,7 @@ def list_playlists(conn: sqlite3.Connection) -> list[dict]:
         " count(pt.track_id) AS tracks, count(pt.stars) AS seeds,"
         " sum(pt.status = 'added') AS waiting"
         " FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id GROUP BY p.id"
-        " ORDER BY p.played_at IS NULL, p.played_at DESC, p.created_at DESC, p.id DESC")]   # most recently played first
+        " ORDER BY p.position IS NULL, p.position, p.created_at, p.id")]   # as dragged (#69: not by recent plays)
 
 
 def order_home(conn: sqlite3.Connection, items: list[dict]) -> None:
@@ -256,7 +256,7 @@ def track_playlists(conn: sqlite3.Connection, track_id: int) -> list[dict]:
     return [{**dict(r), "image": cover_url(r["id"], r["image_path"]), "has": bool(r["has"])} for r in conn.execute(
         "SELECT p.id, p.name, p.image_path, p.folder_id, EXISTS (SELECT 1 FROM playlist_tracks pt WHERE pt.playlist_id = p.id"
         " AND pt.track_id = ?) AS has FROM playlists p"
-        " ORDER BY p.played_at IS NULL, p.played_at DESC, p.created_at DESC, p.id DESC",
+        " ORDER BY p.position IS NULL, p.position, p.created_at, p.id",
         (track_id,))]
 
 

@@ -549,7 +549,7 @@ def test_similar_playlist(lib, monkeypatch):
     assert [(r["id"], r["status"]) for r in rows] == [(near_low, "added"), (near, "added"), (mid, "added"),
                                                        (me, "member")]
     assert rows[-1]["stars"] == 5
-    assert library.list_playlists(conn)[0]["name"] == "Seed"
+    assert library.list_playlists(conn)[-1]["name"] == "Seed"            # new playlists go last (#69: dragged order)
 
 
 def test_folders_description_and_keeping_deleted(lib, monkeypatch):

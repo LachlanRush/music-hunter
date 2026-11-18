@@ -19,6 +19,7 @@
     constructor() {
       super();
       this._src = ""; this._t = 0; this._d = NaN; this._paused = true; this._ended = false; this._volume = 1;
+      this._advanced = null;           // the player went on by itself to this (setNext); the page hasn't confirmed it
       this.preload = "auto"; this.error = null; this.readyState = 0; this.networkState = 0; this.playbackRate = 1;
       current = this;
     }
@@ -26,9 +27,21 @@
     set src(v) {
       this._src = v.startsWith(PREFIX) ? v : new URL(v, location.href).href;
       this._t = 0; this._d = NaN; this._ended = false; this.readyState = 0; this.error = null;
+      this._advanced = null;
       current = this;
-      B.load(this._src.startsWith(PREFIX) ? this._src.slice(PREFIX.length) : this._src);
+      B.load(plain(this._src));                       // (the same address as an advance: it carries on playing)
     }
+    // What comes after this track (2026-11-18): the player goes on to it by itself when this one ends, even if the
+    // page is slow to hear about it with the screen off. "" for nothing.
+    setNext(v, m = {}) {
+      const u = v ? plain(v.startsWith(PREFIX) ? v : new URL(v, location.href).href) : "";
+      B.setNext(u, m.title || "", m.artist || "", m.art ? new URL(m.art, location.href).href : "");
+    }
+    // The player already went on to `v` by itself (the page set it as next): setting src to it keeps it playing.
+    advancedTo(v) {
+      return !!(this._advanced && v && plain(v.startsWith(PREFIX) ? v : new URL(v, location.href).href) === this._advanced);
+    }
+    get advanced() { return this._advanced; }
     get currentTime() { return this._t; }
     set currentTime(s) { this._t = s; this._ended = false; B.seek(Math.round(s * 1000)); }
     get duration() { return this._d; }
@@ -41,6 +54,7 @@
     load() {}
     _fire(type) { this.dispatchEvent(new Event(type)); }
   }
+  const plain = (u) => (u.startsWith(PREFIX) ? u.slice(PREFIX.length) : u);
   window.Audio = NativeAudio;
 
   // Called by the app: one player event, with where the player is.
@@ -58,6 +72,8 @@
       case "pause": a._paused = true; a._fire("pause"); break;
       case "seeked": a._fire("seeked"); a._fire("timeupdate"); break;
       case "ended": a._ended = true; a._paused = true; a._fire("timeupdate"); a._fire("pause"); a._fire("ended"); break;
+      // Ended, and already playing the next one (still "playing": no pause; the page confirms it by setting src).
+      case "advanced": a._advanced = s.url; a._ended = true; a._t = 0; a._fire("ended"); break;
       case "error": a.error = {code: s.code || 4, message: s.message || ""}; a._fire("error"); break;
     }
   };
@@ -90,6 +106,7 @@
   window.fetch = (u, o) => {
     if (typeof u === "string" && /\/audio\/\d+$/.test(u) && !(o && o.method && o.method !== "GET")) {
       const full = new URL(u, location.href).href;
+      B.preload(full);                               // into the phone's cache, so it starts at once
       return Promise.resolve({ok: true, status: 200, statusText: "", blob: async () => { const b = new Blob([]); urls.set(b, full); return b; }});
     }
     return realFetch(u, o);
@@ -121,6 +138,11 @@
 #mh-now .round svg { width: 15px; height: 15px; fill: currentColor; }
 #mh-now .round.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 #mh-now .round.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+#mh-now .vote { flex: none; width: 34px; height: 34px; border: 0; padding: 0; background: none; color: var(--muted); display: grid; place-items: center; }
+#mh-now .vote[hidden], #mh-now .round[hidden] { display: none; }
+#mh-now .vote svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+#mh-now .vote.on { color: var(--accent); }
+#mh-now .vote.on svg { stroke-width: 3; }
 #mh-now .seek { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center;
   font: 400 11px var(--mono); color: var(--muted); }
 #mh-now input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
@@ -130,6 +152,8 @@ body.mh-now-on { padding-bottom: 140px !important; }`;
   <img class="art" id="mh-art" alt="">
   <div class="t" id="mh-open"><b id="mh-title"></b><span id="mh-artist"></span></div>
   <div class="controls">
+    <button class="vote" id="mh-down" aria-label="Not for this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+    <button class="vote" id="mh-up" aria-label="Add to this playlist" hidden><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></button>
     <button class="round" id="mh-prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M19 5l-9 7 9 7zM5 5h3v14H5z"/></svg></button>
     <button class="round primary" id="mh-play" aria-label="Play"><svg viewBox="0 0 24 24" id="mh-icon">${PLAY}</svg></button>
     <button class="round" id="mh-next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg></button>
@@ -149,6 +173,8 @@ body.mh-now-on { padding-bottom: 140px !important; }`;
     $("mh-prev").onclick = () => B.npAction("previoustrack");
     $("mh-next").onclick = () => B.npAction("nexttrack");
     $("mh-shuffle").onclick = () => B.npShuffle();
+    $("mh-down").onclick = () => B.npVote("down");                // Find music playing elsewhere: its − / + (#74)
+    $("mh-up").onclick = () => B.npVote("up");
     // Anywhere on the bar but its buttons and slider: the song's full view, over this page (#62).
     bar.addEventListener("click", (e) => { if (!e.target.closest("button, input, .seek")) B.npOpen(); });
     const seek = $("mh-seek");
@@ -169,7 +195,10 @@ body.mh-now-on { padding-bottom: 140px !important; }`;
     $("mh-art").style.visibility = s.art ? "visible" : "hidden";
     $("mh-icon").innerHTML = s.playing ? PAUSE : PLAY;
     $("mh-play").setAttribute("aria-label", s.playing ? "Pause" : "Play");
-    const sh = $("mh-shuffle"); sh.hidden = s.shuffle === null || s.shuffle === undefined;
+    const find = s.votes !== null && s.votes !== undefined;   // Find music: − / + in place of shuffle
+    $("mh-down").hidden = $("mh-up").hidden = !find;
+    $("mh-down").classList.toggle("on", s.votes === 1); $("mh-up").classList.toggle("on", s.votes === 3);
+    const sh = $("mh-shuffle"); sh.hidden = find || s.shuffle === null || s.shuffle === undefined;
     sh.classList.toggle("on", !!s.shuffle); sh.setAttribute("aria-pressed", String(!!s.shuffle));
     $("mh-dur").textContent = fmt(s.d);
     if (!seeking) { $("mh-pos").textContent = fmt(s.t); $("mh-seek").value = s.d ? Math.round(1000 * s.t / s.d) : 0; }

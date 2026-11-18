@@ -16,7 +16,8 @@ def test_robust_z_ignores_a_long_tail():
 
 def test_veto_rotates_the_pool(conn):
     counts = veto.update(conn)
-    assert counts["active"] and 0 < counts["vetoed"] < counts["analysed"] * 0.75     # gate at the median
+    assert counts["active"] and counts["analysed"] * 0.5 < counts["vetoed"] < counts["analysed"]   # gate at +1 SD
+    assert counts["playable"] > 0
     rows = conn.execute("SELECT id, file_path, veto_state, veto FROM tracks WHERE origin = 'pool'").fetchall()
     vetoed = [r for r in rows if r["veto_state"] == "vetoed"]
     assert all(r["file_path"] is None for r in vetoed)                  # audio dropped…
@@ -146,11 +147,19 @@ def test_grace_and_redownload_limit(conn, monkeypatch):
     assert row()[0] == "playable" and tid in pool.missing_audio(conn)
 
 
-def test_no_more_slipped_in_tracks(conn):
+def test_checks_below_the_gate_at_a_fixed_rate(conn):
+    """2026-11-18: 1 in 8 plays is a check from 0 to +1 SD, whatever rate the run drew earlier; never a track the
+    tempo band or the backstop shut out."""
     from music_hunter import db
 
     db.set_setting(conn, "control_rate", 0.5, log=False)          # a rate drawn by the run earlier…
-    assert not any(ratings.next_is_control(conn) for _ in range(50))  # …no longer used: controls are off
+    n = sum(ratings.next_is_control(conn) for _ in range(4000))
+    assert 380 < n < 620                                           # …not used: 1 in 8
+    veto.update(conn)
+    for tid in ratings.vetoed_ids(conn):
+        d = json.loads(conn.execute("SELECT veto FROM tracks WHERE id = ?", (tid,)).fetchone()[0])
+        assert d["z"] >= config.CONFIG["controls"]["min_z"]
+        assert not d["rules"]["backstop"] and not d["rules"].get("tempo_band")
 
 
 def test_closeness_follows_seed_stars(conn, monkeypatch):
@@ -177,7 +186,9 @@ def test_fill_draws_on_every_pull(conn):
     assert len(seeds) > 1                                   # earlier pulls' leftovers, though this pull is empty
 
 
-def test_surplus_over_a_seed_share_is_parked(conn):
+def test_surplus_over_a_seed_share_is_parked(conn, monkeypatch):
+    monkeypatch.setitem(config.CONFIG["veto"], "cut_sd", 0.0)            # (a bigger pool: the gate at the median)
+    monkeypatch.setitem(config.CONFIG["veto"], "return_sd", -0.2)
     veto.update(conn)
     playable = [r[0] for r in conn.execute(f"SELECT t.id FROM tracks t WHERE {veto.PLAYABLE}")]
     flood = conn.execute("SELECT min(seed_track_id) FROM suggestions").fetchone()[0]
@@ -200,3 +211,49 @@ def test_surplus_over_a_seed_share_is_parked(conn):
                for t in gone)
     assert set(gone).isdisjoint(ratings.playable_ids(conn))
     assert pool.park_surplus(conn) == 0                               # nothing more to park
+
+
+def test_full_pool_makes_room_for_a_short_seed(conn, monkeypatch):
+    """A seed short of its share gets places from seeds over theirs when the pool is full (#67)."""
+    monkeypatch.setitem(config.CONFIG["veto"], "cut_sd", 0.0)            # (a bigger pool: the gate at the median)
+    monkeypatch.setitem(config.CONFIG["veto"], "return_sd", -0.2)
+    veto.update(conn)
+    playable = [r[0] for r in conn.execute(f"SELECT t.id FROM tracks t WHERE {veto.PLAYABLE}")]
+    seeds = [r[0] for r in conn.execute("SELECT DISTINCT seed_track_id FROM suggestions ORDER BY 1")]
+    flood, short = seeds[0], seeds[-1]
+    with conn:                                              # every playable track belongs to one seed
+        conn.execute("UPDATE candidates SET pool_seed = ? WHERE track_id IS NOT NULL", (flood,))
+        conn.execute("UPDATE candidates SET status = 'candidate' WHERE status = 'not_selected'")
+    left = conn.execute("SELECT count(DISTINCT c.id) FROM candidates c JOIN suggestions g ON g.candidate_id = c.id"
+                        " WHERE c.status = 'candidate' AND g.seed_track_id = ?", (short,)).fetchone()[0]
+    assert left > 0
+    monkeypatch.setitem(config.CONFIG["pool"], "target_size", len(playable))      # the pool is full
+    monkeypatch.setitem(config.CONFIG["pool"], "surplus_factor", 100.0)           # (no ordinary surplus)
+    targets = pool.seed_targets(conn, sorted(set(seeds)))
+    parked = pool.park_surplus(conn)
+    assert parked == config.CONFIG["pool"]["make_room_max"]          # every other seed is short: as many as allowed
+    assert len(playable) - parked >= targets[flood]                   # never below its own share
+    gone = [t for t in playable if conn.execute("SELECT veto_state FROM tracks WHERE id = ?", (t,)).fetchone()[0] == "surplus"]
+    kept = [t for t in playable if t not in gone]
+    z = lambda t: json.loads(conn.execute("SELECT veto FROM tracks WHERE id = ?", (t,)).fetchone()[0])["z"]
+    assert min(z(t) for t in kept) >= max(z(t) for t in gone)        # the lowest-scoring make room
+
+
+def test_no_room_for_a_seed_whose_finds_fail_the_veto(conn, monkeypatch):
+    """A short seed whose analysed finds were nearly all vetoed doesn't get places (they'd only churn downloads)."""
+    veto.update(conn)
+    playable = [r[0] for r in conn.execute(f"SELECT t.id FROM tracks t WHERE {veto.PLAYABLE}")]
+    seeds = [r[0] for r in conn.execute("SELECT DISTINCT seed_track_id FROM suggestions ORDER BY 1")]
+    with conn:
+        conn.execute("UPDATE candidates SET pool_seed = ? WHERE track_id IS NOT NULL", (seeds[0],))
+        conn.execute("UPDATE candidates SET status = 'candidate' WHERE status = 'not_selected'")
+        for s in seeds[1:]:                                 # every other seed: 10 finds, all vetoed
+            for i in range(10):
+                tid = conn.execute("INSERT INTO tracks (origin, artist, title, video_id, veto_state)"
+                                   " VALUES ('pool', 'x', ?, ?, 'vetoed')", (f"t{s}-{i}", f"v{s}-{i}")).lastrowid
+                conn.execute("INSERT INTO candidates (generation, artist, title, song_title, song_artists,"
+                             " is_extended, status, track_id, pool_seed) VALUES (1, 'x', 't', 't', '[]', 0, 'pool', ?, ?)",
+                             (tid, s))
+    monkeypatch.setitem(config.CONFIG["pool"], "target_size", len(playable))
+    monkeypatch.setitem(config.CONFIG["pool"], "surplus_factor", 100.0)
+    assert pool.park_surplus(conn) == 0

@@ -103,6 +103,9 @@ li.found { animation: found 1.4s ease-out; }
 .np-art { width: min(100cqw, 100cqh); aspect-ratio: 1; border-radius: 8px; object-fit: cover; background: var(--raised);
   box-shadow: 0 14px 40px rgba(0,0,0,.55); user-select: none; -webkit-user-drag: none; will-change: transform; }
 .np-art.slide { transition: transform .26s cubic-bezier(.2, .8, .2, 1), opacity .26s; }
+.np-stage > .np-art { grid-area: 1 / 1; }
+.np-art.nb { box-shadow: none; }               /* the songs either side, seen while the cover is swiped (#64) */
+.np-art.nb[hidden] { display: none; }
 .np-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
 .np-meta .t { min-width: 0; }
 .np-meta .t b { display: block; font: 700 22px/1.25 var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -292,7 +295,7 @@ li.dragging { background: var(--raised) !important; box-shadow: 0 10px 28px rgba
       <button class="icon-btn" id="np-close" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <div class="from" id="np-from"></div><span></span>
     </div>
-    <div class="np-stage" id="np-stage"><img class="np-art" id="np-art" alt="" draggable="false" onerror="this.style.visibility='hidden'" onload="this.style.visibility='visible'"></div>
+    <div class="np-stage" id="np-stage"><img class="np-art nb" id="np-prev" alt="" draggable="false" hidden><img class="np-art nb" id="np-next" alt="" draggable="false" hidden><img class="np-art" id="np-art" alt="" draggable="false" onerror="this.style.visibility='hidden'" onload="this.style.visibility='visible'"></div>
     <div class="np-meta"><div class="t"><b id="np-title"></b><span id="np-artist"></span></div><div class="side" id="np-side"></div></div>
     <div class="np-stars2" id="np-stars2"></div>
     <div class="np-seek"><span id="np-pos">0:00</span><input type="range" id="np-seek" min="0" max="1000" value="0" aria-label="Position"><span id="np-dur">0:00</span></div>
@@ -820,8 +823,8 @@ async function openSheet(tid) {
   try {
     const [lists, folders] = await Promise.all([api(`/api/tracks/${tid}/playlists`), api("/api/folders")]);
     sheetWas = new Set(lists.filter((p) => p.has).map((p) => p.id));
-    // The home page's sections, in its order, with this playlist's section first; inside each the most recently
-    // played first (the order the server gives).
+    // The home page's sections, in its order, with this playlist's section first; inside each the home page's
+    // order too (the order the server gives).
     const mine = new Set(folders.filter((f) => !f.builtin).map((f) => f.id));
     const sec = (p) => (mine.has(p.folder_id) ? p.folder_id : 0);
     const here = sec({folder_id: data.folder_id});
@@ -1000,9 +1003,18 @@ function addToQueue(t, quiet = false) {
   if (pos >= 0) queue.splice(pos + 1 + pendingQueued(), 0, item);
   else upNext.push(item);
   if (!quiet) toast(`Added to queue: ${t.title}`);
+  return item;
 }
-// A song queued from another playlist's page: played at its own tempo (this playlist's Set to BPM has no copy of it).
-window.__enqueue = (t) => addToQueue({...t, rate: 1, tempo_note: ""}, true);
+// A song queued from another playlist's page: played at this playlist's Set to BPM too (#63: it used to keep its own
+// tempo); its copy is made when it comes up, like the playing track's.
+window.__enqueue = async (t) => {
+  const mine = data && data.tracks.find((x) => x.id === t.id && x.audio);
+  if (mine) return addToQueue({...mine}, true);
+  const item = addToQueue({...t, rate: 1, tempo_note: ""}, true);   // in line at once; its rate follows a moment later
+  if (!item) return;
+  try { Object.assign(item, await api(`/api/playlists/${PID}/rate/${t.id}`)); } catch (e) { /* own tempo */ }
+  if (queue[pos + 1] && queue[pos + 1].id === item.id) planNext();
+};
 // The rest of the queue rebuilt (shuffle switched, star filter changed): queued songs still come first.
 function rebuildRest() {
   const cur = queue[pos], waiting = queue.slice(pos + 1, pos + 1 + pendingQueued());
@@ -1036,19 +1048,46 @@ async function playAt(i, autoplay = true) {
   pos = i;
   const t = queue[i];
   if (!t) { audio.pause(); return; }
-  fetch(`/api/playlists/${PID}/played`, {method: "POST"}).catch(() => {});   // home lists the most recently played first
+  fetch(`/api/playlists/${PID}/played`, {method: "POST"}).catch(() => {});   // (kept: when each playlist was last played)
   if (shuffle) round.mark(t.id);
+  // The app went on to it by itself (it was set as next): it's already playing, so nothing waits on the Pi (#72).
+  const adv = planned && planned.id === t.id && audio.advancedTo && audio.advancedTo(planned.src) ? planned : null;
+  planned = null;
   showNow(t);                                                      // the player shows it at once; sound follows
-  if (!audio.paused) audio.pause();             // the song being left stops now, not once the next one's ready (#53)
+  if (!audio.paused && !adv) audio.pause();     // the song being left stops now, not once the next one's ready (#53)
   await level(t.gain_db);
   Media.metadata({title: t.title, artist: t.artist, art: t.art});   // no album: we don't know it (not the playlist)
-  audio.src = await tempoPlayer.start(t.id, t.audio, fresh(t).rate);
+  let src;
+  if (adv) { src = adv.src; tempoPlayer.adopt(t.id, adv.rate, fresh(t).rate); }
+  else src = await tempoPlayer.start(t.id, t.audio, fresh(t).rate);
   if (queue[pos] !== t) return;                                   // another track was chosen meanwhile
+  audio.src = src;
   const nextT = queue[pos + 1];
   if (nextT) tempoPlayer.prepare(nextT.id, fresh(nextT).rate);    // its copy first in line after this one
+  planNext();
   Last.save("playlist", t.id);
   if (!autoplay) { setIcon(false); setLoading(false); return; }
   try { await audio.play(); } catch (e) { setIcon(false); setLoading(false); }
+}
+// What comes next, handed to the app's player (2026-11-18): it goes on to it by itself when this song ends, with the
+// stretched copy if it's ready by then, and fetches it ahead so it starts at once. Re-planned when the queue changes
+// and near the end (the copy may have become ready). The browser plays on as before.
+let planned = null, planning = false, plannedAt = 0;
+async function planNext() {
+  if (!audio.setNext || fm || pos < 0 || audio.advanced) return;   // (already gone on: the page is catching up)
+  const n = queue[pos + 1];
+  if (!n || !n.audio) { if (planned) { planned = null; audio.setNext(""); } return; }
+  const want = fresh(n).rate || 1;
+  const near = audio.duration && audio.duration - audio.currentTime < 45;
+  if (planned && planned.id === n.id && planned.want === want && (planned.rate === want || !near || Date.now() - plannedAt < 10000)) return;
+  if (planning) return;
+  planning = true;
+  try {
+    const p = await tempoPlayer.peek(n.id, n.audio, want);
+    if (queue[pos + 1] !== n || fm || audio.advanced) return;
+    planned = {id: n.id, src: p.url, rate: p.rate, want}; plannedAt = Date.now();
+    audio.setNext(p.url, {title: n.title, artist: n.artist, art: n.art});
+  } catch (e) { /* only a head start */ } finally { planning = false; }
 }
 async function level(gainDb) {                                     // loudness levelling (static/media.js)
   if (Media.desktop) {
@@ -1097,6 +1136,7 @@ Media.handlers({                                                    // lock scre
 });
 audio.addEventListener("ended", () => { if (fm) Find.ended(); else if (pos + 1 < queue.length) playAt(pos + 1); });
 audio.addEventListener("timeupdate", () => {
+  if (fm) Find.planAhead(); else planNext();
   if (seeking) return;
   $("pos").textContent = fmt(audio.currentTime); $("dur").textContent = fmt(audio.duration);
   $("seek").value = audio.duration ? Math.round(1000 * audio.currentTime / audio.duration) : 0;
@@ -1300,11 +1340,32 @@ const Find = (() => {
         blobs.set(up.track_id, URL.createObjectURL(await res.blob()));
         for (const [id, url] of blobs) { if (blobs.size <= 3) break; if (url !== audio.src) { URL.revokeObjectURL(url); blobs.delete(id); } }
       }
+      planned = null; plannedAt = 0;
+      planAhead();
     } catch (e) { /* only a speed-up */ }
+  }
+  // The app's player goes on to the pick most likely next by itself when a song ends (2026-11-18, as the playlist
+  // does): with its stretched copy if ready, checked again near the end of the song.
+  let planned = null, planning = false, plannedAt = 0;
+  async function planAhead() {
+    if (!audio.setNext || !fm || !upcoming || fm.viewing !== "current" || planning || audio.advanced) return;
+    if (onAir() && onAir().track_id === upcoming.track_id) return;   // never the song playing now
+    const up = upcoming, want = up.rate || 1, orig = blobs.get(up.track_id);
+    if (!orig) return;
+    const near = audio.duration && audio.duration - audio.currentTime < 45;
+    if (planned && planned.id === up.track_id && (planned.rate === want || !near || Date.now() - plannedAt < 10000)) return;
+    planning = true;
+    try {
+      const p = await fmTempo.peek(up.track_id, orig, want);
+      if (upcoming !== up || !fm || fm.viewing !== "current" || audio.advanced) return;
+      planned = {id: up.track_id, src: p.url, rate: p.rate}; plannedAt = Date.now();
+      audio.setNext(p.url, {title: up.title, artist: up.artist, art: up.art});
+    } catch (e) { /* only a head start */ } finally { planning = false; }
   }
   function startUpcoming() {                              // play the song that's most likely next, before the server says
     if (!upcoming || !blobs.has(upcoming.track_id) || upcoming.title == null) return false;
     shown = {...upcoming, play_id: null};
+    upcoming = null;                                      // (the one after it is fetched once the server confirms)
     fm.viewing = "current"; fm.prev = null; fm.resume = null; fm.step = 0; fm.hist = null;
     fm.cur = shown;
     load(shown, 0, 0);
@@ -1329,25 +1390,32 @@ const Find = (() => {
   }
   async function load(t, startAt, played, autoplay = true) {
     fm.played = played; fm.lastPos = startAt;
+    // Already playing: the app went on to it by itself when the last song ended (set ahead by planAhead).
+    const adv = !startAt && planned && planned.id === t.track_id && audio.advancedTo && audio.advancedTo(planned.src) ? planned : null;
+    planned = null;
     showNow({title: t.title || "", artist: t.artist || "", art: t.art, duration_s: t.duration_s});
     paint();
-    if (!audio.paused) audio.pause();           // the song being left stops now (#53)
+    if (!audio.paused && !adv) audio.pause();   // the song being left stops now (#53)
     await level(t.gain_db);
     Media.metadata({title: t.title, artist: t.artist, art: t.art});
     fetch(`/api/playlists/${PID}/played`, {method: "POST"}).catch(() => {});
-    const src = await fmTempo.start(t.track_id, blobs.get(t.track_id) || t.audio, t.rate);
+    const preloaded = !!adv || blobs.has(t.track_id);
+    let src;
+    if (adv) { src = adv.src; fmTempo.adopt(t.track_id, adv.rate, t.rate); }
+    else src = await fmTempo.start(t.track_id, blobs.get(t.track_id) || t.audio, t.rate);
     if (!fm || onAir() !== t) return;
     audio.src = src;
     const at = startAt / fmTempo.rate();
     if (at) audio.addEventListener("loadedmetadata", () => { audio.currentTime = at; }, {once: true});
     fm.loadStart = performance.now(); fm.waiting = true;
+    fm.startInfo = {preloaded, advanced: !!adv, rate: fmTempo.rate(), want: t.rate || 1};
     showTempoNote();
     Last.save("find", t.track_id);
     if (!autoplay) { fm.waiting = false; setIcon(false); setLoading(false); return; }
     try { await audio.play(); } catch (e) { setIcon(false); setLoading(false); }
   }
   audio.addEventListener("playing", () => {
-    if (fm && fm.waiting) { fm.waiting = false; report("playing", {latency_ms: Math.round(performance.now() - fm.loadStart), preloaded: false}); }
+    if (fm && fm.waiting) { fm.waiting = false; report("playing", {latency_ms: Math.round(performance.now() - fm.loadStart), ...(fm.startInfo || {})}); }
   });
   audio.addEventListener("timeupdate", () => {
     if (!fm) return;
@@ -1455,7 +1523,8 @@ const Find = (() => {
   }
   $("up").addEventListener("click", () => rate(UP));
   $("down").addEventListener("click", () => rate(DOWN));
-  return {start, leave, skip, back, ended, followTempo, state, onAir, rate: () => fmTempo.rate()};
+  const upcomingArt = () => (upcoming && fm && fm.viewing === "current" ? upcoming.art || "" : undefined);
+  return {start, leave, skip, back, ended, followTempo, state, onAir, planAhead, upcomingArt, rate: () => fmTempo.rate()};
 })();
 
 // --- Now playing, full view (feedback #58/#59/#61): the song big, where it's playing from (tap to see it in the list),
@@ -1465,7 +1534,9 @@ const Find = (() => {
 const NowView = (() => {
   let open = false, solo = false, seeking = false, timer = null, shownKey = null, busy = false, enterFrom = 1, closing = null;
   const np = $("np"), art = $("np-art");
-  const ICON = (id) => document.getElementById(id).querySelector("svg").outerHTML;
+  // (without the original's ids: a second "play-icon" in the page took the play/pause updates meant for the
+  // player's own button, so the view's icon stuck — #65)
+  const ICON = (id) => document.getElementById(id).querySelector("svg").outerHTML.replace(/ id="[^"]*"/g, "");
   const bridge = window.NativeAudioBridge;
   function current() {
     if (fm) { const t = Find.onAir(); return t ? {title: t.title, artist: t.artist, art: t.art, d: t.duration_s, find: true, key: "f" + t.play_id} : null; }
@@ -1487,9 +1558,10 @@ const NowView = (() => {
     const c = current();
     if (!c) return hide();
     $("np-title").textContent = c.title || ""; $("np-artist").textContent = c.artist || "";
-    if (art.dataset.src !== (c.art || "")) { art.dataset.src = c.art || ""; art.src = c.art || ""; }
-    if (shownKey !== c.key) {                             // a new song: the cover slides in (unless a swipe is doing it)
-      if (shownKey !== null && !busy) slideIn(enterFrom);
+    const oldSrc = art.dataset.src || "";
+    if (!busy && art.dataset.src !== (c.art || "")) { art.dataset.src = c.art || ""; art.src = c.art || ""; }
+    if (shownKey !== c.key && !busy) {                             // a new song: the cover slides in (unless a swipe is doing it)
+      if (shownKey !== null && !busy) slideIn(enterFrom, oldSrc);
       shownKey = c.key; enterFrom = 1;
     }
     $("np-from").innerHTML = `${c.find ? "Finding music for" : "Playing from"}<b id="np-go">${esc(data.name)}</b>`;
@@ -1539,11 +1611,41 @@ const NowView = (() => {
     closing = setTimeout(done, 340);
   }
   // --- gestures: drag the view down to close it; swipe the cover sideways to change song ------------------------
-  function slideIn(from) {                                // the new cover comes in from one side
+  // The songs either side (#64): seen beside the cover while it's swiped, and the old cover sliding out as the new
+  // one comes in. Find music knows its next pick, not the one before (that's fetched when going back).
+  const nb = {[-1]: $("np-prev"), [1]: $("np-next")};
+  const gap = () => art.offsetWidth + 24;
+  function neighbour(dir) {
+    if (fm) return dir > 0 ? Find.upcomingArt() : undefined;
+    const t = queue[pos + dir];
+    return t ? t.art || "" : undefined;                   // undefined: nothing that way
+  }
+  function place(el, x, anim) {
+    el.classList.toggle("slide", !!anim);
+    el.style.transform = `translateX(${x}px)`;
+  }
+  function showNeighbours(dx) {
+    for (const d of [-1, 1]) {
+      const src = neighbour(d), el = nb[d];
+      if (src === undefined) { el.hidden = true; continue; }
+      if (el.dataset.src !== src) { el.dataset.src = src; if (src) el.src = src; else el.removeAttribute("src"); }
+      el.hidden = false;
+      place(el, dx + d * gap(), false);
+    }
+  }
+  function hideNeighbours() { for (const d of [-1, 1]) { nb[d].hidden = true; nb[d].classList.remove("slide"); } }
+  function slideIn(from, oldSrc) {                        // the new cover comes in from one side, the old goes out
+    const w = gap(), ghost = nb[-from];
     art.classList.remove("slide");
-    art.style.transform = `translateX(${from * (art.offsetWidth + 40)}px)`; art.style.opacity = "0.4";
+    art.style.transform = `translateX(${from * w}px)`; art.style.opacity = "";
+    if (oldSrc !== undefined) {
+      ghost.dataset.src = oldSrc; if (oldSrc) ghost.src = oldSrc; else ghost.removeAttribute("src");
+      ghost.hidden = false; nb[from].hidden = true;
+      place(ghost, 0, false);
+    }
     void art.offsetWidth;
-    art.classList.add("slide"); art.style.transform = ""; art.style.opacity = "";
+    art.classList.add("slide"); art.style.transform = "";
+    if (oldSrc !== undefined) { place(ghost, -from * w, true); setTimeout(hideNeighbours, 280); }
   }
   function canGo(dir) {
     if (fm) return true;
@@ -1571,7 +1673,8 @@ const NowView = (() => {
     if (g.axis === "y") np.style.transform = `translateY(${Math.max(0, dy)}px)`;
     if (g.axis === "x") {
       const resist = canGo(dx < 0 ? 1 : -1) ? 1 : 0.25;  // nothing that way: it gives a little, then springs back
-      art.style.transform = `translateX(${dx * resist}px) rotate(${dx * resist / 60}deg)`;
+      art.style.transform = `translateX(${dx * resist}px)`;
+      showNeighbours(dx * resist);
     }
   }
   function up(e) {
@@ -1586,13 +1689,33 @@ const NowView = (() => {
       art.classList.add("slide");
       if ((Math.abs(dx) > art.offsetWidth * 0.28 || (Math.abs(dx) > 40 && v > 0.5)) && canGo(dir)) {
         busy = true;
-        art.style.transform = `translateX(${-dir * w}px) rotate(${-dir * 6}deg)`; art.style.opacity = "0";
-        setTimeout(async () => {
-          try { await go(dir); } catch (err) {}
-          shownKey = (current() || {}).key ?? null; paint();
-          slideIn(dir); busy = false;
-        }, 200);
-      } else art.style.transform = "";
+        if (neighbour(dir) === undefined) {                // (Find music going back: not known until fetched)
+          hideNeighbours();
+          art.style.transform = `translateX(${-dir * w}px)`; art.style.opacity = "0";
+          setTimeout(async () => {
+            try { await go(dir); } catch (err) {}
+            busy = false; shownKey = (current() || {}).key ?? null; paint();
+            slideIn(dir); art.style.opacity = "";
+          }, 200);
+          return;
+        }
+        const g2 = gap(), incoming = nb[dir];
+        art.style.transform = `translateX(${-dir * g2}px)`;               // the cover goes, its neighbour comes in
+        place(incoming, 0, true); place(nb[-dir], -dir * 2 * g2, true);
+        go(dir).catch(() => {});                                            // the song changes now, not after the slide
+        setTimeout(() => {
+          art.classList.remove("slide");
+          art.dataset.src = incoming.dataset.src || "";
+          if (incoming.dataset.src) art.src = incoming.dataset.src; else art.removeAttribute("src");
+          art.style.transform = ""; art.style.visibility = "visible";
+          hideNeighbours();
+          shownKey = (current() || {}).key ?? null; busy = false; paint();
+        }, 270);
+      } else {
+        art.style.transform = "";
+        for (const d of [-1, 1]) place(nb[d], d * gap(), true);
+        setTimeout(() => { if (!g) hideNeighbours(); }, 280);
+      }
     }
   }
   np.addEventListener("pointerdown", down);

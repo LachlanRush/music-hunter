@@ -13,7 +13,15 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheWriter
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
@@ -28,17 +36,37 @@ import org.json.JSONObject
  * Each track is queued with a stretch of silence behind it: when a track ends the player moves on to the silence and
  * stays "playing" while the page asks the Pi what comes next. A player that had stopped could lose its place in the
  * foreground, and Android doesn't let an app in the background get it back.
+ *
+ * The flow (2026-11-18): the page tells the player what comes next (`setNext`), and the player goes straight on to it
+ * when a track ends, without waiting for the page — with the screen off the page can be slow to hear about it (#72:
+ * a minute's silence until the app was opened). The page then catches up and confirms it (`load` with the same
+ * address keeps it playing). Tracks the page expects to play soon are fetched ahead into a cache on the phone, so a
+ * skip starts at once instead of waiting for the Pi.
  */
 @UnstableApi
 class AudioBridge(private val app: App) {
     private val main = Handler(Looper.getMainLooper())
+
+    /** Tracks fetched ahead (and everything streamed), kept on the phone; emptied at each start, since a track's
+     *  file on the Pi can change under the same address (a better copy, an extended mix). */
+    private val cache: SimpleCache = java.io.File(app.cacheDir, "audio").let { dir ->
+        dir.deleteRecursively()
+        SimpleCache(dir, LeastRecentlyUsedCacheEvictor(400L * 1024 * 1024), StandaloneDatabaseProvider(app))
+    }
+    private val cached = CacheDataSource.Factory().setCache(cache)
+        .setUpstreamDataSourceFactory(DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true))
+        .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+    private val preloader = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val preloading = HashMap<String, CacheWriter>()
+
     val exo: ExoPlayer = ExoPlayer.Builder(app)
         .setAudioAttributes(
             AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true,
         )
         .setHandleAudioBecomingNoisy(true)
         .setWakeMode(C.WAKE_MODE_NETWORK)
-        .setMediaSourceFactory(DefaultMediaSourceFactory(app).setLoadErrorHandlingPolicy(NetworkRetries()))
+        .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(app, cached))   // http: through the cache
+            .setLoadErrorHandlingPolicy(NetworkRetries()))
         .build()
 
     /** The page whose track is loaded; it hears the player's events. */
@@ -47,6 +75,9 @@ class AudioBridge(private val app: App) {
     private var metadata = MediaMetadata.EMPTY
     private var announced = false          // loadedmetadata sent for this track
     private var endedSent = false
+    private var nextUrl: String? = null            // what the page says comes next (queued behind the track)
+    private var nextMeta: MediaMetadata = MediaMetadata.EMPTY
+    private var advancedUrl: String? = null        // went on to it by itself; the page hasn't confirmed it yet
     var pageVisible = true
 
     /** What a page that doesn't own the player has asked for, applied when it presses play. */
@@ -67,8 +98,10 @@ class AudioBridge(private val app: App) {
     fun setVotes(web: WebView, v: Int?) {
         if (v != null && owner != null && owner !== web) return
         if (v == null && votesWeb != null && votesWeb !== web) return
+        val changed = votes != v
         votes = v; votesWeb = if (v == null) null else web
         onVotes()
+        if (changed) onChange()                              // the now playing bar on other pages shows them too
     }
     /** A − or + pressed in the notification: the page that has the music rates the song, as its own buttons do. */
     fun vote(dir: String) = js("window.__playerControl&&__playerControl('$dir')", votesWeb ?: owner)
@@ -115,6 +148,7 @@ class AudioBridge(private val app: App) {
             }
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
                 if (item?.mediaId == SILENCE && !endedSent) { endedSent = true; emit("ended") }
+                if (item?.mediaId == NEXT) advance()
             }
             override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
                 if (reason == Player.DISCONTINUITY_REASON_SEEK && !onSilence()) emit("seeked")
@@ -129,6 +163,38 @@ class AudioBridge(private val app: App) {
 
     private fun onSilence() = exo.currentMediaItem?.mediaId == SILENCE
 
+    /** The track ended and the player went on to the next one by itself: it's now the track; the page is told
+     *  (it ends the old one and confirms this one when it can). */
+    private fun advance() {
+        val url = nextUrl ?: return
+        advancedUrl = url; nextUrl = null
+        metadata = nextMeta
+        main.post {
+            if (exo.currentMediaItemIndex > 0) exo.removeMediaItems(0, exo.currentMediaItemIndex)
+            val last = exo.mediaItemCount - 1
+            if (last >= 0 && exo.getMediaItemAt(last).mediaId == SILENCE)
+                exo.replaceMediaItem(last, exo.getMediaItemAt(last).buildUpon().setMediaMetadata(metadata).build())
+        }
+        announced = false; endedSent = false
+        js("window.__nativeAudio&&__nativeAudio('advanced',${JSONObject().put("url", url)})")
+        onChange()
+    }
+
+    /** Fetch a track into the phone's cache now (the next one, or Find music's pick most likely next). */
+    fun preload(url: String) {
+        if (!url.startsWith("http") || app.offline.localAudio(url) != null) return
+        synchronized(preloading) {
+            if (url in preloading) return
+            while (preloading.size >= 2) preloading.remove(preloading.keys.first())?.cancel()   // the older ones
+        }
+        preloader.execute {
+            val w = CacheWriter(cached.createDataSourceForDownloading(), DataSpec(Uri.parse(url)), null, null)
+            synchronized(preloading) { preloading[url] = w }
+            try { w.cache() } catch (e: Exception) { /* only a speed-up */ }
+            finally { synchronized(preloading) { if (preloading[url] === w) preloading.remove(url) } }
+        }
+    }
+
     private fun announce() {
         if (exo.duration != C.TIME_UNSET && !onSilence()) lastDuration = exo.duration / 1000.0
         if (!announced && exo.duration != C.TIME_UNSET) { announced = true; emit("loadedmetadata") }
@@ -136,7 +202,7 @@ class AudioBridge(private val app: App) {
 
     /** Position updates; less often with the screen off, since nobody's watching the bar. */
     private fun tick() {
-        if (exo.isPlaying && !onSilence()) emit("timeupdate")
+        if (exo.isPlaying && !onSilence() && advancedUrl == null) emit("timeupdate")
         main.postDelayed({ tick() }, if (pageVisible) 250 else 1000)
     }
 
@@ -151,9 +217,12 @@ class AudioBridge(private val app: App) {
     fun action(name: String) = js("window.__nativeAction&&__nativeAction('$name')")
     private fun js(code: String, to: WebView? = null) { main.post { (to ?: owner)?.evaluateJavascript(code, null) } }
 
+    private fun uriFor(url: String): Uri =
+        app.offline.localAudio(url)?.let { Uri.fromFile(it) } ?: Uri.parse(url)              // downloaded: from the phone
+
     private fun items(url: String): List<MediaItem> {
-        val uri = app.offline.localAudio(url)?.let { Uri.fromFile(it) } ?: Uri.parse(url)   // downloaded: from the phone
-        val track = MediaItem.Builder().setMediaId("track").setUri(uri).setMediaMetadata(metadata).build()
+        nextUrl = null; advancedUrl = null
+        val track = MediaItem.Builder().setMediaId("track").setUri(uriFor(url)).setMediaMetadata(metadata).build()
         val silence = MediaItem.Builder().setMediaId(SILENCE).setUri("asset:///silence.ogg").setMediaMetadata(metadata).build()
         return listOf(track, silence)
     }
@@ -169,10 +238,33 @@ class AudioBridge(private val app: App) {
 
     fun load(web: WebView, url: String) {
         if (!mayDrive(web)) { pending.getOrPut(web) { Pending() }.apply { this.url = url; seekMs = 0 }; return }
+        if (advancedUrl != null && url == advancedUrl) {        // the page confirms what's already playing
+            advancedUrl = null
+            announce()
+            if (exo.isPlaying) { emit("play"); emit("playing") }
+            onChange()
+            return
+        }
         announced = false; endedSent = false
         exo.setMediaItems(items(url), 0, 0)
         exo.prepare()
         onChange()
+    }
+
+    /** What comes after the track playing ("" for nothing): queued behind it, and fetched into the cache. */
+    fun setNext(web: WebView, url: String, title: String, artist: String, art: String) {
+        if (owner !== web || !hasTrack) return
+        val meta = MediaMetadata.Builder().setTitle(title).setArtist(artist)
+            .setArtworkUri(if (art.isEmpty()) null else Uri.parse(art)).build()
+        // (only after the track playing: a track the player went on to by itself keeps its "next" id)
+        val i = (exo.currentMediaItemIndex + 1 until exo.mediaItemCount).firstOrNull { exo.getMediaItemAt(it).mediaId == NEXT }
+        if (url.isEmpty()) { if (i != null) exo.removeMediaItem(i); nextUrl = null; return }
+        if (onSilence() || advancedUrl != null) return          // too late, or the page hasn't caught up yet
+        if (nextUrl == url && i != null) { nextMeta = meta; exo.replaceMediaItem(i, exo.getMediaItemAt(i).buildUpon().setMediaMetadata(meta).build()); return }
+        nextUrl = url; nextMeta = meta
+        val item = MediaItem.Builder().setMediaId(NEXT).setUri(uriFor(url)).setMediaMetadata(meta).build()
+        if (i != null) exo.replaceMediaItem(i, item) else exo.addMediaItem(exo.currentMediaItemIndex + 1, item)
+        preload(url)
     }
 
     fun play(web: WebView) {
@@ -207,6 +299,7 @@ class AudioBridge(private val app: App) {
         pending.remove(web)
         if (owner !== web) return
         exo.pause(); exo.clearMediaItems(); announced = false; endedSent = false; owner = null
+        nextUrl = null; advancedUrl = null
         onChange()
     }
 
@@ -230,6 +323,7 @@ class AudioBridge(private val app: App) {
     private fun applyMetadata(m: MediaMetadata) {
         metadata = m
         for (i in 0 until exo.mediaItemCount) {
+            if (i > exo.currentMediaItemIndex && exo.getMediaItemAt(i).mediaId == NEXT) continue   // has its own
             exo.replaceMediaItem(i, exo.getMediaItemAt(i).buildUpon().setMediaMetadata(m).build())
         }
         onChange()
@@ -261,6 +355,7 @@ class AudioBridge(private val app: App) {
 
     companion object {
         private const val SILENCE = "silence"
+        private const val NEXT = "next"
     }
 }
 
@@ -276,6 +371,9 @@ class PageBridge(private val app: App, private val web: WebView) {
     @JavascriptInterface fun stop() = on { audio.stop(web) }
     @JavascriptInterface fun seek(ms: Long) = on { audio.seek(web, ms) }
     @JavascriptInterface fun setVolume(v: Float) = on { audio.setVolume(web, v) }
+    @JavascriptInterface fun setNext(url: String, title: String, artist: String, art: String) =
+        on { audio.setNext(web, url, title, artist, art) }
+    @JavascriptInterface fun preload(url: String) = on { audio.preload(url) }
     // Find music's − / + in the notification: -1 = not Find music, 0 = neither chosen, 1 = −, 3 = +.
     @JavascriptInterface fun setVotes(v: Int) = on { audio.setVotes(web, if (v < 0) null else v) }
     @JavascriptInterface fun setMetadata(title: String, artist: String, album: String, art: String) =
@@ -286,6 +384,7 @@ class PageBridge(private val app: App, private val web: WebView) {
     @JavascriptInterface fun npAction(name: String) = on { if (name == "nexttrack" || name == "previoustrack") audio.action(name) }
     @JavascriptInterface fun npSeek(ms: Long) = on { audio.seekFromBar(ms) }
     @JavascriptInterface fun npShuffle() = on { app.toggleOwnerShuffle() }
+    @JavascriptInterface fun npVote(dir: String) = on { if (dir == "up" || dir == "down") audio.vote(dir) }
     // The bar on another page: the playing song's full view over it (#62). From that view, "Playing from …": its page.
     @JavascriptInterface fun npOpen() = on { if (web === app.overlay) app.focusOverlay() else app.showPlayingView() }
     @JavascriptInterface fun npClosed() = on { app.overlayClosed(web) }

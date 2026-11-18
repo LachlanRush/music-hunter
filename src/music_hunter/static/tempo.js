@@ -59,7 +59,22 @@ const SameBpm = (() => {
     }
     // Render a track's copy ahead of time (the next one), behind the one playing.
     function prepare(id, rate) { if (rate && rate !== 1) status(id, rate, true); }
-    return {start, retune, prepare, rate: () => loaded};
+    // What the next track would start with now: its copy if ready (asked for ahead if not), else the original.
+    async function peek(id, original, rate) {
+      if (rate && rate !== 1) {
+        const s = await status(id, rate, true);
+        if (s.state === "ready") return {url: s.url, rate};
+      }
+      return {url: original, rate: 1};
+    }
+    // The player went on by itself to a track started at `loadedRate`: carry on from there (the copy follows).
+    function adopt(id, loadedRate, rate) {
+      const my = ++token;
+      loaded = loadedRate || 1;
+      onChange(loaded);
+      if (rate && rate !== 1 && rate !== loaded) follow(my, id, rate);
+    }
+    return {start, retune, prepare, peek, adopt, rate: () => loaded};
   }
 
   // The note under the track: what it plays at, and whether its copy is still being made.

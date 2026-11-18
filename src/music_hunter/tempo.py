@@ -16,6 +16,7 @@ Until a track's copy is ready the original plays, and the player swaps the copy 
 import re
 import subprocess
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -67,7 +68,16 @@ def core_from(items) -> dict | None:
     candidates = {round(b * f, 1) for b in pick for f in FOLDS if 60 <= b * f <= 200}
     first = min(candidates or {float(sorted(pick)[len(pick) // 2])}, key=lambda c: (round(spread(c), 3), -c))
     folded = sorted(nearest(b, first) for b in pick)
-    return {"center": round(folded[len(folded) // 2], 1), "lo": round(folded[0], 1), "hi": round(folded[-1], 1)}
+    center = folded[len(folded) // 2]
+    # A song far off the others' tempo doesn't stretch the range (2026-11-18, #71: No More's 4★ Good 4 U at 127 BPM
+    # pulled the range from ~136 down to 127, so slow house got through); there must still be tempo_core_min left.
+    far = v.get("tempo_core_outlier_pct", 0) / 100
+    if far:
+        near = [b for b in folded if abs(b / center - 1) <= far]
+        if len(near) >= v["tempo_core_min"]:
+            folded = near
+            center = folded[len(folded) // 2]
+    return {"center": round(center, 1), "lo": round(folded[0], 1), "hi": round(folded[-1], 1)}
 
 
 def shift_to(core: dict | None, center: float | None) -> dict | None:
@@ -173,64 +183,117 @@ def _copies(scope: str):
             yield f, int(m["track"]), float(m["rate"])
 
 
+NOW, NEXT, LATER = 0, 1, 2                           # the track playing, the one after it, everything else
+
+
 class Renderer:
-    """One render at a time (the Pi has four cores; a render keeps one busy); urgent ones (the track playing) first."""
+    """Stretched copies, most wanted first: the track playing (NOW), then the one after it (NEXT), then every other
+    playlist copy kept ready (LATER). Two lanes (2026-11-18): one only ever takes NOW and NEXT, so the player's copy
+    never waits behind a background render (the Pi has four cores; a render keeps one busy); the other takes
+    anything, the player's first. Background renders run at a lower CPU priority."""
 
     def __init__(self):
-        self.queue: deque = deque()
-        self.pending: set[Path] = set()
+        self.queues: list[deque] = [deque(), deque(), deque()]
+        self.level: dict[Path, int] = {}                 # queued, by priority
         self.failed: dict[Path, str] = {}
-        self.current: Path | None = None                 # being rendered now
+        self.running: dict[str, Path] = {}               # lane -> being rendered now
         self.cancelled: set[Path] = set()                # … and no longer wanted (deleted when it finishes)
         self.cv = threading.Condition()
-        self.thread: threading.Thread | None = None
+        self.threads: dict[str, threading.Thread] = {}
 
-    def submit(self, src: Path, dest: Path, rate: float, urgent: bool) -> str:
+    # (kept for _prune's view of what's queued or running)
+    @property
+    def queue(self) -> list:
+        return [j for q in self.queues for j in q]
+
+    @property
+    def current(self) -> Path | None:
+        return next(iter(self.running.values()), None)
+
+    @property
+    def pending(self) -> set[Path]:
+        return set(self.level) | set(self.running.values())
+
+    def submit(self, src: Path, dest: Path, rate: float, urgent: bool | int) -> str:
+        level = urgent if isinstance(urgent, int) and not isinstance(urgent, bool) else (NOW if urgent else LATER)
         if dest.exists():
             return "ready"
         with self.cv:
             if dest in self.failed:
                 return "failed"
-            if dest in self.pending:
-                if urgent:                                   # move it to the front
-                    for job in list(self.queue):
-                        if job[1] == dest:
-                            self.queue.remove(job)
-                            self.queue.appendleft(job)
+            if dest in self.running.values():
                 return "rendering"
-            self.pending.add(dest)
-            (self.queue.appendleft if urgent else self.queue.append)((src, dest, rate))
-            if self.thread is None or not self.thread.is_alive():
-                self.thread = threading.Thread(target=self._loop, daemon=True, name="tempo")
-                self.thread.start()
-            self.cv.notify()
+            if dest in self.level:
+                if level < self.level[dest] or level == NOW:     # wanted sooner: move it up (NOW: to the front)
+                    q = self.queues[self.level[dest]]
+                    found = [j for j in q if j[1] == dest]
+                    for j in found:
+                        q.remove(j)
+                    if found:
+                        (self.queues[level].appendleft if level == NOW else self.queues[level].append)(found[0])
+                        self.level[dest] = level
+                        self.cv.notify_all()
+                return "rendering"
+            job = (src, dest, rate, time.monotonic())
+            (self.queues[level].appendleft if level == NOW else self.queues[level].append)(job)
+            self.level[dest] = level
+            for lane in ("player", "any"):
+                t = self.threads.get(lane)
+                if t is None or not t.is_alive():
+                    self.threads[lane] = threading.Thread(target=self._loop, args=(lane,), daemon=True,
+                                                          name=f"tempo-{lane}")
+                    self.threads[lane].start()
+            self.cv.notify_all()
         return "rendering"
 
     def drop(self, dests: set[Path]) -> None:
         with self.cv:
-            for job in [j for j in self.queue if j[1] in dests]:
-                self.queue.remove(job)
-                self.pending.discard(job[1])
-            if self.current in dests:
-                self.cancelled.add(self.current)
+            for q in self.queues:
+                for job in [j for j in q if j[1] in dests]:
+                    q.remove(job)
+                    self.level.pop(job[1], None)
+            for dest in self.running.values():
+                if dest in dests:
+                    self.cancelled.add(dest)
 
-    def _loop(self) -> None:
+    def _take(self, lane: str):
+        levels = (NOW, NEXT) if lane == "player" else (NOW, NEXT, LATER)
+        for lv in levels:
+            if self.queues[lv]:
+                job = self.queues[lv].popleft()
+                self.level.pop(job[1], None)
+                return lv, job
+        return None, None
+
+    def _loop(self, lane: str) -> None:
         while True:
             with self.cv:
-                if not self.queue:
-                    return
-                src, dest, rate = self.queue.popleft()
-                self.current = dest
+                lv, job = self._take(lane)
+                if job is None:
+                    if lane == "player":                 # stays a moment: the next player request is often close
+                        self.cv.wait(30)
+                        lv, job = self._take(lane)
+                    if job is None:
+                        self.threads.pop(lane, None)
+                        return
+                src, dest, rate, queued_at = job
+                self.running[lane] = dest
+            t0 = time.monotonic()
             try:
-                _render(src, dest, rate)
+                _render(src, dest, rate, background=lv == LATER)
+                db.log_event(db.connect_library(), "tempo_rendered", file=dest.name, level=lv, lane=lane,
+                             waited_s=round(t0 - queued_at, 1), seconds=round(time.monotonic() - t0, 1))
             except subprocess.CalledProcessError as e:
                 with self.cv:
                     self.failed[dest] = (e.stderr or "")[-300:]
                 db.log_event(db.connect_library(), "tempo_failed", file=src.name, rate=rate, error=self.failed[dest])
+            except Exception as e:  # noqa: BLE001 — a missing source etc.: the lane carries on
+                with self.cv:
+                    self.failed[dest] = str(e)[-300:]
+                db.log_event(db.connect_library(), "tempo_failed", file=src.name, rate=rate, error=str(e)[-300:])
             finally:
                 with self.cv:
-                    self.pending.discard(dest)
-                    self.current = None
+                    self.running.pop(lane, None)
                     if dest in self.cancelled:
                         self.cancelled.discard(dest)
                         dest.unlink(missing_ok=True)
@@ -239,11 +302,11 @@ class Renderer:
 RENDERER = Renderer()
 
 
-def _render(src: Path, dest: Path, rate: float) -> None:
+def _render(src: Path, dest: Path, rate: float, background: bool = False) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    part = dest.with_name(dest.stem + ".part.webm")
+    part = dest.with_name(f"{dest.stem}.{threading.get_ident()}.part.webm")   # two lanes: never the same part file
     try:
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(src), "-vn",
+        subprocess.run(["nice", "-n", "15"] * background + ["ffmpeg", "-v", "error", "-y", "-i", str(src), "-vn",
                         "-af", f"rubberband=tempo={rate}:pitchq=quality",
                         "-c:a", "libopus", "-b:a", f"{CFG['bitrate_kbps']}k", str(part)],
                        check=True, capture_output=True, text=True)
@@ -264,8 +327,9 @@ def _trim() -> None:
         f.unlink(missing_ok=True)
 
 
-def status(scope: str, track_id: int, source: str, rate: float, urgent: bool = True) -> str:
-    """'ready', 'rendering' (queued now if needed) or 'failed'."""
+def status(scope: str, track_id: int, source: str, rate: float, urgent: bool | int = True) -> str:
+    """'ready', 'rendering' (queued now if needed) or 'failed'. `urgent`: True (the track playing), False (kept
+    ready in the background), or a level (NOW, NEXT, LATER)."""
     return RENDERER.submit(resolve(source), target(scope, track_id, rate), round(rate, 3), urgent)
 
 
@@ -273,10 +337,10 @@ def _prune(scope: str, wanted: set[tuple[int, float]]) -> None:
     """Delete this scope's copies that aren't wanted (other targets, tracks gone), and stop queued renders of them."""
     unwanted = {f for f, tid, rate in _copies(scope) if (tid, rate) not in wanted}
     stale = set()
-    for job in list(RENDERER.queue) + ([(None, RENDERER.current, None)] if RENDERER.current else []):
-        m = NAME.match(job[1].name)
+    for dest in [j[1] for j in RENDERER.queue] + list(RENDERER.running.values()):
+        m = NAME.match(dest.name)
         if m and m["scope"] == scope and (int(m["track"]), float(m["rate"])) not in wanted:
-            stale.add(job[1])
+            stale.add(dest)
     RENDERER.drop(stale)
     for f in unwanted:
         f.unlink(missing_ok=True)
