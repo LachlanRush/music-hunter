@@ -32,51 +32,12 @@ class MainActivity : Activity() {
 
     private fun fill() = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
 
-    /** Put a page on screen straight away (the first page). */
+    /** Put the page on screen. */
     fun show(web: WebView) {
         (web.parent as? ViewGroup)?.removeView(web)
         pages.removeAllViews()
         pages.addView(web, fill())
     }
-
-    /** Start drawing a page behind the one on screen. */
-    fun stage(web: WebView) {
-        if (web.parent === pages) return
-        (web.parent as? ViewGroup)?.removeView(web)
-        pages.addView(web, 0, fill())
-    }
-
-    /** The playing page's full view, laid over the page on screen (#62). */
-    fun overlay(web: WebView) {
-        (web.parent as? ViewGroup)?.removeView(web)
-        pages.addView(web, fill())
-    }
-
-    fun removeOverlay(web: WebView) { if (web.parent === pages) pages.removeView(web) }
-
-    /** Swap `web` in once it has drawn, then take the others away (`done`). */
-    fun reveal(web: WebView, done: () -> Unit) {
-        stage(web)
-        var finished = false
-        val finish = {
-            if (!finished) {
-                finished = true
-                android.util.Log.i("MusicHunter", "page swapped in")
-                web.bringToFront()
-                for (i in pages.childCount - 1 downTo 0) pages.getChildAt(i).takeIf { it !== web }?.let { pages.removeView(it) }
-                done()
-            }
-        }
-        if (!hasWindowFocus() && !isResumed()) { finish(); return }
-        web.postVisualStateCallback(++visualRequest, object : WebView.VisualStateCallback() {
-            override fun onComplete(requestId: Long) { web.post { finish() } }
-        })
-        web.postDelayed({ finish() }, 600)                // a page that never reports a frame
-    }
-
-    private var visualRequest = 0L
-    private var resumed = false
-    private fun isResumed() = resumed
 
     private var picking: android.webkit.ValueCallback<Array<android.net.Uri>>? = null
 
@@ -93,14 +54,13 @@ class MainActivity : Activity() {
         }
     }
 
-    override fun onStart() { super.onStart(); app.audio.pageVisible = true; app.pushNowPlaying() }
-    override fun onResume() { super.onResume(); resumed = true; Updater.resume(this) }
-    override fun onPause() { resumed = false; super.onPause() }
+    override fun onStart() { super.onStart(); app.audio.pageVisible = true }
+    override fun onResume() { super.onResume(); Updater.resume(this) }
     override fun onStop() { app.audio.pageVisible = false; super.onStop() }
 
     @Deprecated("Back goes up a level, then leaves the app playing.")
     override fun onBackPressed() {
-        if (!app.back()) moveTaskToBack(true)
+        app.back { handled -> if (!handled) moveTaskToBack(true) }
     }
 
     override fun onDestroy() {

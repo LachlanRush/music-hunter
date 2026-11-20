@@ -146,6 +146,7 @@ body.mh-now-on { padding-bottom: 150px !important; }   /* room for the player ba
 #mh-now .round.on { color: var(--accent) !important; background: transparent !important; }
 #mh-now input[type=range] { accent-color: var(--fg) !important; }
 #mh-now .seek { font-family: var(--body) !important; }
+#mh-now .vote { display: none !important; }       /* − / + only in the full view (#84; app 0.4.5 draws them here) */
 
 /* Nothing (an open menu, a long name) can make the page wider than the screen (feedback #52). */
 html, body { overflow-x: clip; }

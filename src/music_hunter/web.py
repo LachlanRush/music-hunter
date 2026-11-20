@@ -18,7 +18,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from fastapi.staticfiles import StaticFiles
@@ -291,7 +291,8 @@ class ClientEvent(BaseModel):
     data: dict = {}
 
 
-CLIENT_EVENTS = {"playing", "stall", "audio_error", "ended", "page_error", "back", "forward", "restart", "autoplay_stuck"}
+CLIENT_EVENTS = {"playing", "stall", "audio_error", "ended", "page_error", "back", "forward", "restart", "autoplay_stuck",
+                 "skipped"}
 
 
 def _added(conn, play_id: int) -> None:
@@ -413,23 +414,45 @@ def _page(name: str, request: Request | None = None) -> HTMLResponse:
     return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
+def _old_app(request: Request | None) -> bool:
+    """The phone app before 0.5.0 still needs the old pages (it imitates an audio element for them); everything else
+    gets the one-page app (SPEC.md §20). Until that app is updated on the phone."""
+    import re
+
+    m = re.search(r"MusicHunterApp/(\d+)\.(\d+)", (request.headers.get("user-agent", "") if request else ""))
+    return bool(m) and (int(m.group(1)), int(m.group(2))) < (0, 5)
+
+
+def _one_page_app() -> HTMLResponse:
+    """The one-page app (SPEC.md §20), built from web/ into static/app/: every screen's address is the same page,
+    which shows the right screen itself."""
+    f = STATIC / "app" / "index.html"
+    if not f.exists():
+        raise HTTPException(404, "The app isn't built (cd web && npm run build)")
+    return HTMLResponse(f.read_text(), headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/next", response_class=HTMLResponse)
+@app.get("/next/{path:path}", response_class=HTMLResponse)
+def next_app(path: str = ""):
+    """Where the one-page app was tried out beside the old pages: now at the top."""
+    return RedirectResponse("/" + path)
+
+
 @app.get("/shell", response_class=HTMLResponse)
-def shell(request: Request):
-    """The browser shell (static/shell.js): a page opened directly in a browser comes here (its own first script sends
-    it, as /shell#<path>), and the shell shows it in a frame and keeps the playing page alive while I move around.
-    (Chrome sends no Sec-Fetch headers to a plain-http address like the Pi's, so the page decides, not the server.)"""
-    return _page("shell.html")
+def shell():
+    """The old browser shell is gone (the one-page app keeps the music going itself); old tabs land on the app."""
+    return RedirectResponse("/")
 
 
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request) -> str:
-    """v5: the playlist library (SPEC.md §18.1)."""
-    return _page("home.html", request)
+def home(request: Request):
+    return _page("home.html", request) if _old_app(request) else _one_page_app()
 
 
 @app.get("/playlist/{playlist_id}", response_class=HTMLResponse)
-def playlist_page(playlist_id: int, request: Request) -> str:
-    return _page("playlist.html", request)
+def playlist_page(playlist_id: int, request: Request):
+    return _page("playlist.html", request) if _old_app(request) else _one_page_app()
 
 
 # --- v5: playlists and the library (SPEC.md §18.1) -------------------------------------------
@@ -552,9 +575,9 @@ def send_feedback(body: FeedbackBody) -> dict:
 
 
 @app.get("/playlist/{playlist_id}/results", response_class=HTMLResponse)
-def overview_page(playlist_id: int, request: Request) -> str:
+def overview_page(playlist_id: int, request: Request):
     """A playlist's Find music results: Off and Add by score (SPEC.md §18.30)."""
-    return _page("overview.html", request)
+    return _page("overview.html", request) if _old_app(request) else _one_page_app()
 
 
 @app.get("/api/playlists/{playlist_id}/results")

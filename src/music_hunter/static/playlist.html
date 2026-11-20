@@ -1293,7 +1293,7 @@ const Find = (() => {
   const thumb = (t) => (t && t.rating && !t.heard && t.rating !== HEARD ? t.rating : null);
   function paint() {
     const on = !!fm, t = onAir(), r = on ? thumb(t) : null;
-    $("down").hidden = $("up").hidden = !on;
+    $("down").hidden = $("up").hidden = true;           // − / + only in the full view now (#84)
     $("shuffle").hidden = on;
     $("down").classList.toggle("on", r === DOWN); $("up").classList.toggle("on", r === UP);
     $("find").classList.toggle("on", on);
@@ -1328,10 +1328,16 @@ const Find = (() => {
   // records the rating and confirms the pick behind it (2026-11-11: moving on waited ~2 s for the Pi).
   const blobs = new Map();
   let upcoming = null, shown = null;
-  async function prefetch() {
+  async function prefetch(attempt = 0) {
     if (!fm) return;
+    const cur = fm.cur;
     try {
-      const up = await call("/api/upcoming");
+      let up;
+      try { up = await call("/api/upcoming"); }
+      catch (e) {                                        // a check track whose audio the Pi is fetching: ask again
+        if (attempt < 12 && /being fetched/.test(e.message)) setTimeout(() => { if (fm && fm.cur === cur) prefetch(attempt + 1); }, 5000);
+        return;                                          // (2026-11-19: it gave up, so nothing was fetched ahead)
+      }
       if (!up || !up.track_id) return;
       fmTempo.prepare(up.track_id, up.copy_rate);
       upcoming = up;
@@ -1410,11 +1416,37 @@ const Find = (() => {
     if (at) audio.addEventListener("loadedmetadata", () => { audio.currentTime = at; }, {once: true});
     fm.loadStart = performance.now(); fm.waiting = true;
     fm.startInfo = {preloaded, advanced: !!adv, rate: fmTempo.rate(), want: t.rate || 1};
+    watch(t);
     showTempoNote();
     Last.save("find", t.track_id);
     if (!autoplay) { fm.waiting = false; setIcon(false); setLoading(false); return; }
     try { await audio.play(); } catch (e) { setIcon(false); setLoading(false); }
   }
+  // A pick that doesn't start (2026-11-19, #85: two picks in a row never played, and nothing said why): after 6 s
+  // without sound it's logged and loaded again from the Pi's original file; still nothing, and it's skipped. An
+  // error from the player does the same at once.
+  let loadSeq = 0;
+  function watch(t) {
+    const my = ++loadSeq;
+    setTimeout(() => {
+      if (!fm || my !== loadSeq || !fm.waiting || audio.paused || onAir() !== t) return;
+      recover(t, "autoplay_stuck", {});
+    }, 6000);
+  }
+  function recover(t, kind, extra) {
+    report(kind, {track_id: t.track_id, src: String(audio.src || "").slice(-80), retried: !!t._retried, ...extra});
+    if (t._retried) { t._retried = false; return t === fm.cur ? skip() : forward(); }
+    t._retried = true;
+    audio.src = t.audio;                                  // the plain file, not a copy or what was fetched ahead
+    fm.loadStart = performance.now(); fm.waiting = true;
+    audio.play().catch(() => {});
+    watch(t);
+  }
+  audio.addEventListener("error", () => {
+    if (!fm || !onAir()) return;
+    const e = audio.error || {};
+    recover(onAir(), "audio_error", {code: e.code || null, message: String(e.message || "").slice(0, 120)});
+  });
   audio.addEventListener("playing", () => {
     if (fm && fm.waiting) { fm.waiting = false; report("playing", {latency_ms: Math.round(performance.now() - fm.loadStart), ...(fm.startInfo || {})}); }
   });
@@ -1524,7 +1556,8 @@ const Find = (() => {
   }
   $("up").addEventListener("click", () => rate(UP));
   $("down").addEventListener("click", () => rate(DOWN));
-  const upcomingArt = () => (upcoming && fm && fm.viewing === "current" ? upcoming.art || "" : undefined);
+  const upcomingArt = () => (upcoming && fm && fm.viewing === "current" && !(onAir() && onAir().track_id === upcoming.track_id)
+                             ? upcoming.art || "" : undefined);
   return {start, leave, skip, back, ended, followTempo, state, onAir, planAhead, upcomingArt, rate: () => fmTempo.rate()};
 })();
 
@@ -1540,7 +1573,7 @@ const NowView = (() => {
   const ICON = (id) => document.getElementById(id).querySelector("svg").outerHTML.replace(/ id="[^"]*"/g, "");
   const bridge = window.NativeAudioBridge;
   function current() {
-    if (fm) { const t = Find.onAir(); return t ? {title: t.title, artist: t.artist, art: t.art, d: t.duration_s, find: true, key: "f" + t.play_id} : null; }
+    if (fm) { const t = Find.onAir(); return t ? {title: t.title, artist: t.artist, art: t.art, d: t.duration_s, find: true, key: "f" + t.track_id} : null; }   // (not the play: it's only confirmed a moment later, which slid the cover in twice, #79)
     const t = queue[pos];
     return t ? {title: t.title, artist: t.artist, art: t.art, d: t.duration_s, id: t.id, key: `p${pos}:${t.id}`} : null;
   }
@@ -1566,6 +1599,7 @@ const NowView = (() => {
       shownKey = c.key; enterFrom = 1;
     }
     $("np-from").innerHTML = `${c.find ? "Finding music for" : "Playing from"}<b id="np-go">${esc(data.name)}</b>`;
+    if (!busy && !g) prepNeighbours();
     const t = inPlaylist(c);
     // Find music: − / + beside the title, like Spotify's +; its stars below once it's been added. A playlist song: its stars.
     setHTML($("np-side"), c.find ? button("down", "vote", "Not for this playlist") + button("up", "vote", "Add to this playlist") : (t ? stars(t) : ""));
@@ -1625,11 +1659,22 @@ const NowView = (() => {
     el.classList.toggle("slide", !!anim);
     el.style.transform = `translateX(${x}px)`;
   }
+  // A new cover is hidden until it has loaded, so the one it replaces never shows for a moment (#81: swiping showed
+  // the previous song); the covers either side are loaded as soon as they're known, before any swipe.
+  function setSrc(el, src) {
+    if (el.dataset.src === src) return;
+    el.dataset.src = src;
+    if (!src) { el.removeAttribute("src"); el.style.visibility = "visible"; return; }
+    el.style.visibility = "hidden";
+    el.onload = () => { if (el.dataset.src === src) el.style.visibility = "visible"; };
+    el.src = src;
+  }
+  function prepNeighbours() { for (const d of [-1, 1]) { const src = neighbour(d); if (src !== undefined && nb[d].hidden) setSrc(nb[d], src); } }
   function showNeighbours(dx) {
     for (const d of [-1, 1]) {
       const src = neighbour(d), el = nb[d];
       if (src === undefined) { el.hidden = true; continue; }
-      if (el.dataset.src !== src) { el.dataset.src = src; if (src) el.src = src; else el.removeAttribute("src"); }
+      setSrc(el, src);
       el.hidden = false;
       place(el, dx + d * gap(), false);
     }
@@ -1640,7 +1685,7 @@ const NowView = (() => {
     art.classList.remove("slide");
     art.style.transform = `translateX(${from * w}px)`; art.style.opacity = "";
     if (oldSrc !== undefined) {
-      ghost.dataset.src = oldSrc; if (oldSrc) ghost.src = oldSrc; else ghost.removeAttribute("src");
+      setSrc(ghost, oldSrc);
       ghost.hidden = false; nb[from].hidden = true;
       place(ghost, 0, false);
     }

@@ -171,7 +171,12 @@ def test_feedback(lib, monkeypatch):
     assert tuple(row) == ("/find/1", '{"playlist_id": 1, "play_id": 7}', "Stars too small", "new")
     assert client.get("/api/admin/feedback").status_code == 401
     got = client.get("/api/admin/feedback", headers={"Authorization": "Bearer secret"}).json()
-    assert got[0]["context"]["play_id"] == 7 and "feedback.js" in client.get("/").text
+    assert got[0]["context"]["play_id"] == 7
+    # The one-page app at the top; the old pages (with their feedback box) only for the phone app before 0.5.0.
+    assert "/static/app/" in client.get("/").text
+    old = {"User-Agent": "Mozilla/5.0 (Linux; Android 17) MusicHunterApp/0.4.5"}
+    assert "feedback.js" in client.get("/", headers=old).text
+    assert "/static/app/" in client.get("/", headers={"User-Agent": "x MusicHunterApp/0.5.0"}).text
 
 
 def test_no_tempo_copies_until_first_engaged(lib):

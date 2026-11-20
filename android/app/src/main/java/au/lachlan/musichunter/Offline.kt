@@ -86,6 +86,7 @@ class Offline(private val context: Context, private val server: () -> String) {
     // --- the pages' requests ---------------------------------------------------------------------------------------
 
     private fun keepable(path: String) = path == "/" || path.startsWith("/playlist/") || path.startsWith("/static/")
+        || path == "/next" || path.startsWith("/next/") || path == "/api/folders"
         || path == "/api/playlists" || Regex("^/api/playlists/\\d+$").matches(path)
         || path.startsWith("/art/") || path.startsWith("/cover/") || path == "/manifest.webmanifest"
 
@@ -259,7 +260,7 @@ class Offline(private val context: Context, private val server: () -> String) {
 
     /** The pages themselves, so they open without the Pi: home, the playlists, their scripts, styles and fonts. */
     private fun cacheShell(playlists: List<Int>) {
-        val pages = listOf("/", "/api/playlists") + playlists.map { "/playlist/$it" }
+        val pages = listOf("/", "/api/playlists", "/api/folders") + playlists.map { "/playlist/$it" }
         val assets = HashSet<String>()
         for (p in pages) {
             val (type, body) = get(p) ?: continue

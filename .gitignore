@@ -16,3 +16,6 @@ runs/
 
 # My sign-ins (YouTube cookies): never committed, never sent to the Pi
 secrets/
+
+# The new app (web/): its packages; the built app is committed in src/music_hunter/static/app/
+web/node_modules/

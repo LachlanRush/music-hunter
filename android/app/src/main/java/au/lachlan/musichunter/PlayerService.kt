@@ -33,7 +33,7 @@ class PlayerService : MediaSessionService() {
                     ).build()
                 override fun onCustomCommand(s: MediaSession, c: MediaSession.ControllerInfo, command: SessionCommand,
                                              args: Bundle): ListenableFuture<SessionResult> {
-                    when (command.customAction) { UP.customAction -> audio.vote("up"); DOWN.customAction -> audio.vote("down") }
+                    when (command.customAction) { UP.customAction -> audio.action("vote_up"); DOWN.customAction -> audio.action("vote_down") }
                     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
             }).build()
