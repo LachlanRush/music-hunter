@@ -560,6 +560,21 @@ class FeedbackBody(BaseModel):
     context: dict = {}
 
 
+class PlayerEvent(BaseModel):
+    kind: str
+    data: dict = {}
+
+
+@app.post("/api/player-event")
+def player_event(body: PlayerEvent) -> dict:
+    """The one-page app's own player events (a playlist's songs; Find music reports through its session):
+    how long a song took to start."""
+    if body.kind not in {"start"}:
+        raise HTTPException(400, f"Unknown event kind {body.kind!r}")
+    db.log_event(db.connect_library(), f"player_{body.kind}", **{k: v for k, v in body.data.items() if k != "kind"})
+    return {"ok": True}
+
+
 @app.post("/api/feedback")
 def send_feedback(body: FeedbackBody) -> dict:
     """A note from the feedback box (every page), kept in the library database for later review."""

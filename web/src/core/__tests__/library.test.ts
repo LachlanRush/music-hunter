@@ -75,3 +75,11 @@ describe("playlist model", () => {
     expect(m.data.get()!.tracks.map((t) => t.id)).toEqual([1, 2, 3]);
   });
 });
+
+describe("addresses", () => {
+  it("home is / at the top, so going home always leaves the page", async () => {
+    const { href } = await import("../router");
+    expect(href("/")).toBe("/");
+    expect(href("/playlist/3")).toBe("/playlist/3");
+  });
+});

@@ -163,10 +163,12 @@ describe("Find music", () => {
     const e = new FakeEngine();
     const calls: string[] = [];
     let next = 0;
+    const recentPicks = [pick(9, 9, {rating: 3})];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       calls.push(`${init?.method ?? "GET"} ${url}`);
       const body = (v: unknown) => ({ok: true, status: 200, json: async () => v});
       if (url.endsWith("/api/resume")) return body(pick(1, 10));
+      if (url.includes("/api/recent")) return body(recentPicks);
       if (url.endsWith("/api/upcoming")) return body(pick(2 + next, null));
       if (url.endsWith("/api/next")) { next++; return body(pick(1 + next, 10 + next)); }
       if (url.endsWith("/api/rate")) { const b = JSON.parse(String(init!.body)); return body(pick(b.play_id === 10 ? 1 : 2, b.play_id, {rating: b.rating})); }
@@ -180,6 +182,7 @@ describe("Find music", () => {
     expect(p.state.get().track?.id).toBe(1);
     expect(e.preloaded).toContain("/find/7/audio/2");
     expect(p.state.get().nextTrack?.id).toBe(2);
+    expect(p.state.get().prevTrack?.id).toBe(9);              // the previous pick, for swiping back (#87)
     p.vote("down");
     for (let i = 0; i < 3; i++) await flush();
     expect(p.state.get().track?.id).toBe(2);                   // started before the Pi confirmed
@@ -193,6 +196,40 @@ describe("Find music", () => {
     expect(await p.enqueue(track(5), 7)).toBe("find");
     p.play(playlist([track(1)]));                              // Play leaves Find music
     expect(p.state.get().source?.kind).toBe("playlist");
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("Set to BPM copies", () => {
+  it("a playlist refresh while a song starts doesn't make it give up its ready copy", async () => {
+    const { TempoFollower } = await import("../tempo");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const swaps: string[] = [];
+    const f = new TempoFollower({status: async () => { await gate; return {state: "ready", url: "/copy"}; }},
+                                (url) => swaps.push(url));
+    const started = f.start(1, "/orig", 1.06);
+    void f.retune(1, "/orig", 1.06);              // the playlist's data arriving meanwhile
+    release();
+    expect(await started).toBe("/copy");
+    expect(f.loaded).toBe(1.06);
+    expect(swaps).toEqual([]);
+  });
+});
+
+describe("tempo note", () => {
+  it("a song whose copy is ready never says Switching, even for a frame while it starts", async () => {
+    const e = new FakeEngine();
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ok: true, json: async () =>
+      ({state: "ready", url: url.replace("?", "/audio?")})})));
+    const p = new Player(e, () => {});
+    const notes: string[] = [];
+    p.state.subscribe((s) => notes.push(s.note));
+    p.play(playlist([track(1, {rate: 1.06, tempo_note: "Set to 140 BPM"}), track(2, {rate: 1.05, tempo_note: "Set to 140 BPM"})]), {shuffle: false});
+    for (let i = 0; i < 4; i++) await flush();
+    p.next();
+    for (let i = 0; i < 4; i++) await flush();
+    expect(notes.filter((n) => n.startsWith("Switching"))).toEqual([]);
     vi.unstubAllGlobals();
   });
 });

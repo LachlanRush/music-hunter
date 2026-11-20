@@ -67,6 +67,9 @@ export class Player {
   private order: {pid: number; ids: number[]} | null = null;   // Sort by sound like this: Play follows that order
   private tempo: TempoFollower;
   private fm: FindDriver | null = null;
+  // While the next song is being fetched, the bar shows its start, not the song being left: that one's last events
+  // (its pause) arrived meanwhile and flashed its old position and length on the slider (2026-11-20).
+  private held: {t: number; d: number} | null = null;
   private findTempo: {on: boolean; bpm: number | null; target: number} = {on: false, bpm: null, target: 0};
   private hooks: Hooks;
 
@@ -166,6 +169,7 @@ export class Player {
       targetBpm: () => this.findTempo.target || null,
       publish: (extra) => { if (this.fm === fm) this.publish(extra); },
       media: (t) => this.media(t),
+      hold: (h) => { if (this.fm === fm) this.held = h; },
       preload: (id, audio, rate, m, still) => this.preloadFor(id, audio, rate, m, still),
       played: (pid) => this.hooks.played(pid),
       added: (pid) => this.hooks.added(pid),
@@ -179,6 +183,7 @@ export class Player {
   /** Leaving Find music (Play, a song, Find music again): it stops; coming back plays the pick that was on air. */
   leaveFind(): void {
     if (!this.fm) return;
+    this.held = null;
     this.fm.stop();
     this.fm = null;
     this.engine.pause();
@@ -308,14 +313,20 @@ export class Player {
     const t = this.queue[i];
     if (!t || !t.audio) return;
     if (this.shuffle) this.round?.mark(t.id);
+    const t0 = performance.now();
     this.engine.pause();                                  // the song being left stops now (#53)
-    this.publish({loading: true, t: 0, d: t.duration_s || 0});
+    this.held = {t: 0, d: t.duration_s || 0};
+    this.publish({loading: true});
     this.engine.setGain(t.gain_db || 0, this.headroom);
     this.media(t);
     if (this.source) this.hooks.played(this.source.pid);
     const src = await this.tempo.start(t.id, t.audio, this.rateOf(t));
     if (this.queue[this.pos] !== t) return;              // another song was chosen meanwhile
+    // How long it takes to start (logged on the Pi once it plays): the wait for the copy's status, then the engine's.
+    this.starting = {pid: this.source?.pid ?? null, track_id: t.id, t0, status_ms: Math.round(performance.now() - t0),
+                     copy: src !== t.audio, ahead: !!this.ahead && this.aheadUrl === src};
     this.engine.load(src, 0, meta(t));
+    this.held = null;
     if (!autoplay) this.publish({loading: false, playing: false});
     else {
       try {
@@ -338,11 +349,24 @@ export class Player {
   // copy a moment after the song started, starting it again).
   private ahead: {id: number; audio: string; rate: number; got: number; at: number; meta: Meta; still: () => boolean} | null = null;
 
+  private starting: {pid: number | null; track_id: number; t0: number; status_ms: number; copy: boolean; ahead: boolean} | null = null;
+  private aheadUrl: string | null = null;
+
+  private reportStart(): void {
+    const s = this.starting;
+    if (!s) return;
+    this.starting = null;
+    const {t0, ...rest} = s;
+    void fetch("/api/player-event", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({kind: "start", data: {...rest, latency_ms: Math.round(performance.now() - t0)}})}).catch(() => {});
+  }
+
   private async preloadFor(id: number, audio: string, rate: number, m: Meta, still: () => boolean): Promise<void> {
     const at = Date.now();
     const p = await this.tempo.peek(id, audio, rate);
     if (!still()) return;
     this.engine.preload(p.url, m);
+    this.aheadUrl = p.url;
     this.ahead = {id, audio, rate, got: p.rate, at, meta: m, still};
   }
 
@@ -376,6 +400,7 @@ export class Player {
         else this.publish({playing: false});
         return;
       case "playing":
+        this.reportStart();
         this.publish({playing: true, loading: false});
         return;
       case "pause":
@@ -394,6 +419,12 @@ export class Player {
 
   private votesShown: number | null | undefined;
 
+  /** The song's length as it plays: the engine's once it knows, else the song's own over the copy's rate (a stretched
+   *  copy is shorter or longer), so the slider doesn't shift when the engine's figure arrives. */
+  private length(f: Track | null): number {
+    return this.engine.duration || (f?.duration_s ? f.duration_s / (this.tempo.loaded || 1) : 0);
+  }
+
   private publish(extra: Partial<PlayerState> = {}): void {
     const v = this.fm ? this.fm.vote() ?? 0 : null;
     if (v !== this.votesShown) { this.votesShown = v; this.engine.setVotes?.(v); }
@@ -403,13 +434,13 @@ export class Player {
     const prev = this.state.get();
     const want = f ? f.rate || 1 : 1;
     const note = f && f.tempo_note
-      ? (want !== 1 && this.tempo.loaded !== want ? f.tempo_note.replace("Set to", "Switching to") + "…" : f.tempo_note) : "";
+      ? (want !== 1 && !this.held && this.tempo.loaded !== want ? f.tempo_note.replace("Set to", "Switching to") + "…" : f.tempo_note) : "";
     this.state.set({
       ...prev,
       source: this.source, track: f, pos: this.pos, length: this.queue.length,
       playing: extra.playing ?? (t ? !this.engine.paused : false),
       loading: extra.loading ?? prev.loading,
-      t: extra.t ?? this.engine.time, d: extra.d ?? (this.engine.duration || f?.duration_s || 0),
+      t: extra.t ?? this.held?.t ?? this.engine.time, d: extra.d ?? this.held?.d ?? this.length(f),
       rate: this.tempo.loaded, note, shuffle: this.shuffle,
       prevTrack: this.queue[this.pos - 1] ?? null, nextTrack: this.queue[this.pos + 1] ?? null,
       vote: null, canBack: this.pos > 0,
@@ -421,16 +452,17 @@ export class Player {
     const f = p ? asTrack(p) : null;
     const want = f ? f.rate || 1 : 1;
     const note = f && f.tempo_note
-      ? (want !== 1 && this.tempo.loaded !== want ? f.tempo_note.replace("Set to", "Switching to") + "…" : f.tempo_note) : "";
-    const up = fm.viewing === "current" && fm.upcoming && fm.upcoming.title != null ? asTrack(fm.upcoming) : null;
+      ? (want !== 1 && !this.held && this.tempo.loaded !== want ? f.tempo_note.replace("Set to", "Switching to") + "…" : f.tempo_note) : "";
+    const {older, newer} = fm.neighbours();
     this.state.set({
       ...prev,
       source: this.source, track: f, pos: f ? 1 : -1, length: 0,
       playing: extra.playing ?? (f ? !this.engine.paused : false),
       loading: extra.loading ?? prev.loading,
-      t: extra.t ?? this.engine.time, d: extra.d ?? (this.engine.duration || f?.duration_s || 0),
+      t: extra.t ?? this.held?.t ?? this.engine.time, d: extra.d ?? this.held?.d ?? this.length(f),
       rate: this.tempo.loaded, note, shuffle: false,
-      prevTrack: null, nextTrack: up, vote: fm.vote(), canBack: fm.canBack(),
+      prevTrack: older ? asTrack(older) : null, nextTrack: newer ? asTrack(newer) : null,
+      vote: fm.vote(), canBack: fm.canBack(),
     });
   }
 

@@ -71,3 +71,28 @@ if (inApp) {
   window.__mhShowPlaying = () => { if (player.state.get().track) fullView.set(true); };   // the notification was tapped
   void resume();
 }
+
+// --- updates reach an open page ----------------------------------------------------------------------------------
+// The page stays open for hours (in the app it's never reloaded), so a fix pushed to the Pi only arrived after the app
+// was closed for good (2026-11-20: a fix seemed not to work because the phone still ran the page from before it).
+// When the page comes back into view with nothing playing, it checks for a newer build and reloads into it.
+export const build = (document.querySelector('script[src*="/assets/index-"]') as HTMLScriptElement | null)
+  ?.src.match(/index-([^./]+)\.js/)?.[1] ?? "dev";
+
+async function newerBuild(): Promise<boolean> {
+  if (build === "dev") return false;
+  try {
+    const html = await (await fetch("/", {cache: "no-store"})).text();
+    const now = html.match(/index-([^./]+)\.js/)?.[1];
+    return !!now && now !== build;
+  } catch {
+    return false;                                   // offline: the page as it is
+  }
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", async () => {
+    if (document.hidden || player.state.get().playing) return;
+    if (await newerBuild() && !player.state.get().playing) location.reload();
+  });
+}

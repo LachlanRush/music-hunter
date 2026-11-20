@@ -22,6 +22,7 @@ android {
         versionCode = 22
         versionName = "0.5.0"
         buildConfigField("String", "SERVER", "\"${project.findProperty("server") ?: "http://100.90.89.29:8765"}\"")   // -Pserver=… for a test build
+        buildConfigField("boolean", "WEB_DEBUG", "${project.hasProperty("webDebug")}")
         buildConfigField("String", "START_PATH", "\"${project.findProperty("start") ?: "/"}\"")   // -Pstart=/next: the one-page app beside the old pages
     }
     signingConfigs {

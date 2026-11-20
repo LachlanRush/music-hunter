@@ -47,11 +47,40 @@ function load(url: string | null): Promise<number[] | null> {
   return cache.get(url)!;
 }
 
-export async function tint(url: string | null, el: HTMLElement = document.documentElement): Promise<void> {
-  const rgb = await load(url);
+// Colours already worked out, kept on the device too: a playlist opened again takes its colours at once instead of
+// switching to them a moment later (the Find music button and stars flickered into colour, 2026-11-20).
+const known = new Map<string, number[] | null>(Object.entries(stored()));
+
+function stored(): Record<string, number[] | null> {
+  try { return JSON.parse(localStorage.getItem("coverColours") || "{}"); } catch { return {}; }
+}
+
+function remember(url: string, rgb: number[] | null): void {
+  known.set(url, rgb);
+  try {
+    const all = Object.fromEntries([...known].slice(-200));
+    localStorage.setItem("coverColours", JSON.stringify(all));
+  } catch { /* only a speed-up */ }
+}
+
+function apply(rgb: number[] | null, el: HTMLElement): void {
   const [h, s] = rgb ? rgbToHsl(rgb[0], rgb[1], rgb[2]) : [220, 0.12];
   const sat = rgb ? Math.max(0.42, Math.min(s, 0.75)) : 0.12;
   el.style.setProperty("--accent", hsl(h, sat, 0.68));
   el.style.setProperty("--accent-soft", hsl(h, sat, 0.68, 0.16));
   el.style.setProperty("--glow", rgb ? hsl(h, Math.min(sat, 0.6), 0.34, 0.85) : "transparent");
+}
+
+export async function tint(url: string | null, el: HTMLElement = document.documentElement): Promise<void> {
+  if (!url) return apply(null, el);
+  if (known.has(url)) return apply(known.get(url)!, el);
+  const rgb = await load(url);
+  remember(url, rgb);
+  apply(rgb, el);
+}
+
+/** Work out a cover's colours ahead (Home does it for every playlist), so its page opens in them. */
+export async function learn(url: string | null): Promise<void> {
+  if (!url || known.has(url)) return;
+  remember(url, await load(url));
 }

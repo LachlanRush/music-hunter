@@ -2,7 +2,7 @@
   // A playlist: its songs (To rate, Tracks, songs still downloading), stars, menus, dragging within stars, Sort by
   // sound, the star filter, Set to BPM, imports and Add a song, Recently deleted. Find music comes in milestone 3.
   import { onDestroy, onMount, tick } from "svelte";
-  import { api, busy, type Track } from "../core/api";
+  import { api, busy, cached, keep, type Track } from "../core/api";
   import { tint } from "../core/colour";
   import { findSimilar, playlistModel } from "../core/library";
   import { go, route } from "../core/router";
@@ -31,7 +31,7 @@
 
   const p = $derived($data);
   $effect(() => { if (p) player.update(p); });
-  $effect(() => { void tint(p?.image ?? null); });
+  $effect.pre(() => { void tint(p?.image ?? null); });   // (before drawing, so a known colour is there at once)
   $effect(() => { if (p) document.title = `${p.name} · Music Hunter`; });
 
   const mine = $derived($s.source?.kind === "playlist" && $s.source.pid === id && !$s.source.deleted);
@@ -229,16 +229,27 @@
   // --- Find music: its picks play in the bar; tapping it again (or Play, Shuffle, a song) goes back to the playlist ---
   interface FindState { state: "none" | "preparing" | "ready" | "error"; playable?: number; early_start?: number;
                         message?: string; seeds: number; starred: number; }
-  let find = $state<FindState | null>(null);
+  // Shown as last seen at once (the button flickered into colour once its state arrived), then refreshed.
+  // svelte-ignore state_referenced_locally
+  let find = $state<FindState | null>(cached<FindState>(`next:find:${id}`));
   let findTimer: ReturnType<typeof setTimeout> | undefined;
   async function loadFind() {
     try { find = await api<FindState>(`/api/playlists/${id}/find`); } catch { return; }
+    keep(`next:find:${id}`, find);
     clearTimeout(findTimer);
     if (find.state === "preparing") findTimer = setTimeout(loadFind, 3000);
   }
   async function findMusic() {
-    if (!find || !p) return;
-    if (find.state === "ready") { if (finding) player.leaveFind(); else player.startFind(p); return; }
+    if (!p) return;
+    if (!find) await loadFind();                    // (tapped before its state had loaded: it did nothing, #88)
+    if (!find) return;
+    if (find.state === "ready") {
+      // Loaded but paused (the app reopening on Find music's pick): it plays; playing: back to the playlist.
+      if (finding && !$s.playing) player.toggle();
+      else if (finding) player.leaveFind();
+      else player.startFind(p);
+      return;
+    }
     if (find.state === "none" && !await ask(`Find music for "${p.name}"?`, {ok: "Find music",
         detail: `New tracks are found from your ${find.seeds} ${find.starred ? "starred " : ""}track${find.seeds > 1 ? "s" : ""}, `
           + `downloaded and analysed: a few minutes before the first ${find.early_start ?? 20} are ready; the rest keep coming in the background.`})) return;

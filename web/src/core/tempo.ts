@@ -28,7 +28,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export class TempoFollower {
   /** The rate of what's loaded now (1 = the original). */
   loaded = 1;
-  private token = 0;
+  private song = 0;            // which song this is about (a new song or a stop cancels everything before it)
+  private op = 0;              // the latest change for this song (a newer setting overrides an older one)
+  private starting = false;    // a song's start is still asking for its copy
 
   constructor(private source: TempoSource, private swap: (url: string, rate: number, loadedRate: number) => void,
               private changed: (rate: number) => void = () => {}) {}
@@ -37,18 +39,23 @@ export class TempoFollower {
     this.source = source;
   }
 
-  /** The address to start a song with: its copy if ready, else `original` (the copy follows when it's ready). */
+  /** The address to start a song with: its copy if ready, else `original` (the copy follows when it's ready).
+   *  (2026-11-20, "Switching to 140 BPM…" while Bang's copy was ready: a playlist refresh during the start counted as
+   *  a newer change, so the start gave up on the copy it had been told was ready; and a failed check was never
+   *  repeated. Now only a new song cancels a start, and a failed check is tried again.) */
   async start(id: number, original: string, rate: number): Promise<string> {
-    const my = ++this.token;
+    const song = ++this.song, op = ++this.op;
     this.loaded = 1;
     if (rate && rate !== 1) {
+      this.starting = true;
       const s = await this.source.status(id, rate);
-      if (s.state === "ready" && s.url && my === this.token) {
+      if (song === this.song) this.starting = false;
+      if (song === this.song && s.state === "ready" && s.url) {
         this.loaded = rate;
         this.changed(rate);
         return s.url;
       }
-      if (s.state === "rendering") void this.follow(my, id, rate);
+      if (song === this.song) void this.follow(song, op, id, rate);
     }
     this.changed(1);
     return original;
@@ -65,19 +72,20 @@ export class TempoFollower {
 
   /** The setting changed while a song plays: change copies, keeping the place in the music. */
   async retune(id: number, original: string, rate: number): Promise<void> {
-    const my = ++this.token;
     rate = rate || 1;
-    if (rate === this.loaded) return;
+    if (this.starting || rate === this.loaded) return;       // (its start is still sorting out its copy)
+    const song = this.song, op = ++this.op;
     if (rate === 1) return this.doSwap(original, 1);
     const s = await this.source.status(id, rate);
-    if (my !== this.token) return;
+    if (song !== this.song || op !== this.op) return;
     if (s.state === "ready" && s.url) this.doSwap(s.url, rate);
-    else if (s.state === "rendering") void this.follow(my, id, rate);
+    else void this.follow(song, op, id, rate);
   }
 
   /** Nothing to follow any more (another song, or stopped). */
   cancel(): void {
-    this.token++;
+    this.song++;
+    this.starting = false;
   }
 
   private doSwap(url: string, rate: number): void {
@@ -87,14 +95,15 @@ export class TempoFollower {
     this.changed(rate);
   }
 
-  private async follow(my: number, id: number, rate: number): Promise<void> {
+  private async follow(song: number, op: number, id: number, rate: number): Promise<void> {
+    let failures = 0;
     for (let i = 0; i < 300; i++) {                 // up to ~10 minutes (a queue of renders on the Pi)
       await sleep(2000);
-      if (my !== this.token) return;
+      if (song !== this.song || op !== this.op) return;
       const s = await this.source.status(id, rate);
-      if (my !== this.token) return;
+      if (song !== this.song || op !== this.op) return;
       if (s.state === "ready" && s.url) return this.doSwap(s.url, rate);
-      if (s.state !== "rendering") return;
+      if (s.state !== "rendering" && ++failures > 5) return;   // (a check that failed, e.g. the network: again)
     }
   }
 }

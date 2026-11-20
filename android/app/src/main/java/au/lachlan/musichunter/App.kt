@@ -94,7 +94,7 @@ class App : Application() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWeb(url: String): WebView {
-        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG || BuildConfig.WEB_DEBUG)   // -PwebDebug: a signed build I can inspect
         val web = PageView(webContext)
         web.setBackgroundColor(PAGE_BG)   // never a white flash
         web.settings.apply {

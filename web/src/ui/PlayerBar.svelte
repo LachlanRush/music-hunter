@@ -1,6 +1,7 @@
 <script lang="ts">
   // The one player bar: on every screen, never replaced, so nothing moves or changes when the screen does.
   import { engine, fmt, player } from "../app";
+  import Marquee from "./Marquee.svelte";
   import { NEXT, PAUSE, PLAY, PREV, SHUFFLE } from "./icons";
 
   let { onopen }: { onopen: () => void } = $props();
@@ -30,7 +31,7 @@
     <div class="player-in" onclick={open}>
       {#if $s.track.art}<img class="art" src={$s.track.art} alt="">{:else}<div class="art"></div>{/if}
       <div class="t">
-        <b>{$s.track.title}</b><span>{$s.track.artist}</span>
+        <b><Marquee text={$s.track.title} active={$s.playing} /></b><span>{$s.track.artist}</span>
         {#if $s.note}<span class="meta">{$s.note}</span>{/if}
       </div>
       <div class="controls">

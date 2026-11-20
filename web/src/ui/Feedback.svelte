@@ -1,6 +1,6 @@
 <script lang="ts">
   // A note for later review, at the bottom of every screen; the screen and the song playing go with it.
-  import { player } from "../app";
+  import { build, player } from "../app";
 
   let open = $state(false);
   let text = $state("");
@@ -11,7 +11,7 @@
     if (!text.trim()) return;
     sending = true;
     const s = player.state.get();
-    const context = s.track ? {playlist_id: s.source?.pid, track_id: s.track.id, position_s: Math.round(s.t), app: "next"} : {app: "next"};
+    const context = s.track ? {playlist_id: s.source?.pid, track_id: s.track.id, position_s: Math.round(s.t), app: "next", build} : {app: "next", build};
     try {
       const r = await fetch("/api/feedback", {method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({text, page: location.pathname, context})});

@@ -4,6 +4,7 @@
   // of one or to a new place, and a section by its name row; a playlist's options by right-click or a held finger.
   import { onMount } from "svelte";
   import { api, busy, cached, keep, type Folder, type Job, type Playlist, type PlaylistSummary } from "../core/api";
+  import { learn } from "../core/colour";
   import { playlistModel } from "../core/library";
   import { go, href } from "../core/router";
   import { askText, ask } from "./dialogs";
@@ -51,7 +52,11 @@
       timer = l.some((p) => busy(p.job)) ? setTimeout(load, 3000) : undefined;
       if (!prefetched) {                                // each playlist's data ahead, so opening one is instant
         prefetched = true;
-        l.forEach((p, i) => setTimeout(() => void playlistModel(p.id).load(), 300 + 150 * i));
+        l.forEach((p, i) => setTimeout(() => {
+          void playlistModel(p.id).load();
+          void learn(p.image);
+          void api(`/api/playlists/${p.id}/find`).then((f) => keep(`next:find:${p.id}`, f)).catch(() => {});
+        }, 300 + 150 * i));
       }
     } catch (e) {
       error = `Can't reach the music-hunter server: ${(e as Error).message}`;

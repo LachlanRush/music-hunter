@@ -237,10 +237,13 @@ def queue_next(conn: sqlite3.Connection, track_ids: list[int]) -> list[int]:
             if not t["file_path"]:
                 held = conn.execute("SELECT id, undo_path FROM plays WHERE track_id = ? AND undo_path IS NOT NULL"
                                     " ORDER BY id DESC LIMIT 1", (tid,)).fetchone()
-                if held is None or not resolve(held["undo_path"]).exists():
-                    continue
-                conn.execute("UPDATE tracks SET file_path = ? WHERE id = ?", (held["undo_path"], tid))
-                conn.execute("UPDATE plays SET undo_path = NULL WHERE id = ?", (held["id"],))
+                if held is not None and resolve(held["undo_path"]).exists():
+                    conn.execute("UPDATE tracks SET file_path = ? WHERE id = ?", (held["undo_path"], tid))
+                    conn.execute("UPDATE plays SET undo_path = NULL WHERE id = ?", (held["id"],))
+                else:                                  # its audio has gone: fetched again (2026-11-20)
+                    from .pool import restore_audio
+                    if not restore_audio(conn, tid):
+                        continue
             ok.append(tid)
     db.set_setting(conn, "play_next", ok)
     db.set_setting(conn, "next_draw", None, log=False)

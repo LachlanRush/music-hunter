@@ -24,7 +24,8 @@ export function parse(pathname: string): Route {
 export const route = new Store<Route>(typeof location === "undefined" ? {name: "home"} : parse(location.pathname));
 
 export function href(path: string): string {
-  return BASE + (path === "/" ? "" : path);
+  // (At the top, home is "/": an empty address would leave the browser where it is, so back arrows did nothing.)
+  return BASE + (path === "/" ? "" : path) || "/";
 }
 
 export function go(path: string, replace = false): void {

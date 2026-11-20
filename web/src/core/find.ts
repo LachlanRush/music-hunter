@@ -49,6 +49,7 @@ export interface FindHost {
   targetBpm(): number | null;
   publish(extra?: {loading?: boolean; t?: number; d?: number}): void;
   media(t: Track): void;
+  hold(h: {t: number; d: number} | null): void;     // what the slider shows until the song is loaded
   preload(id: number, audio: string, rate: number, meta: {title: string; artist: string; art: string | null},
           still: () => boolean): Promise<void>;
   played(pid: number): void;
@@ -72,8 +73,10 @@ export class FindDriver {
   prev: Pick | null = null;
   viewing: "current" | "previous" = "current";
   upcoming: Pick | null = null;
-  private resumeAt: {pos: number; played: number} | null = null;
   private hist: Pick[] | null = null;
+  /** The last few rated picks before the one on air, newest first (where back goes), fetched ahead so the full
+   *  view can show the previous cover while swiping, and back starts at once (#87). */
+  private recent: Pick[] = [];
   private step = 0;
   private shown: Pick | null = null;
   private played = 0;
@@ -114,7 +117,26 @@ export class FindDriver {
   }
 
   canBack(): boolean {
-    return !!this.cur;
+    return this.viewing === "current" ? this.recent.length > 0 : !!this.hist && this.step < this.hist.length;
+  }
+
+  /** The picks either side of the one on air: older (back) and newer (forward, or the next pick). */
+  neighbours(): {older: Pick | null; newer: Pick | null} {
+    if (this.viewing === "current") {
+      const up = this.upcoming && this.upcoming.title != null ? this.upcoming : null;
+      return {older: this.recent[0] ?? null, newer: up};
+    }
+    const h = this.hist ?? [];
+    return {older: h[this.step] ?? null, newer: this.step > 1 ? h[this.step - 2] : this.cur};
+  }
+
+  private async loadRecent(): Promise<void> {
+    const cur = this.cur;
+    if (!cur?.play_id) return;
+    try {
+      const r = await this.call<Pick[]>(`/api/recent?exclude=${cur.play_id}`);
+      if (this.cur === cur && !this.stopped && Array.isArray(r)) { this.recent = r; this.host.publish(); }
+    } catch { /* back fetches it then */ }
   }
 
   /** Start (or come back): the playlist's Set to BPM is Find music's too; then the song that was on air. */
@@ -170,9 +192,10 @@ export class FindDriver {
   private startUpcoming(): boolean {
     const up = this.upcoming;
     if (!up || up.title == null) return false;
+    if (this.cur?.play_id) this.recent = [this.cur, ...this.recent.filter((x) => x.play_id !== this.cur!.play_id)];
     this.shown = {...up, play_id: null};
     this.upcoming = null;
-    this.viewing = "current"; this.prev = null; this.resumeAt = null; this.step = 0; this.hist = null;
+    this.viewing = "current"; this.prev = null; this.step = 0; this.hist = null;
     this.cur = this.shown;
     void this.load(this.shown, 0, 0);
     return true;
@@ -194,23 +217,26 @@ export class FindDriver {
     if (early) { Object.assign(this.shown!, got); this.cur = this.shown; }
     else this.cur = got;
     this.shown = null;
-    this.viewing = "current"; this.prev = null; this.resumeAt = null; this.step = 0; this.hist = null;
+    this.viewing = "current"; this.prev = null; this.step = 0; this.hist = null;
     if (!early) await this.load(this.cur!, 0, 0, autoplay);
     else this.host.publish();
     void this.prefetch();
+    void this.loadRecent();
   }
 
   private async load(t: Pick, startAt: number, played: number, autoplay = true): Promise<void> {
     const {engine, tempo} = this.host;
     this.played = played; this.lastPos = startAt;
     engine.pause();                                     // the song being left stops now (#53)
-    this.host.publish({loading: true, t: startAt, d: t.duration_s || 0});
+    this.host.hold({t: startAt, d: t.duration_s || 0});
+    this.host.publish({loading: true});
     engine.setGain(t.gain_db || 0, this.host.headroom());
     this.host.media(asTrack(t));
     this.host.played(this.pid);
     const src = await tempo.start(t.track_id, t.audio, t.rate || 1);
     if (this.stopped || this.onAir() !== t) return;
     engine.load(src, startAt / (tempo.loaded || 1), meta(t));
+    this.host.hold(null);
     this.loadStart = performance.now();
     this.waiting = true;
     this.startInfo = {rate: tempo.loaded, want: t.rate || 1};
@@ -284,6 +310,7 @@ export class FindDriver {
     if (prev && this.hist && this.step) this.hist[this.step - 1] = t;
     this.host.publish();
     this.host.added(this.pid);
+    if (!prev) void this.loadRecent();
     if (moveOn) return prev ? this.forward() : this.next();
   }
 
@@ -309,13 +336,14 @@ export class FindDriver {
     const e = this.host.engine;
     if (!force && e.time >= this.host.backRestart()) { e.seek(0); this.lastPos = 0; return; }
     if (!this.hist || this.viewing === "current") {
-      try { this.hist = await this.call<Pick[]>(`/api/recent${this.cur?.play_id ? `?exclude=${this.cur.play_id}` : ""}`); }
-      catch { this.hist = []; }
+      if (this.recent.length) this.hist = this.recent.slice();          // fetched ahead: back starts at once
+      else {
+        try { this.hist = await this.call<Pick[]>(`/api/recent${this.cur?.play_id ? `?exclude=${this.cur.play_id}` : ""}`); }
+        catch { this.hist = []; }
+      }
     }
     if (this.step >= this.hist.length) { e.seek(0); return; }                 // as far back as it goes
-    if (this.viewing === "current") {
-      this.resumeAt = this.cur && this.cur.rating !== DOWN ? {pos: e.time * (this.host.tempo.loaded || 1), played: this.played} : null;
-    }
+
     this.step += 1;
     const t = this.hist[this.step - 1];
     this.viewing = "previous";
@@ -334,8 +362,9 @@ export class FindDriver {
     this.viewing = "current";
     this.prev = null;
     const playOn = this.cur && this.cur.rating !== DOWN;   // the pick on air, unless it got a − (then the next one)
-    if (playOn && this.resumeAt) { const r = this.resumeAt; this.resumeAt = null; await this.load(this.cur!, r.pos, r.played); }
-    else if (playOn && this.cur!.rating == null) await this.load(this.cur!, 0, 0);
+    // Songs always start at the start (#93: coming forward again picked the song up where it was left, sometimes
+    // near its end, so it ended moments later and the next one started).
+    if (playOn && this.cur!.rating == null) await this.load(this.cur!, 0, 0);
     else await this.next();
   }
 }
