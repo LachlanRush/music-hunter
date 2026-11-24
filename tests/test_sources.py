@@ -100,3 +100,13 @@ def test_matching_when_selected(conn):
     # No YouTube Music result: match failed, with the reason kept.
     assert m.resolve(lost) == "match_failed: yt_match_failed:no_results"
     assert candidate(conn, lost)["status"] == "match_failed"
+
+
+def test_an_extended_named_remix_is_the_same_song():
+    """#131: "Pasion (The Trip Extended Remix)" is the extended version of "Pasion - The Trip Remix" (the extended mix
+    finder missed it); another remix stays another song."""
+    from music_hunter import names
+    ext = names.song("Pianoman", "Pasion (The Trip Extended Remix)")
+    assert ext.is_extended and ext.same_song(names.song("Pianoman, The Trip", "Pasion - The Trip Remix"))
+    assert not ext.same_song(names.song("Pianoman", "Pasion (Analysis Mix)"))
+    assert names.strip_versions("Song - X Extended Mix") == ("Song - X Mix", True)

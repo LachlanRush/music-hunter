@@ -149,6 +149,11 @@ def run(busy=lambda: False) -> None:
         lib, yt = db.connect_library(), None
         from .library import merge_duplicates
         merge_duplicates(lib)
+        if not db.get_setting(lib, "extended_recheck_named_remix"):   # (2026-11-24, #131: "X Extended Remix" wasn't
+            with lib:                                                   # taken for the extended "X Remix"; songs
+                n = lib.execute("UPDATE tracks SET extended_checked_at = NULL WHERE extended_checked_at IS NOT NULL"  # with
+                                " AND (lower(title) LIKE '%mix%' OR lower(title) LIKE '%edit%')").rowcount   # a mix
+            db.set_setting(lib, "extended_recheck_named_remix", n)       # or edit in their title look again, once)
         for tid, upgrade in [(t, False) for t in due(lib)] + [(t, True) for t in due_upgrade(lib)]:
             while busy() or youtube_paused():
                 time.sleep(30)

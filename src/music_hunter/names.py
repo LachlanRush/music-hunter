@@ -42,6 +42,16 @@ def _is_label(part: str) -> bool:
     return fold(part) in VERSION_LABELS
 
 
+# "The Trip Extended Remix" is the extended version of "The Trip Remix" (feedback #131: Pasion's extended remix wasn't
+# recognised as the same song, so the extended mix was never found for the playlist).
+_EXTENDED_IN = re.compile(r"\bextended\s+(?=(?:remix|mix|edit|version|dub|rework|club mix)\b)", re.I)
+
+
+def _unextend(part: str) -> tuple[str, bool]:
+    out = _EXTENDED_IN.sub("", part)
+    return out, out != part
+
+
 def strip_versions(title: str) -> tuple[str, bool]:
     """Remove length/edit labels and featured artists from a title.
 
@@ -62,6 +72,8 @@ def strip_versions(title: str) -> tuple[str, bool]:
             if _is_label(p):
                 extended |= "extended" in fold(p)
             else:
+                p, ext = _unextend(p)
+                extended |= ext
                 kept.append(p)
         return f" ({' - '.join(kept)})" if kept else ""
 
@@ -70,6 +82,9 @@ def strip_versions(title: str) -> tuple[str, bool]:
     parts = re.split(r"\s+-\s+", out)
     while len(parts) > 1 and _is_label(parts[-1]):
         extended |= "extended" in fold(parts.pop())
+    if len(parts) > 1:                                 # "Pasion - The Trip Extended Remix"
+        parts[-1], ext = _unextend(parts[-1])
+        extended |= ext
     out = " - ".join(parts)
     out = _FEAT.sub("", out)
     return out.strip(), extended

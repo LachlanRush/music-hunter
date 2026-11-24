@@ -194,9 +194,8 @@ def _matches(conn: sqlite3.Connection, lane, refs: list[dict], pool: dict, own: 
     ok = [t for t in ok if not any(pool[t]["song"].same_song(m) for m in mine)]     # never the starred song itself
     R = np.stack([r["emb"] / (np.linalg.norm(r["emb"]) or 1) for r in refs])
     floor = CFG.get("song_min_similarity" if lane["kind"] == "song" else "artist_min_similarity", 0.0)
-    same = CFG.get("same_recording", 0.95)          # another version of the starred song itself (an extended mix,
-    sim = {t: float((R @ db.from_blob(pool[t]["emb"])).max()) for t in ok}    # #131): not offered by its lane
-    return sorted((t for t in ok if floor <= sim[t] < same), key=lambda t: (t not in own, -sim[t]))
+    sim = {t: float((R @ db.from_blob(pool[t]["emb"])).max()) for t in ok}
+    return sorted((t for t in ok if sim[t] >= floor), key=lambda t: (t not in own, -sim[t]))
 
 
 def _fill(conn: sqlite3.Connection, lane, refs: list[dict], pool: dict, own: set) -> int:
