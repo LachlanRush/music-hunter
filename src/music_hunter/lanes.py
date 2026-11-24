@@ -159,9 +159,13 @@ def _batch_done(conn: sqlite3.Connection, lane, pool: dict) -> bool:
 
 
 def seed_id(conn: sqlite3.Connection, key: str) -> int | None:
-    """The session's seed track for a starred library song (its suggestions are the seed's own lists)."""
-    row = conn.execute("SELECT id FROM tracks WHERE origin = 'original_reference' AND (library_id = ? OR"
-                       " (library_id IS NULL AND id = ?)) ORDER BY id LIMIT 1", (int(key), int(key))).fetchone()
+    """The session's seed track for a starred library song (its suggestions are the seed's own lists). A song first
+    found by Find music and Added is its own pick row, not a copied seed (feedback #132: Match Box's lane never
+    searched, because Trentino was such a song)."""
+    row = conn.execute("SELECT id FROM tracks WHERE library_id = ? ORDER BY origin = 'original_reference' DESC, id"
+                       " LIMIT 1", (int(key),)).fetchone() or \
+        conn.execute("SELECT id FROM tracks WHERE origin = 'original_reference' AND library_id IS NULL AND id = ?",
+                     (int(key),)).fetchone()
     return row[0] if row else None
 
 
@@ -190,8 +194,9 @@ def _matches(conn: sqlite3.Connection, lane, refs: list[dict], pool: dict, own: 
     ok = [t for t in ok if not any(pool[t]["song"].same_song(m) for m in mine)]     # never the starred song itself
     R = np.stack([r["emb"] / (np.linalg.norm(r["emb"]) or 1) for r in refs])
     floor = CFG.get("song_min_similarity" if lane["kind"] == "song" else "artist_min_similarity", 0.0)
-    sim = {t: float((R @ db.from_blob(pool[t]["emb"])).max()) for t in ok}
-    return sorted((t for t in ok if sim[t] >= floor), key=lambda t: (t not in own, -sim[t]))
+    same = CFG.get("same_recording", 0.95)          # another version of the starred song itself (an extended mix,
+    sim = {t: float((R @ db.from_blob(pool[t]["emb"])).max()) for t in ok}    # #131): not offered by its lane
+    return sorted((t for t in ok if floor <= sim[t] < same), key=lambda t: (t not in own, -sim[t]))
 
 
 def _fill(conn: sqlite3.Connection, lane, refs: list[dict], pool: dict, own: set) -> int:

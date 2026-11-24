@@ -60,6 +60,7 @@ share = 0.5                       # chance a pick (not a check) comes from the l
 # starred song, or to the artist's starred songs. Rated picks at 0.90+ to a starred song: Off 24% / Add 12% (below
 # 0.85: 47% / 4%); the same artist's other songs at 0.88+: Off 11–15% (below: 35–40%).
 song_min_similarity = 0.90
+same_recording = 0.95             # this close is the starred song itself in another version (§19.4): left out
 artist_min_similarity = 0.88
 fetch_per_round = 8               # a short lane's downloads per round (its seed's own lists, best positions first)
 fetch_max = 40                    # at most this many downloads per lane per batch

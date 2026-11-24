@@ -259,8 +259,8 @@ def state(playlist_id: int, worker=None) -> dict:
     running = worker is not None and worker.state == "running"
     if worker is not None and worker.state == "error":
         st = "error"
-    elif playable >= early or (playable and not running):
-        st = "ready"
+    elif playable >= early or (playable and (not running or sess.execute("SELECT 1 FROM plays LIMIT 1").fetchone())):
+        st = "ready"                                  # (once it has played: no "Finding music" box again, #129)
     else:
         st = "preparing"
     return {"state": st, "message": worker.message if worker else "", "playable": playable, "early_start": early,
