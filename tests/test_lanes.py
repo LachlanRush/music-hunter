@@ -243,3 +243,19 @@ def test_rescoring_runs_in_a_background_process(conn, monkeypatch, tmp_path):
         if background._pool is not None:
             background._pool.shutdown()
             background._pool = None
+
+
+def test_an_artist_search_suggestion_doesnt_break_scoring(conn, monkeypatch):
+    """2026-11-24: a pool song suggested only by a lane's artist search (source 'artist_top') made scoring fail with
+    a KeyError, so Find music couldn't start ("internal error" in La Musica)."""
+    from music_hunter.scoring import score_pool
+    _setup(conn, monkeypatch)
+    tid, cid = conn.execute("SELECT id, candidate_id FROM tracks WHERE origin = 'pool' AND candidate_id IS NOT NULL"
+                            " AND id NOT IN (SELECT track_id FROM plays) LIMIT 1").fetchone()
+    with conn:
+        g = conn.execute("SELECT * FROM suggestions WHERE candidate_id = ? LIMIT 1", (cid,)).fetchone()
+        conn.execute("INSERT INTO suggestions (generation, seed_track_id, source, rank, artist, title, outcome, candidate_id)"
+                     " VALUES (?, ?, 'artist_top', 1, 'A', 'B', 'new', ?)", (g["generation"], g["seed_track_id"], cid))
+    assert score_pool(conn)
+    p = ratings.show(conn, track_id=tid)
+    assert p

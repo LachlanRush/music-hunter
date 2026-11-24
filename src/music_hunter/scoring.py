@@ -241,7 +241,8 @@ def score_pool(conn: sqlite3.Connection) -> list[dict]:
     for e, (i, sid) in enumerate(entries):
         r = rows[i]
         per["agreement"][e] = raw["agreement"][i]
-        per["source_score"][e] = max((src_avg[src] for s, src in prov[r["candidate_id"]] if s == sid), default=0.0)
+        per["source_score"][e] = max((src_avg[src] for s, src in prov[r["candidate_id"]] if s == sid and src in src_avg),
+                                     default=0.0)                 # (a lane's artist search isn't a source, §20.7)
         per["seed_match"][e] = float(P[i] @ seed_vecs[sid])
         per["seed_score"][e] = seed_avg[sid]
     per_norm = {c: np.zeros(len(entries)) for c in per}

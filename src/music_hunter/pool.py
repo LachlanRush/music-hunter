@@ -76,7 +76,7 @@ def buckets(conn: sqlite3.Connection, generation: int) -> dict[tuple[int, str], 
     out: dict[tuple[int, str], list[int]] = {}
     for r in conn.execute(
             "SELECT s.seed_track_id, s.source, s.candidate_id FROM suggestions s"
-            " JOIN candidates c ON c.id = s.candidate_id WHERE c.status = 'candidate'"
+            " JOIN candidates c ON c.id = s.candidate_id WHERE c.status = 'candidate' AND s.source != 'artist_top'"
             " ORDER BY s.seed_track_id, s.source, s.rank, s.generation DESC"):
         lst = out.setdefault((r[0], r[1]), [])
         if r[2] not in lst:
