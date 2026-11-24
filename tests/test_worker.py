@@ -266,6 +266,7 @@ def test_two_addresses_share_the_queue(remote, monkeypatch):
     """With PIA's proxy login in .env the worker runs a second loop through it; both take tracks from the queue."""
     http, _, root = remote
     monkeypatch.setitem(CONFIG["worker"], "lanes", ["home", "pia"])
+    monkeypatch.setitem(CONFIG["worker"], "pia_loops", 1)
     monkeypatch.setenv("PIA_SOCKS_USER", "x1")
     monkeypatch.setenv("PIA_SOCKS_PASS", "pw")
     assert [x["name"] for x in analysis.lanes()] == ["home", "pia"]
@@ -283,6 +284,8 @@ def test_two_addresses_share_the_queue(remote, monkeypatch):
         t.join(5)
         assert "result" in box
     assert sorted(pc.lanes) == ["home", "pia"]
+    monkeypatch.setitem(CONFIG["worker"], "pia_loops", 2)              # two loops through PIA (2026-11-24)
+    assert [x["name"] for x in analysis.lanes()] == ["home", "pia", "pia"]
     monkeypatch.delenv("PIA_SOCKS_USER")
     assert [x["name"] for x in analysis.lanes()] == ["home"]           # no login: home only
 
@@ -310,3 +313,36 @@ def test_grid_from_the_pis_copy_into_rekordbox(remote, tmp_path, monkeypatch):
     assert 'Inizio="0.548" Bpm="120.00"' in xml and 'Name="Drop" Type="0" Start="64.548" Num="0"' in xml
     starts = [float(x) for x in __import__("re").findall(r'Start="([\d.]+)" Num="-1"', xml)]
     assert starts == [0.548, 32.548, 64.548, 96.548, 128.548, 160.548, 192.548]   # 16 bars = 32 s at 120 BPM
+
+
+def test_vocals_measured_after_the_track_is_sent(remote, monkeypatch):
+    """2026-11-24: the PC sends a track without waiting for the vocals helper (~7 s a track, one at a time); it measures
+    a kept copy afterwards and posts the result, logged in each Find music that has the track."""
+    import json
+    from music_hunter import library
+    http, _, root = remote
+    http.headers["Authorization"] = "Bearer secret"
+    lib = db.connect_library()
+    pid = library.create_playlist(lib, "p")
+    sess = db.connect(pid)
+    with sess:
+        sess.execute("INSERT INTO generations (id) VALUES (4)")
+        sess.execute("INSERT INTO tracks (artist, title, origin, video_id, generation) VALUES ('A', 'B', 'pool', 'vidV', 4)")
+    monkeypatch.setattr("music_hunter.find.started", lambda p: p == pid)
+    monkeypatch.setattr(analysis.Local, "vocals", staticmethod(lambda f: {"vocal_share_mean": 0.1}))
+    later = analysis.VocalsLater(root / "pc" / "vocals", http, "http://testserver/api/worker")
+    src = root / "song.webm"
+    src.write_bytes(b"audio")
+    later.add(src, "vidV")
+    copy, vid = later.q.get_nowait()
+    assert copy.exists() and vid == "vidV"
+    later.q.put((copy, vid))
+    import threading
+    threading.Thread(target=later.run, daemon=True).start()
+    for _ in range(100):
+        if not copy.exists():
+            break
+        time.sleep(0.02)
+    ev = sess.execute("SELECT data FROM events WHERE kind = 'vocals'").fetchone()
+    assert ev and json.loads(ev[0])["reason"] == {"vocal_share_mean": 0.1} and json.loads(ev[0])["generation"] == 4
+    assert not copy.exists()                                             # the copy goes once measured

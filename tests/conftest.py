@@ -46,6 +46,8 @@ def fresh_workers():
     web.workers[None] = web.worker
     web.AFTER_IN_BACKGROUND = False          # a rating's follow-up runs before the answer, so tests see its effects
     db.SESSION.set(None)
+    import music_hunter.config as config
+    config.CONFIG["ui"]["background_process"] = False   # (tests re-score in place; background.py has its own test)
     yield
 
 

@@ -123,7 +123,17 @@ class AudioBridge(private val app: App) {
                 if (item?.mediaId == NEXT) advance()
             }
             override fun onPlayerError(error: PlaybackException) {
-                js("error", JSONObject().put("message", error.errorCodeName))
+                // (the server's answer too, so the logs say why: feedback #127, "ERROR_CODE_IO_BAD_HTTP_STATUS")
+                var c: Throwable? = error.cause
+                var detail = ""
+                while (c != null) {
+                    if (c is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) {
+                        detail = " ${c.responseCode} ${c.dataSpec.uri.path} @${c.dataSpec.position}"
+                        break
+                    }
+                    c = c.cause
+                }
+                js("error", JSONObject().put("message", error.errorCodeName + detail))
             }
         })
         tick()

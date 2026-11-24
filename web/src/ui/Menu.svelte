@@ -74,6 +74,6 @@
 {/if}
 
 <style>
-  .menu.fixed { position: fixed; right: auto; }
+  .menu.fixed { position: fixed; right: auto; z-index: 40; }   /* (over the full view too) */
   .menu :global(button.off) { color: var(--muted); }
 </style>

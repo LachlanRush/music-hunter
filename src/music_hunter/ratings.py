@@ -196,18 +196,32 @@ def upcoming(conn: sqlite3.Connection, rng=random) -> int | None:
         draw = {"control": False, "track_id": queued[0], "queued": True}
         db.set_setting(conn, "next_draw", draw, log=False)
         return queued[0]
+    from . import lanes
+
     playable, vetoed = set(playable_ids(conn)), set(vetoed_ids(conn))
-    if not playable and not vetoed:
+    lane_on = lanes.enabled(conn)
+    waiting = lanes.waiting(conn, ready=True) if lane_on else {}    # (audio here: a lane pick never waits)
+    if not playable and not vetoed and not waiting:
         return None
     draw = db.get_setting(conn, "next_draw")
-    if draw is None or draw.get("track_id") not in (vetoed if draw.get("control") else playable):
+    ok = draw is not None and (draw["track_id"] in waiting if draw.get("lane") else
+                               draw["track_id"] in (vetoed if draw.get("control") else playable))
+    if not ok:
         control = draw["control"] if draw is not None else next_is_control(conn, rng)
         if control and not vetoed:
             control = False
-        choices = sorted(vetoed if control else playable)
-        if not choices:
-            return None
-        draw = {"control": control, "track_id": rng.choice(choices)}
+        # Lanes (§20.7): a pick that isn't a check comes from the lanes at [lanes] share, a random waiting song.
+        # The coin is kept with the draw, like the check, so a redraw doesn't flip it.
+        lane_coin = draw.get("lane_coin") if draw is not None and "lane_coin" in draw else \
+            (lane_on and rng.random() < lanes.CFG.get("share", 0.5))
+        if not control and waiting and (lane_coin or not playable):   # (nothing else ready: a lane song)
+            tid = rng.choice(sorted(waiting))
+            draw = {"control": False, "track_id": tid, "lane": waiting[tid], "lane_coin": True}
+        else:
+            choices = sorted(vetoed if control else playable)
+            if not choices:
+                return None
+            draw = {"control": control, "track_id": rng.choice(choices), "lane_coin": bool(lane_coin)}
         db.set_setting(conn, "next_draw", draw, log=False)
     return draw["track_id"]
 
@@ -222,7 +236,7 @@ def show_next(conn: sqlite3.Connection, rng=random) -> int:
         db.set_setting(conn, "play_next", [t for t in (db.get_setting(conn, "play_next") or []) if t != draw["track_id"]])
         if conn.execute("SELECT 1 FROM plays WHERE track_id = ?", (draw["track_id"],)).fetchone():
             return replay(conn, draw["track_id"])
-    return show(conn, track_id=draw["track_id"], control=draw["control"])
+    return show(conn, track_id=draw["track_id"], control=draw["control"], lane_id=draw.get("lane"))
 
 
 def queue_next(conn: sqlite3.Connection, track_ids: list[int]) -> list[int]:
@@ -268,7 +282,8 @@ def replay(conn: sqlite3.Connection, track_id: int) -> int:
 
 # --- showing and rating --------------------------------------------------------------------
 
-def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = False, rng=random) -> int:
+def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = False, rng=random,
+         lane_id: int | None = None) -> int:
     """Log a track as shown, with every score component and its veto details at this moment. Returns the play ID.
 
     Without track_id: a random playable track (a control: a random vetoed track, or a playable one if none is
@@ -296,12 +311,12 @@ def show(conn: sqlite3.Connection, track_id: int | None = None, control: bool = 
     with conn:
         play_id = conn.execute(
             "INSERT INTO plays (track_id, generation, play_number, is_control, weight_set_id, components,"
-            " score, rank, pool_size, provenance, target_bpm, scored_for_seed, veto, settings_version, shown_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))",
+            " score, rank, pool_size, provenance, target_bpm, scored_for_seed, veto, settings_version, lane_id, shown_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))",
             (row["track_id"], current_generation(conn), play_number, int(control), row["weight_set_id"],
              json.dumps(components), row["score"], row["rank"], len(scored),
              json.dumps(row["provenance"]), row.get("target_bpm"), row.get("scored_for_seed"), veto_json,
-             settings_version(conn))).lastrowid
+             settings_version(conn), lane_id)).lastrowid
     # Control status and rank stay out of the event log (and its text file): they're in the plays table, and
     # seeing them during the run would reveal which plays are controls (SPEC.md §16.6).
     db.log_event(conn, "shown", play_id, track_id=row["track_id"], pool_size=len(scored), score_ms=round(score_ms, 1))

@@ -6,7 +6,8 @@
   import Feedback from "./Feedback.svelte";
 
   interface Point { x: number; off: number; add: number; n: number; }
-  interface Data { name: string; plays: number; off: number; add: number; left_out: number; curve: Point[]; rug: number[]; max: number; }
+  interface Pick { kind: string; label: string; plays: number; off: number | null; add: number | null; active: number | null; quiet: number | null; }
+  interface Data { name: string; plays: number; off: number; add: number; left_out: number; curve: Point[]; rug: number[]; max: number; picks: Pick[]; }
 
   let { id }: { id: number } = $props();
   let d = $state<Data | null>(null);
@@ -94,6 +95,22 @@
         </svg>
       {/if}
     </div>
+    {#if d.picks?.length}
+      <section class="lanes">
+        <h2>Lanes and random picks</h2>
+        <p class="sub">Since the lanes started: songs following your stars (a starred song's closest-sounding songs, an artist's best) beside the random picks.</p>
+        <table>
+          <thead><tr><th></th><th>Rated</th><th>Off</th><th>Add</th><th>Lanes</th></tr></thead>
+          <tbody>
+            {#each d.picks as r (r.kind)}
+              <tr><th scope="row">{r.label}</th><td>{r.plays}</td><td>{r.off == null ? "–" : `${r.off}%`}</td>
+                <td>{r.add == null ? "–" : `${r.add}%`}</td>
+                <td>{r.kind === "random" ? "" : `${r.active ?? 0} active · ${r.quiet ?? 0} quiet`}</td></tr>
+            {/each}
+          </tbody>
+        </table>
+      </section>
+    {/if}
     {#if tip}<div class="tip" style:left={`${tip.x}px`} style:top={`${tip.y}px`}>score {tip.p.x.toFixed(2)} · Off {tip.p.off}% · Add {tip.p.add}% · ~{Math.round(tip.p.n)} plays</div>{/if}
   {/if}
   <Feedback />
@@ -112,6 +129,14 @@
   svg { display: block; width: 100%; height: auto; overflow: visible; touch-action: none; }
   svg text { font: 400 11px var(--mono); fill: var(--muted); }
   svg text.end { font: 600 12px var(--body); }
+  .lanes { display: grid; gap: 8px; }
+  .lanes h2 { font: 700 18px var(--body); margin: 8px 0 0; }
+  table { border-collapse: collapse; font-size: 14px; max-width: 560px; }
+  th, td { padding: 6px 14px 6px 0; text-align: right; font-variant-numeric: tabular-nums; }
+  th:first-child, td:last-child { text-align: left; }
+  thead th { color: var(--muted); font-weight: 400; font-size: 12px; }
+  tbody th { font-weight: 600; }
+  td:last-child { color: var(--muted); font-size: 13px; }
   .tip { position: fixed; pointer-events: none; background: var(--fg); color: var(--bg); font: 400 12px/1.4 var(--body);
     padding: 6px 9px; border-radius: 6px; z-index: 10; }
 </style>

@@ -108,7 +108,8 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
 
     marks = ",".join("?" * len(rows))
     n_src = {}
-    for cid, src in conn.execute(f"SELECT DISTINCT candidate_id, source FROM suggestions WHERE candidate_id IN ({marks})",
+    for cid, src in conn.execute(f"SELECT DISTINCT candidate_id, source FROM suggestions WHERE candidate_id IN ({marks})"
+                                 " AND source != 'artist_top'",       # (a lane's artist search isn't a source, §20.7)
                                  [r["candidate_id"] for r in rows]):
         n_src[cid] = n_src.get(cid, 0) + 1
     sources = np.array([n_src.get(r["candidate_id"], 0) for r in rows], float)
@@ -173,6 +174,12 @@ def compute(conn: sqlite3.Connection) -> dict[int, dict]:
 
 
 def update(conn: sqlite3.Connection) -> dict:
+    """update_here, in a background process at a lower CPU priority when it can be (background.py, 2026-11-24)."""
+    from . import background
+    return background.veto_update(conn)
+
+
+def update_here(conn: sqlite3.Connection) -> dict:
     """Re-score every analysed track, move unplayed tracks across the line, drop vetoed tracks' audio.
 
     Returns counts: {analysed, playable, vetoed, newly_vetoed, returned, active}.
@@ -188,6 +195,8 @@ def update(conn: sqlite3.Connection) -> dict:
         "SELECT id, gate_since, redownloads, gate_since_at < datetime('now', ?) AS grace_over_by_time FROM tracks"
         " WHERE origin = 'pool'", (f"-{CFG['grace_days']} days",))}
     n_rated = conn.execute("SELECT count(*) FROM plays WHERE rating IS NOT NULL").fetchone()[0]
+    from . import lanes
+    lane_songs = lanes.waiting_ids(conn)               # (their audio is kept: a lane can pick them below the gate)
     vetoed_now, returned, drop_audio, gone = [], [], [], []
     with conn:
         for tid, d in details.items():
@@ -201,7 +210,7 @@ def update(conn: sqlite3.Connection) -> dict:
                 if state != "vetoed" and (d["z"] < -CFG["cut_sd"] or hard):
                     state = "vetoed"
                     vetoed_now.append(tid)
-                    if r["veto_state"] is None:          # just analysed: its audio goes straight away
+                    if r["veto_state"] is None and tid not in lane_songs:   # just analysed: its audio goes at once
                         drop_audio.append(tid)
                     else:                                # was playable: audio kept for grace_ratings ratings
                         conn.execute("UPDATE tracks SET gate_since = ?, gate_since_at = datetime('now') WHERE id = ?",
@@ -213,7 +222,7 @@ def update(conn: sqlite3.Connection) -> dict:
                         state = "playable"               # with its audio (kept, or downloaded again)
                         returned.append(tid)
                         conn.execute("UPDATE tracks SET gate_since = NULL, gate_since_at = NULL WHERE id = ?", (tid,))
-                elif state == "vetoed" and r["file_path"] and meta[tid]["gate_since"] is not None \
+                elif state == "vetoed" and r["file_path"] and meta[tid]["gate_since"] is not None and tid not in lane_songs \
                         and (n_rated - meta[tid]["gate_since"] >= CFG["grace_ratings"]
                              or meta[tid]["grace_over_by_time"]):
                     drop_audio.append(tid)               # stayed below too long: audio goes
@@ -222,7 +231,12 @@ def update(conn: sqlite3.Connection) -> dict:
                 returned.append(tid)
             d["state"] = state
             conn.execute("UPDATE tracks SET veto_state = ?, veto = ? WHERE id = ?", (state, json.dumps(d), tid))
+    lanes.sync(conn)                              # (new stars, finished batches, new songs; §20.7) — before audio goes,
+    keep = lanes.waiting_ids(conn)                # so a song a lane has just taken keeps it
+    with conn:
         for tid in drop_audio:                        # the fingerprint stays, the audio goes
+            if tid in keep:
+                continue
             fp = rows[tid]["file_path"]
             if fp and fp.startswith(CONFIG["paths"]["cache"] + "/"):
                 conn.execute("UPDATE tracks SET file_path = NULL WHERE id = ?", (tid,))

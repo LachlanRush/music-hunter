@@ -1,11 +1,14 @@
 // A playlist's options: the same from its ⋯ on its own screen and from Home (right-click, or hold and let go).
-import { api, type Playlist } from "../core/api";
+import { api, cached, keep, type Playlist } from "../core/api";
 import { playlistModel, type PlaylistModel } from "../core/library";
 import { go } from "../core/router";
 import { ask, askText, pickPicture } from "./dialogs";
 import { editing, menu, type MenuItem, type MenuSpec } from "./overlay";
 
-export function playlistItems(p: Playlist, after: () => void = () => {}): MenuItem[] {
+/** Playlists being deleted: Home leaves them out even if a view from before the deletion arrives. */
+export const deleting = new Set<number>();
+
+export function playlistItems(p: Playlist, after: () => void = () => {}, removed?: () => void): MenuItem[] {
   const m = playlistModel(p.id);
   const sub = (items: MenuItem[]) => {
     const at = menu.get();
@@ -37,7 +40,13 @@ export function playlistItems(p: Playlist, after: () => void = () => {}): MenuIt
   items.push("hr", {label: "Delete playlist", danger: true, act: async () => {
     if (!await ask(`Delete "${p.name}"?`, {ok: "Delete", danger: true, detail: "This can't be undone: the playlist, its stars, "
         + "its Find music and its Recently deleted list go, and songs in no other playlist lose their audio."})) return;
-    if (await m.remove_playlist()) { after(); go("/"); }
+    deleting.add(p.id);                              // gone from Home at once (#115: it seemed not to work)
+    removed?.();
+    try { keep("next:playlists", (cached<{id: number}[]>("next:playlists") ?? []).filter((q) => q.id !== p.id)); } catch { /* */ }
+    go("/");
+    await m.remove_playlist();
+    deleting.delete(p.id);
+    after();
   }});
   return items;
 }

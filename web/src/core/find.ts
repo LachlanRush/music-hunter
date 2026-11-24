@@ -54,6 +54,7 @@ export interface FindHost {
           still: () => boolean): Promise<void>;
   played(pid: number): void;
   added(pid: number): void;            // a + or a taken-back + : the playlist's To rate follows
+  adding?(pid: number, t: Track, on: boolean): void;   // … shown there at once (feedback #125), before the Pi confirms
   notice(text: string): void;
   ended(): void;                       // Find music stopped (an error): the player forgets it
 }
@@ -142,7 +143,34 @@ export class FindDriver {
   /** Start (or come back): the playlist's Set to BPM is Find music's too; then the song that was on air. */
   async start(tempo: {on: boolean; bpm: number | null}, autoplay = true): Promise<void> {
     await this.syncTempo(tempo);
-    await this.next("/api/resume", autoplay);
+    // Back to the song I was listening to (#99, #100): if I'd stepped back to an earlier pick, that one, not the
+    // latest pick; the latest is where forward and the end of the song go next, as before.
+    const want = this.remembered();
+    await this.next("/api/resume", autoplay && !want, !!want);
+    if (!want || this.stopped || !this.cur) return;
+    if (want !== this.cur.play_id) {
+      await this.loadRecent();
+      const i = this.recent.findIndex((x) => x.play_id === want);
+      if (i >= 0 && !this.stopped) {
+        this.hist = this.recent.slice();
+        this.step = i + 1;
+        this.viewing = "previous";
+        this.prev = {...this.hist[i], heard: this.hist[i].rating === HEARD};
+        await this.load(this.prev, 0, 0, autoplay);
+        return;
+      }
+    }
+    await this.load(this.cur, 0, 0, autoplay);
+  }
+
+  /** The pick on air, kept on the device so coming back to Find music returns to it. */
+  private remember(t: Pick): void {
+    if (!t.play_id) return;
+    try { localStorage.setItem(`findOnAir:${this.pid}`, String(t.play_id)); } catch { /* only a convenience */ }
+  }
+
+  private remembered(): number | null {
+    try { return Number(localStorage.getItem(`findOnAir:${this.pid}`)) || null; } catch { return null; }
   }
 
   stop(): void {
@@ -201,7 +229,7 @@ export class FindDriver {
     return true;
   }
 
-  async next(path = "/api/next", autoplay = true): Promise<void> {
+  async next(path = "/api/next", autoplay = true, noLoad = false): Promise<void> {
     let got: Pick | null = null, err: Error | null = null;
     for (let i = 0; i < 3 && !this.stopped; i++) {
       try { got = await this.call<Pick>(path, {}); err = null; break; }
@@ -218,14 +246,16 @@ export class FindDriver {
     else this.cur = got;
     this.shown = null;
     this.viewing = "current"; this.prev = null; this.step = 0; this.hist = null;
+    if (noLoad) { void this.prefetch(); void this.loadRecent(); return; }  // (start decides what plays)
     if (!early) await this.load(this.cur!, 0, 0, autoplay);
-    else this.host.publish();
+    else { this.remember(this.cur!); this.host.publish(); }
     void this.prefetch();
     void this.loadRecent();
   }
 
   private async load(t: Pick, startAt: number, played: number, autoplay = true): Promise<void> {
     const {engine, tempo} = this.host;
+    this.remember(t);
     this.played = played; this.lastPos = startAt;
     engine.pause();                                     // the song being left stops now (#53)
     this.host.hold({t: startAt, d: t.duration_s || 0});
@@ -261,7 +291,11 @@ export class FindDriver {
     this.report(kind, {track_id: t.track_id, retried: !!t.retried, ...extra});
     if (t.retried) { t.retried = false; void (t === this.cur ? this.skip() : this.forward()); return; }
     t.retried = true;
-    this.host.engine.load(t.audio, 0, meta(t));         // the plain file, not a copy or what was fetched ahead
+    // The plain file, not a copy or what was fetched ahead — from where it had got to (feedback #127: an error a minute
+    // in started the song again from the top). A copy's place is converted to the original's.
+    const at = kind === "audio_error" ? this.host.engine.time * (this.host.tempo.loaded || 1) : 0;
+    this.host.engine.load(t.audio, at > 2 ? at : 0, meta(t));
+    this.host.tempo.loaded = 1;                          // (the original now: the copy may be what failed)
     this.loadStart = performance.now();
     this.waiting = true;
     void this.host.engine.play().catch(() => {});
@@ -297,6 +331,7 @@ export class FindDriver {
     t.heard = undo;
     this.host.publish();
     if (r === UP && !undo) this.host.notice(`Added to ${this.name}`);
+    if (r === UP || before.rating === UP) this.host.adding?.(this.pid, asTrack(t), r === UP && !undo);
     const moveOn = r === DOWN && !undo;
     const saving = before.rating == null && !prev
       ? this.call<Pick>("/api/rate", {play_id: t.play_id, rating: r, played_seconds: Math.round(this.played), ...this.tempoReport()})

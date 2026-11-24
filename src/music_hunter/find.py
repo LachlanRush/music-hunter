@@ -83,8 +83,8 @@ def playlist_songs(lib: sqlite3.Connection, playlist_id: int) -> tuple[set, list
 
 
 def folder_offs(lib: sqlite3.Connection, playlist_id: int) -> tuple[set, list]:
-    """Songs another playlist in the same folder already has, or rated Off in its Find music (2026-11-11, feedback
-    #49, #50): they aren't offered here either. Only folders I've made; the built-in Playlists section isn't one."""
+    """Songs another playlist in the same folder already has (2026-11-11, feedback #50): they aren't offered here
+    either. (Its Offs counted too until 2026-11-24, #49 undone by #128.) Only folders I've made; the built-in Playlists section isn't one."""
     from . import names
 
     row = lib.execute("SELECT folder_id FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
@@ -101,12 +101,8 @@ def folder_offs(lib: sqlite3.Connection, playlist_id: int) -> tuple[set, list]:
                          " ON p.id = pt.playlist_id JOIN tracks t ON t.id = pt.track_id"
                          " WHERE p.folder_id = ? AND p.id != ?", (row[0], playlist_id)):
         add(r)
-    for (pid,) in lib.execute("SELECT id FROM playlists WHERE folder_id = ? AND id != ?", (row[0], playlist_id)):
-        if not started(pid):
-            continue
-        for r in db.connect(pid).execute("SELECT t.video_id, t.artist, t.title FROM plays p JOIN tracks t"
-                                         " ON t.id = p.track_id WHERE p.rating = 1"):
-            add(r)
+    # (Offs in the folder's other playlists no longer count here: 2026-11-24, my note #128 — I want to teach this
+    # playlist an Off of its own, e.g. a song better suited to another playlist in the folder.)
     return vids, songs
 
 
@@ -118,9 +114,15 @@ def mark_owned(lib: sqlite3.Connection, sess: sqlite3.Connection, playlist_id: i
     vids, songs = playlist_songs(lib, playlist_id)
     rows = sess.execute("SELECT id, video_id, artist, title, veto_state FROM tracks WHERE origin = 'pool'"
                         " AND library_id IS NULL AND id NOT IN (SELECT track_id FROM plays)").fetchall()
+    by_title: dict[str, list] = {}                  # (each pool song is parsed once and matched by title: this ran
+    for x in songs:                                 # names.song for every pair, ~5–7 s per playlist on the Pi)
+        by_title.setdefault(x.title, []).append(x.artists)
     owned, back = [], []
     for r in rows:
-        mine = (r["video_id"] in vids) or any(names.song(r["artist"], r["title"]).same_song(s) for s in songs)
+        me = names.song(r["artist"], r["title"])
+        mine = (r["video_id"] in vids) or any(me.artists & a for a in by_title.get(me.title, ()))
+        if r["veto_state"] == "dropped":            # (dropped wins: marking it owned made drop_orphans drop it again
+            continue                                # at every catch-up, and this mark it owned again)
         if mine and r["veto_state"] != "owned":
             owned.append(r["id"])
         elif not mine and r["veto_state"] == "owned":

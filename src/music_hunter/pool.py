@@ -307,8 +307,8 @@ def park_surplus(conn: sqlite3.Connection) -> int:
         "SELECT t.id, t.file_path, t.veto, coalesce(c.pool_seed, (SELECT min(seed_track_id) FROM suggestions s"
         " WHERE s.candidate_id = c.id)) owner FROM tracks t JOIN candidates c ON c.id = t.candidate_id"
         " WHERE t.origin = 'pool' AND t.rating IS NULL AND coalesce(t.veto_state, 'playable') = 'playable'"
-        " AND t.id NOT IN (SELECT track_id FROM plays)").fetchall()
-    by_owner: dict[int, list] = {}
+        " AND t.id NOT IN (SELECT track_id FROM plays) AND t.id NOT IN (SELECT track_id FROM lane_songs)").fetchall()
+    by_owner: dict[int, list] = {}                # (lane songs are never parked: §20.7)
     for r in rows:
         by_owner.setdefault(r["owner"], []).append(r)
     ids = sorted({s.track_id for s in seeds(conn)} | {o for o in by_owner if o is not None})
@@ -410,10 +410,14 @@ def restore_audio(conn: sqlite3.Connection, track_id: int) -> bool:
 
 
 def missing_audio(conn: sqlite3.Connection) -> list[int]:
-    """Playable tracks whose audio was dropped while they were vetoed."""
+    """Playable tracks whose audio was dropped while they were vetoed, and lane songs waiting without theirs (§20.7;
+    those first: a lane only picks songs whose audio is here)."""
+    from . import lanes
     from .veto import PLAYABLE
 
-    return [r[0] for r in conn.execute(f"SELECT t.id FROM tracks t WHERE {PLAYABLE} AND t.file_path IS NULL")]
+    lane = lanes.missing_audio(conn) if lanes.enabled(conn) else []
+    return lane + [r[0] for r in conn.execute(f"SELECT t.id FROM tracks t WHERE {PLAYABLE} AND t.file_path IS NULL")
+                   if r[0] not in set(lane)]
 
 
 def unpulled_seeds(conn: sqlite3.Connection) -> list[int]:

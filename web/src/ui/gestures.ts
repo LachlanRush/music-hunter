@@ -17,17 +17,26 @@ const HOLD_MS = 350, SLOP = 8;
 
 export function pressable(root: HTMLElement | Document, o: PressOptions): () => void {
   type D = {item: HTMLElement; x0: number; y0: number; x: number; y: number; touch: boolean; active: boolean;
-            held?: boolean; timer?: ReturnType<typeof setTimeout>};
+            held?: boolean; timer?: ReturnType<typeof setTimeout>; since?: number};
   let d: D | null = null, justDragged = false, lastTouch = 0;
   const swallow = () => { justDragged = true; setTimeout(() => (justDragged = false), 50); };
   const begin = () => {
     if (!d) return;
     d.active = true;
+    d.since = performance.now();
     d.item.classList.remove("held");
     navigator.vibrate?.(15);
     o.start(d.item, d.x, d.y);
   };
-  const scroll = (y: number) => { if (y < 70) window.scrollBy(0, -12); else if (y > innerHeight - 160) window.scrollBy(0, 12); };
+  // Near the top or bottom edge (above the player bar) the page scrolls, faster the nearer the edge (feedback #116:
+  // a wide fixed zone moved the page while dragging in the lower part of the screen).
+  const scroll = (y: number) => {
+    if (!d || performance.now() - (d.since ?? 0) < 300) return;      // (not in the drag's first moments)
+    const bar = (document.querySelector(".player") as HTMLElement | null)?.offsetHeight ?? 0;
+    const top = 48, bottom = innerHeight - bar - 48;
+    if (y < top) window.scrollBy(0, -Math.ceil((top - y) / 5));
+    else if (y > bottom) window.scrollBy(0, Math.ceil((y - bottom) / 5));
+  };
 
   const onDown = (e: Event) => {
     const m = e as MouseEvent;
@@ -66,6 +75,13 @@ export function pressable(root: HTMLElement | Document, o: PressOptions): () => 
     const p = t.touches[0];
     const far = Math.hypot(p.clientX - d.x0, p.clientY - d.y0) > SLOP;
     if (!d.active && !d.held) { if (far) { clearTimeout(d.timer); d = null; } return; }   // scrolling
+    if (!t.cancelable) {                                // the page is already scrolling under the finger: no drag (#116)
+      clearTimeout(d.timer);
+      d.item.classList.remove("held");
+      if (d.active) o.cancel();
+      d = null;
+      return;
+    }
     t.preventDefault();
     d.x = p.clientX; d.y = p.clientY;
     if (!d.active) { if (!far || !o.canDrag(d.item)) return; begin(); }

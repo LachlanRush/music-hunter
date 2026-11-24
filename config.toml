@@ -48,6 +48,25 @@ ytrelated = "ytrelated"
 deezer = "deezer"
 tidal = "tidal"
 
+[lanes]
+# Lanes (SPEC.md §20.7, 2026-11-24): songs following my stars. A starred song queues its closest-sounding songs, one
+# per star; each credited artist queues their best, one per star of their highest-starred song. A batch netting
+# refill_min_net (Adds − Offs) gets another; otherwise the lane goes quiet until new stars wake it.
+enabled = true
+folders = ["style set"]           # only playlists in these home page folders
+share = 0.5                       # chance a pick (not a check) comes from the lanes, when any lane has a song waiting
+# Lane songs pass the playlist's tempo band and a similarity filter, not the veto's score (my decision, 2026-11-24:
+# a score limit mixed the two systems; set min_z, robust SD, to bring one back). Closeness (MAEST cosine) to the
+# starred song, or to the artist's starred songs. Rated picks at 0.90+ to a starred song: Off 24% / Add 12% (below
+# 0.85: 47% / 4%); the same artist's other songs at 0.88+: Off 11–15% (below: 35–40%).
+song_min_similarity = 0.90
+artist_min_similarity = 0.88
+fetch_per_round = 8               # a short lane's downloads per round (its seed's own lists, best positions first)
+fetch_max = 40                    # at most this many downloads per lane per batch
+fetch_per_job = 30                # downloads per background job before it looks again
+artist_top_tracks = 30            # an artist search: this many top tracks each from Deezer and Last.fm (once a day)
+refill_min_net = 1
+
 [pool]
 # SPEC.md §4.1 steps 5–7
 min_duration_s = 90               # shorter videos are previews or clips (a 30 s "Lose Ya Mind", 2026-11-06): skipped
@@ -163,8 +182,9 @@ tempo = 1.0                      # closeness to the seeds' typical tempo (log ra
 # 2026-11-18: back on, as a check on the +1 SD gate — 1 in 8 plays is a random track scoring 0 to +1 (the old gate's
 # playable band; not ones the tempo band or backstop shut out), its audio fetched just in time. Equal min and max: a
 # fixed rate, whatever a run drew before.
-rate_min = 0.125
-rate_max = 0.125
+# 2026-11-24: off again (my decision), with the lanes (§20.7) as the other half of the picks.
+rate_min = 0
+rate_max = 0
 min_z = 0.0                      # controls come from vetoed tracks scoring at least this
 target = 0                       # 0 = no automatic end: `music-hunter end-run` ends the run and unseals results
                                  # (v3 ended at 25 rated controls; the first v3 run was ended early at 9)
@@ -279,6 +299,7 @@ rekordbox_check_s = 30
 # environment and sends them with the analysis; the Pi logs them for the replay test. Nothing uses them yet.
 enabled = true
 timeout_s = 120
+backlog = 300                     # copies waiting to be measured after their track was sent (2026-11-24); beyond: skipped
 
 [bpm]
 # SPEC.md §15.6 — tempo measured from the audio, folded into [min, max) to undo half/double errors
@@ -308,6 +329,9 @@ max_true_peak_db = -1.0
 session_gap_minutes = 30         # plays further apart than this start a new session
 
 [ui]
+background_process = true         # re-scoring (the veto and the lanes) in separate processes, so serving songs comes
+background_processes = 2          #   first (2026-11-24: songs took 8–20 s to start while stars were caught up with)
+background_nice = 10              #   … at this lower CPU priority
 maintenance_minutes = 60         # v5: re-score idle playlists, purge Recently deleted, restart due work
 results_min_plays = 8            # Results curve: the lines stop where fewer plays than this are behind a point
 results_bandwidth_sd = 0.3       # Results curve: each point averages plays within about this score distance (Gaussian)
@@ -392,7 +416,14 @@ retry_attempts = 3                   # HTTP 403/429 on one track: hand it back t
 # another is analysed. Signed-in (256 kbps) fetches always go from home. Tested: 20 of 20 pool songs through PIA.
 lanes = ["home", "pia"]
 pia_proxy = "proxy-nl.privateinternetaccess.com:1080"
-lane_interval_seconds = 18           # at least this long between download starts per address (≤ 200 an hour each)
+# Pacing per address: a gap after each download ends, and a minimum interval between starts. yt-dlp's guidance for
+# a signed-out address: ~300 videos an hour, 5–10 s between downloads (2026-11-24, my choice, for PIA too: tested
+# faster without refusals — 80 of 80 four at a time — but no point outrunning the analysis). Home stays at 200 an hour
+# (it's also the Pi's address and the signed-in 256 kbps downloads').
+lane_interval_seconds = {home = 18, pia = 12}
+lane_gap_seconds = {home = 5, pia = 5}
+analysis_threads = 8                 # loudness, tempo, cover art and vocals alongside the audio model (one at a time)
+pia_loops = 2                        # PIA loops sharing its address: one downloads while another's track is analysed
 
 [worker.wake]
 # Home Assistant's Wake-on-LAN switch for the PC (turned on to wake it; a button entity is pressed instead). Empty

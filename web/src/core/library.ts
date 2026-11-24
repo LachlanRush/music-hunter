@@ -31,6 +31,8 @@ export class PlaylistModel {
   private watching = 0;
   private watchTimer: ReturnType<typeof setInterval> | undefined;
   private loadFailed = false;     // the message is a failed load's (cleared by the next load), not a failed change's
+  private edits = 0;              // changes shown at once so far
+  private sending = 0;            // … whose request hasn't been answered yet
 
   constructor(readonly id: number) {
     this.data = new Store<Playlist | null>(cached<Playlist>(this.key));
@@ -44,9 +46,13 @@ export class PlaylistModel {
     return this.data.get();
   }
 
-  async load(): Promise<void> {
+  /** The Pi's view. Not applied over changes made after it was asked for, or still on their way (feedback #118: ten
+   *  songs deleted in a row came back, from a view fetched between the deletions); it's asked for again once quiet. */
+  async load(force = false): Promise<void> {
+    const at = this.edits;
     try {
       const p = await api<Playlist>(`/api/playlists/${this.id}`);
+      if (!force && (this.sending > 0 || this.edits !== at)) { this.settleLater(); return; }
       this.data.set(p);
       keep(this.key, p);
       if (this.loadFailed) this.error.set("");
@@ -83,21 +89,35 @@ export class PlaylistModel {
     const p = this.p;
     if (!p) return;
     const next = f(p);
+    this.edits++;
     this.data.set(next);
     keep(this.key, next);
   }
 
   private async send(work: Promise<unknown>, failed: string, settle = 300): Promise<boolean> {
+    this.sending++;
     try {
       await work;
+      this.sending--;
       if (!this.loadFailed) this.error.set("");
       this.settleLater(settle);
       return true;
     } catch (e) {
+      this.sending--;
       this.error.set(`${failed}: ${(e as Error).message}`);
-      void this.load();
+      void this.load(true);                             // (the Pi's view back, as it is)
       return false;
     }
+  }
+
+  /** A Find music + shown in To rate at once (or taken out again), until the Pi's view brings the real song. */
+  pending(t: Track, on: boolean): void {
+    const same = (x: Track) => x.status === "added" && x.artist === t.artist && x.title === t.title;
+    this.change((p) => {
+      const rest = p.tracks.filter((x) => !(same(x) && (!on || x.id < 0)));
+      if (on && !rest.some(same)) rest.unshift({...t, id: -t.id, status: "added", added_at: nowStamp(), rate: 1});
+      return {...p, tracks: sortTracks(rest)};
+    });
   }
 
   /** Tap a star; the same one again clears it. A starred To rate song joins the list, at the top of its stars. */
@@ -168,13 +188,11 @@ export class PlaylistModel {
     void this.send(api(`/api/playlists/${this.id}/play-filter`, {min_stars: minStars}, "PUT"), "Couldn't save", 60000);
   }
 
+  /** Set to BPM: shown at once, the Pi follows (feedback #122: a typed 143 was saved, but a view fetched just before
+   *  put the old number back in the box). The songs' rates come with the Pi's view. */
   async saveTempo(on: boolean, bpm: number | null): Promise<void> {
-    try {
-      await api(`/api/playlists/${this.id}/tempo`, {on, bpm}, "PUT");
-    } catch (e) {
-      this.error.set(`Couldn't save: ${(e as Error).message}`);
-    }
-    await this.load();
+    this.change((p) => ({...p, tempo: {...p.tempo, on, bpm, target: bpm ?? p.tempo.auto ?? p.tempo.target}}));
+    await this.send(api(`/api/playlists/${this.id}/tempo`, {on, bpm}, "PUT"), "Couldn't save", 0);
   }
 
   async ownBpm(trackId: number, bpm: number): Promise<void> {

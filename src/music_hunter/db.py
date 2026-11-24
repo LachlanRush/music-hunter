@@ -282,6 +282,37 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- v6 (§20.7): lanes — songs following my stars (lanes.py). One lane per starred song and per credited artist.
+CREATE TABLE IF NOT EXISTS lanes (
+    id          INTEGER PRIMARY KEY,
+    kind        TEXT NOT NULL,       -- 'song' (key: the library track) | 'artist' (key: the folded name)
+    key         TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    state       TEXT NOT NULL DEFAULT 'active',   -- 'active' | 'quiet' (its last batch netted < refill_min_net)
+    batch       INTEGER NOT NULL DEFAULT 1,
+    due         INTEGER NOT NULL DEFAULT 0,       -- songs still owed to the current batch (none found yet)
+    wake        TEXT,                -- JSON, while quiet: what was starred then {stars, songs}
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (kind, key)
+);
+
+CREATE TABLE IF NOT EXISTS lane_songs (
+    lane_id     INTEGER NOT NULL REFERENCES lanes(id),
+    track_id    INTEGER NOT NULL REFERENCES tracks(id),
+    batch       INTEGER NOT NULL,
+    added_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (lane_id, track_id)
+);
+
+CREATE TABLE IF NOT EXISTS lane_fetches (    -- downloads made for a lane (its budget per batch)
+    lane_id      INTEGER NOT NULL REFERENCES lanes(id),
+    candidate_id INTEGER NOT NULL REFERENCES candidates(id),
+    batch        INTEGER NOT NULL,
+    at           TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (lane_id, candidate_id)
+);
+
 CREATE TABLE IF NOT EXISTS weight_sets (
     id          INTEGER PRIMARY KEY,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -326,6 +357,8 @@ MIGRATIONS = [
     ("tracks", "gate_since", "INTEGER"),
     ("tracks", "gate_since_at", "TEXT"),              # v5: …and when (the grace also ends after grace_days)              # v5: rating count when a playable track fell below the gate
     ("tracks", "redownloads", "INTEGER"),             # v5: times its audio was downloaded again after being dropped
+    ("plays", "lane_id", "INTEGER"),
+    ("lanes", "searched_at", "TEXT"),              # an artist lane's last search for the artist's top tracks                 # v6 (§20.7): the lane the pick came from; NULL: random or a check
     ("playlist_tracks", "starred_at", "TEXT"),
     ("playlists", "folder_id", "INTEGER REFERENCES folders(id) ON DELETE SET NULL"),   # its folder on the home page
     ("playlists", "position", "INTEGER"),            # its place on the home page (dragged); NULL: after, oldest first

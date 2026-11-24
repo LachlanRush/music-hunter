@@ -299,3 +299,34 @@ def test_add_changed_to_close_leaves_no_trace(setup, monkeypatch):
     assert add not in {s.track_id for s in seeds(sess)}                              # not a seed
     assert sess.execute("SELECT veto_state FROM tracks WHERE id = ?", (found,)).fetchone()[0] == "dropped"
     assert sess.execute("SELECT rating, demoted FROM plays WHERE id = ?", (play,)).fetchone()[:] == (2, None)
+
+
+def test_a_starred_add_starts_its_lanes(setup, monkeypatch):
+    """§20.7: in a style playlist, a song added with + from any pick and then starred starts a song lane and its
+    artist's lane, as soon as the star is given; a + alone starts nothing."""
+    from fastapi.testclient import TestClient
+    from music_hunter import web
+
+    lib, pid, tracks = setup
+    monkeypatch.setattr(web.Worker, "start_if_needed", lambda self: None)
+    library.move_to_folder(lib, pid, library.create_folder(lib, "style set"))
+    library.set_stars(lib, pid, tracks[0], 5)
+    sess = db.connect(pid)
+    find.sync_seeds(lib, sess, pid)
+    with sess:                                                    # a random pick (no lane), rated +
+        tid = sess.execute("INSERT INTO tracks (artist, title, file_path, duration_s, origin, video_id)"
+                           " VALUES ('New Artist', 'Find', 'library/New - Find.webm', 200, 'pool', 'vidNEW')").lastrowid
+        sess.execute("INSERT INTO track_embeddings (track_id, model, dim, n_chunks, embedding)"
+                     " SELECT ?, model, dim, n_chunks, embedding FROM track_embeddings LIMIT 1", (tid,))
+        play = sess.execute("INSERT INTO plays (track_id, generation, play_number, is_control, rating, components, score, rank, pool_size, provenance, shown_at)"
+                            " VALUES (?, 1, 1, 0, 3, '{}', 0, 1, 1, '[]', datetime('now'))", (tid,)).lastrowid
+    find.sync_add(lib, sess, pid, play)
+    lid = next(t["id"] for t in library.playlist_tracks(lib, pid) if t["status"] == "added")
+    lane = lambda kind, key: sess.execute("SELECT * FROM lanes WHERE kind = ? AND key = ?", (kind, key)).fetchone()
+    client = TestClient(web.app)
+    client.put(f"/api/playlists/{pid}/tracks/{tracks[0]}", json={"stars": 4})     # (any star change syncs)
+    web.wait_follow_ups()
+    assert lane("song", str(tracks[0])) is not None and lane("song", str(lid)) is None   # + alone: no lane
+    client.put(f"/api/playlists/{pid}/tracks/{lid}", json={"stars": 4})
+    web.wait_follow_ups()
+    assert lane("song", str(lid)) is not None and lane("artist", "new artist") is not None

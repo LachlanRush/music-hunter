@@ -36,6 +36,7 @@ export interface PlayerState {
 export interface Hooks {
   played(pid: number): void;            // a song of this playlist (or its Find music) started
   added(pid: number): void;             // Find music's + changed the playlist's To rate
+  adding?(pid: number, t: Track, on: boolean): void;   // … shown there at once
   notice(text: string): void;           // a short note ("Added to …", a failure)
 }
 
@@ -173,6 +174,7 @@ export class Player {
       preload: (id, audio, rate, m, still) => this.preloadFor(id, audio, rate, m, still),
       played: (pid) => this.hooks.played(pid),
       added: (pid) => this.hooks.added(pid),
+      adding: (pid, t, on) => this.hooks.adding?.(pid, t, on),
       notice: (text) => this.hooks.notice(text),
       ended: () => { if (this.fm === fm) this.leaveFind(); },
     });

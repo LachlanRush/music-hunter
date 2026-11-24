@@ -15,6 +15,7 @@ export const player = new Player(engine, {
     remember(pid);
   },
   added: (pid) => void playlistModel(pid).load(),      // a + shows up in To rate (and leaves again if taken back)
+  adding: (pid, t, on) => playlistModel(pid).pending(t, on),
   notice: toast,
 });
 
@@ -32,8 +33,8 @@ declare global {
   }
 }
 
-// What was playing last (feedback #60): reopening the app brings back that playlist with its song loaded and paused
-// (Find music: its latest pick), within two weeks; not the place in the song.
+// What was playing last (feedback #60, #126): opening the app, or the site in Chrome, brings back that playlist with
+// its song loaded and paused (Find music: the pick I was on), within two weeks; not the place in the song.
 function remember(pid: number): void {
   const s = player.state.get();
   try {
@@ -46,6 +47,10 @@ async function resume(): Promise<void> {
   let last: {pid: number; mode: string; track_id: number | null; at: number} | null = null;
   try { last = JSON.parse(localStorage.getItem("lastPlaying") || "null"); } catch { /* none */ }
   if (!last || Date.now() - last.at > 14 * 86_400_000) return;
+  try {                                                 // once per visit: a reload, or Home opened by hand, stays put
+    if (sessionStorage.getItem("resumed")) return;
+    sessionStorage.setItem("resumed", "1");
+  } catch { /* storage blocked: resume anyway */ }
   if (route.get().name === "home") go(`/playlist/${last.pid}`, true);
   try {
     const p = await api<Playlist>(`/api/playlists/${last.pid}`);
@@ -69,8 +74,8 @@ if (inApp) {
     return false;
   };
   window.__mhShowPlaying = () => { if (player.state.get().track) fullView.set(true); };   // the notification was tapped
-  void resume();
 }
+void resume();                                          // (in Chrome too: feedback #126)
 
 // --- updates reach an open page ----------------------------------------------------------------------------------
 // The page stays open for hours (in the app it's never reloaded), so a fix pushed to the Pi only arrived after the app

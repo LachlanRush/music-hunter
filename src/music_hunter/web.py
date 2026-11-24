@@ -80,9 +80,13 @@ class Worker:
     def start_if_needed(self) -> None:
         if self.state == "running":
             return
-        conn = db.connect(self.pid)
-        job = self.job_needed(conn)
-        conn.close()
+        token = db.SESSION.set(self.pid)            # (job_needed asks which playlist it is: lanes are per playlist)
+        try:
+            conn = db.connect(self.pid)
+            job = self.job_needed(conn)
+            conn.close()
+        finally:
+            db.SESSION.reset(token)
         if job:
             self.state = "running"  # before the thread starts, so the gate never sees a false "idle"
             self.message = "Starting…"
@@ -122,9 +126,14 @@ class Worker:
                              or (waiting and played_since >= pool_cfg["refill_min_plays"])):
             return "pull"                     # placeholder Add-seed rule (§17.8, to be discussed); before top-ups,
                                               # which are due after almost every rating and would starve it
+        from . import lanes
+        from .analysis import youtube_paused
+        if lanes.enabled(conn) and lanes.missing_audio(conn) and not youtube_paused():
+            return "restore"                  # lane songs' audio before top-ups: a lane only picks songs it has (§20.7)
+        if lanes.enabled(conn) and lanes.fetchable(conn):
+            return "lanes"                    # more songs downloaded for lanes short of them (§20.7)
         if left and playable < pool_cfg["target_size"]:
             return "fill"
-        from .analysis import youtube_paused
         if missing_audio(conn) and not youtube_paused():
             return "restore"
         if played_since and playable < pool_cfg["refill_below"]:
@@ -167,10 +176,14 @@ class Worker:
         if job == "restore":
             todo = missing_audio(conn)
             for i, tid in enumerate(todo, 1):
-                self.message = f"Bringing back {i} of {len(todo)} tracks that passed the veto again…"
+                self.message = f"Bringing back {i} of {len(todo)} tracks (lane songs, and tracks that passed the veto again)…"
                 priority.yield_to_player()
                 restore_audio(conn, tid)
                 time.sleep(CONFIG["pool"]["download_delay_seconds"])
+            self.state, self.message = "idle", ""
+            return
+        if job == "lanes":
+            self._lanes(conn)
             self.state, self.message = "idle", ""
             return
         if job in ("pull", "pull_new"):
@@ -193,6 +206,31 @@ class Worker:
         self.message = "Downloading and analysing tracks…"
         fill(conn, gen, progress=lambda text: setattr(self, "message", f"Downloading and analysing: {text}"))
         self.state, self.message = "idle", ""
+
+
+    def _lanes(self, conn) -> None:
+        """Download more for lanes short of songs (§20.7): a round per lane at a time, then the veto (which places
+        the new songs that pass the lanes' filter), until nothing more is wanted or [lanes] fetch_per_job is reached."""
+        from . import lanes
+        from .pool import Filler
+
+        gen = conn.execute("SELECT max(id) FROM generations").fetchone()[0]
+        if gen is None:
+            return
+        filler, done = Filler(conn, gen), 0
+        while done < CONFIG["lanes"].get("fetch_per_job", 30):
+            todo = lanes.wanted(conn, search=lambda lane, seed: lanes.search_artist(conn, lane, seed))
+            if not todo:
+                # (nothing left to try for the short lanes: their budget or their lists are used up)
+                lanes.settle_short(conn)            # a short batch with songs is scored as it is
+                break
+            for cid, seed, lane_id in todo:
+                priority.yield_to_player()
+                lanes.fetched(conn, lane_id, cid)
+                self.message = "Finding songs for the lanes…"
+                filler.process(cid, seed)
+                done += 1
+            veto.update(conn)                       # (places the new songs that pass)
 
 
 HEAVY = threading.Lock()
@@ -911,7 +949,9 @@ def merge_playlist(playlist_id: int, body: MergeBody) -> dict:
 def delete_playlist(playlist_id: int) -> dict:
     conn = db.connect()
     _playlist_or_404(conn, playlist_id)
+    name = conn.execute("SELECT name FROM playlists WHERE id = ?", (playlist_id,)).fetchone()[0]
     library.delete_playlist(conn, playlist_id)
+    db.log_event(conn, "playlist_deleted", playlist_id=playlist_id, name=name)
     wait_follow_ups()                                  # its Find music may still be catching up with a change
     _delete_session(playlist_id)
     return {"ok": True}
@@ -1282,6 +1322,27 @@ def grid_result(track_id: int, body: GridBody) -> dict:
     return {"ok": True}
 
 
+class VocalsBody(BaseModel):
+    video_id: str
+    features: dict
+
+
+@app.post("/api/worker/vocals", dependencies=[Depends(worker_auth)])
+def vocals_result(body: VocalsBody) -> dict:
+    """A track's vocals, measured by the PC after the track was sent (2026-11-24): logged in every Find music that
+    has the track, as the 'vocals' event was before."""
+    n = 0
+    for p in library.list_playlists(db.connect_library()):
+        if not find.started(p["id"]):
+            continue
+        sess = db.connect(p["id"])
+        row = sess.execute("SELECT generation FROM tracks WHERE video_id = ? ORDER BY id DESC LIMIT 1", (body.video_id,)).fetchone()
+        if row:
+            db.log_event(sess, "vocals", generation=row[0], video_id=body.video_id, reason=body.features)
+            n += 1
+    return {"logged": n}
+
+
 @app.post("/api/worker/quality/claim", dependencies=[Depends(worker_auth)])
 def quality_claim():
     item = analysis.quality_claim(db.connect_library())
@@ -1535,10 +1596,10 @@ def next_track() -> dict:
         if track_id is None:
             session_worker().start_if_needed()
             raise HTTPException(409, "No playable tracks in the pool")
-        if not restore_audio(conn, track_id):          # an injected vetoed track's audio, if not fetched ahead
+        if not restore_audio(conn, track_id):          # a check's or a lane song's audio, if not fetched ahead
             draw = db.get_setting(conn, "next_draw") or {}
             playable = ratings.playable_ids(conn)
-            if not (draw.get("control") and playable):
+            if not ((draw.get("control") or draw.get("lane")) and playable):   # (a lane song: likewise, §20.7)
                 db.set_setting(conn, "next_draw", None, log=False)
                 raise HTTPException(503, "Couldn't fetch the next track's audio; try again")
             import random                              # (YouTube refusing, say): a normal pick instead, at once
@@ -1768,10 +1829,27 @@ def tempo_status(track_id: int, rate: float, pl: int | None = None, ahead: int =
     rel = _audio_path(track_id)
     if rel is None:
         raise HTTPException(404, "Audio not available")
+    if pl is not None and db.SESSION.get() is None:  # the rate this song plays at now, if the page's is out of date
+        lib = db.connect()                            # (feedback #107: a song started on the original, then switched)
+        t = lib.execute("SELECT t.bpm, pt.bpm_override FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id"
+                        " WHERE pt.playlist_id = ? AND pt.track_id = ?", (pl, track_id)).fetchone()
+        if t is not None:
+            s = tempo.playlist_settings(lib, pl)
+            now = tempo.rate_for(t["bpm"], s)[0]
+            if s["on"] and t["bpm_override"]:
+                core = tempo.playlist_tempo(lib, pl)
+                around = core["center"] if core else tempo.median_bpm(r[0] for r in lib.execute(
+                    "SELECT t.bpm FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id WHERE pt.playlist_id = ?", (pl,)))
+                now = tempo.override_rate(t["bpm"], t["bpm_override"], around) or 1.0
+            if now == 1.0:
+                return {"state": "ready", "url": None, "rate": 1.0}
+            rate = now
+    if rate == 1.0:                                   # (the original: nothing to make)
+        return {"state": "ready", "url": None, "rate": 1.0}
     scope = tempo.scope_for(db.SESSION.get(), pl)
     st = tempo.status(scope, track_id, rel, rate, urgent=tempo.NEXT if ahead else tempo.NOW)
     q = f"rate={rate}" + (f"&pl={pl}" if pl is not None else "")
-    return {"state": st, "url": f"{_base()}/tempo/{track_id}/audio?{q}" if st == "ready" else None}
+    return {"state": st, "url": f"{_base()}/tempo/{track_id}/audio?{q}" if st == "ready" else None, "rate": rate}
 
 
 @router.get("/tempo/{track_id}/audio")

@@ -122,10 +122,12 @@ UNPLAYED_POOL = ("c.status = 'pool' AND t.rating IS NULL AND t.id NOT IN (SELECT
 
 class Pull:
     def __init__(self, conn: sqlite3.Connection, yt: YouTubeMusic, lastfm: LastFM | None,
-                 deezer: Deezer | None = None, tidal: Tidal | None = None):
+                 deezer: Deezer | None = None, tidal: Tidal | None = None, generation: int | None = None):
         self.conn, self.yt, self.lastfm, self.deezer, self.tidal = conn, yt, lastfm, deezer, tidal
-        with conn:
-            self.generation = conn.execute("INSERT INTO generations DEFAULT VALUES").lastrowid
+        if generation is None:
+            with conn:
+                generation = conn.execute("INSERT INTO generations DEFAULT VALUES").lastrowid
+        self.generation = generation              # (given: adding to an earlier pull, e.g. a lane's artist search)
         # Already rated or shown: originals, rated tracks and anything played.
         shown = conn.execute(f"SELECT t.artist, t.title, t.video_id, c.isrc FROM tracks t"
                              f" LEFT JOIN candidates c ON c.id = t.candidate_id WHERE {SHOWN}").fetchall()

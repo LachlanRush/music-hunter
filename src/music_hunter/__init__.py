@@ -51,6 +51,27 @@ def analyse_bpm(seeds: bool) -> None:
     print(f"{len(rows)} tracks measured")
 
 
+def show_lanes() -> None:
+    """§20.7: every lane, its state and how its songs have gone."""
+    from . import lanes, veto
+
+    conn = db.connect()
+    veto.update(conn)                                  # (syncs the lanes too)
+    if not lanes.enabled(conn):
+        print("Lanes are off for this playlist ([lanes] folders).")
+    rows = lanes.summary(conn)
+    for kind in ("song", "artist"):
+        part = [r for r in rows if r["kind"] == kind]
+        print(f"\n{kind.title()} lanes: {len(part)} ({sum(r['state'] == 'active' for r in part)} active)")
+        for r in part:
+            owed = f" (+{r['due']} owed)" if r["due"] else ""
+            print(f"  {r['state']:6s} batch {r['batch']}  waiting {r['waiting']:2d}{owed}"
+                  f"  played {r['plays']:2d}: Off {r['off']}, Add {r['add']}  {r['label'][:60]}")
+    picks = conn.execute("SELECT (lane_id IS NOT NULL) AS lane, count(*) FROM plays WHERE rating IS NOT NULL"
+                         " AND shown_at >= coalesce((SELECT min(created_at) FROM lanes), '9999') GROUP BY 1").fetchall()
+    print("\nRated picks since the lanes started: " + ", ".join(f"{'lanes' if r[0] else 'random'} {r[1]}" for r in picks))
+
+
 def show_veto(top: int) -> None:
     """v4: what the veto currently allows and blocks, and why (SPEC.md §17.4)."""
     import json
@@ -424,6 +445,8 @@ def main() -> None:
     p = sub.add_parser("veto", help="What the veto allows and blocks, and why")
     p.add_argument("--top", type=int, default=25, help="How many of the lowest-scored tracks to list")
 
+    sub.add_parser("lanes", help="The lanes following my stars, and how their songs went (§20.7)")
+
     sub.add_parser("end-run", help="End the run now and unseal the results")
 
     sub.add_parser("serve", help="Start the localhost player")
@@ -491,6 +514,8 @@ def main() -> None:
         analyse_bpm(args.seeds)
     elif args.command == "veto":
         show_veto(args.top)
+    elif args.command == "lanes":
+        show_lanes()
     elif args.command == "end-run":
         end_run()
     elif args.command == "reembed":

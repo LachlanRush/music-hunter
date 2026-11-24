@@ -1,7 +1,8 @@
 <script lang="ts">
   // Add to playlist… (like Spotify): every playlist with its cover, ticked where the song is, in Home's sections and
   // order with the current playlist's section first; tick and untick, then Done.
-  import { api, type Folder } from "../core/api";
+  import { untrack } from "svelte";
+  import { api, cached, type Folder, type Playlist, type PlaylistSummary } from "../core/api";
   import { playlistModel } from "../core/library";
   import { sheet } from "./overlay";
 
@@ -22,18 +23,37 @@
     error = "";
     done = false;
     if (!dlg.open) dlg.showModal();
-    void load(s.trackId);
+    untrack(() => void load(s.trackId));               // (what load reads mustn't re-run this)
   });
 
+  // Shown at once from what the device already knows (Home's playlists and each playlist's songs, kept as they were
+  // last seen; feedback #119: it sometimes sat loading), then checked with the Pi; ticks I've changed meanwhile stay.
+  function local(trackId: number): boolean {
+    const l = cached<PlaylistSummary[]>("next:playlists"), f = cached<Folder[]>("next:folders");
+    if (!l || !f) return false;
+    const has = (pid: number) => !!cached<Playlist>(`next:playlist:${pid}`)?.tracks.some((t) => t.id === trackId);
+    const picks = l.map((p) => ({id: p.id, name: p.name, image: p.image, folder_id: p.folder_id, has: has(p.id)}));
+    was = new Set(picks.filter((p) => p.has).map((p) => p.id));
+    ticked = new Set(was);
+    folders = f;
+    lists = picks;
+    return true;
+  }
+
   async function load(trackId: number) {
+    const shown = local(trackId);
+    let touched = false;
+    const before = ticked;
     try {
       const [l, f] = await Promise.all([api<Pick[]>(`/api/tracks/${trackId}/playlists`), api<Folder[]>("/api/folders")]);
+      if (done || $sheet?.trackId !== trackId) return;
+      touched = shown && ticked !== before;            // (toggled while the Pi answered: keep my ticks)
       was = new Set(l.filter((p) => p.has).map((p) => p.id));
-      ticked = new Set(was);
+      if (!touched) ticked = new Set(was);
       folders = f;
       lists = l;
     } catch (e) {
-      error = `Couldn't load the playlists: ${(e as Error).message}`;
+      if (!shown) error = `Couldn't load the playlists: ${(e as Error).message}`;
     }
   }
 

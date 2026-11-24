@@ -1,16 +1,19 @@
 // Set to BPM: songs play at the playlist's tempo, pitch kept, from stretched copies the Pi renders (Rubber Band).
 // Until a song's copy is ready the original plays, and the copy swaps in at the same point in the music.
 
-export type CopyState = {state: "ready" | "rendering" | "failed"; url?: string | null};
+export type CopyState = {state: "ready" | "rendering" | "failed"; url?: string | null; rate?: number};
 
 export interface TempoSource {
   /** Is the copy of `id` at `rate` ready? Asks the Pi to make it if not (`ahead`: after the playing song's). */
   status(id: number, rate: number, ahead?: boolean): Promise<CopyState>;
+  /** The Pi answers with the rate the song plays at now, if the page's was out of date (a playlist's copies). */
+  corrects?: boolean;
 }
 
 // The playlist's copies (`/tempo/<id>?rate=…&pl=<playlist>`); Find music's live under /find/<playlist>/ (milestone 3).
 export function playlistCopies(pid: number, base = ""): TempoSource {
   return {
+    corrects: true,
     async status(id, rate, ahead = false) {
       try {
         const r = await fetch(`${base}/tempo/${id}?rate=${rate}&pl=${pid}${ahead ? "&ahead=1" : ""}`);
@@ -23,6 +26,7 @@ export function playlistCopies(pid: number, base = ""): TempoSource {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const START_WAIT_MS = 350;      // how long a song's start waits to hear whether its copy is ready
 
 /** Follows one song's copy: where to start, and when to swap to the copy once it's made. */
 export class TempoFollower {
@@ -46,16 +50,29 @@ export class TempoFollower {
   async start(id: number, original: string, rate: number): Promise<string> {
     const song = ++this.song, op = ++this.op;
     this.loaded = 1;
-    if (rate && rate !== 1) {
+    if ((rate && rate !== 1) || this.source.corrects) {
       this.starting = true;
-      const s = await this.source.status(id, rate);
+      // The Pi normally answers in ~10 ms, but a busy Pi took 1.5 s (Surrender, 2026-11-20): after a moment the song
+      // starts on the original and the copy takes over at the same place once the Pi has answered. A playlist's Pi
+      // also says which rate the song plays at now (#107: an out-of-date rate started a song on the original, which
+      // then switched).
+      const asked = this.source.status(id, rate || 1);
+      const s = await Promise.race([asked, sleep(START_WAIT_MS).then(() => null)]);
       if (song === this.song) this.starting = false;
-      if (song === this.song && s.state === "ready" && s.url) {
-        this.loaded = rate;
-        this.changed(rate);
+      const want = s?.rate || rate || 1;
+      if (song === this.song && s && s.state === "ready" && s.url) {
+        this.loaded = want;
+        this.changed(want);
         return s.url;
       }
-      if (song === this.song) void this.follow(song, op, id, rate);
+      if (song === this.song && !s) {
+        void asked.then((late) => {                 // (after the caller has loaded the original)
+          const w = late.rate || rate || 1;
+          if (song !== this.song || op !== this.op || w === 1) return;
+          if (late.state === "ready" && late.url) this.doSwap(late.url, w);
+          else void this.follow(song, op, id, w);
+        });
+      } else if (song === this.song && want !== 1) void this.follow(song, op, id, want);
     }
     this.changed(1);
     return original;

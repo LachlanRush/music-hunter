@@ -11,7 +11,7 @@
   import Feedback from "./Feedback.svelte";
   import { pressable } from "./gestures";
   import { menuAt, menuPoint, toast } from "./overlay";
-  import { playlistItems } from "./playlistMenu";
+  import { deleting, playlistItems } from "./playlistMenu";
 
   let lists = $state<PlaylistSummary[]>(cached<PlaylistSummary[]>("next:playlists") ?? []);
   let folders = $state<Folder[]>(cached<Folder[]>("next:folders") ?? []);
@@ -39,11 +39,14 @@
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let prefetched = false;
+  let saving = 0, edits = 0;                         // moves and deletions shown at once, and the Pi not done yet
   async function load() {
+    const at = edits;
     try {
       const [l, f] = await Promise.all([api<PlaylistSummary[]>("/api/playlists"), api<Folder[]>("/api/folders")]);
       if (cardDrag || secDrag) return;                  // not under something being dragged
-      lists = l;
+      if (saving || at !== edits) return;               // (a view from before a move would put it back: #120)
+      lists = l.filter((p) => !deleting.has(p.id));
       folders = f;
       keep("next:playlists", l);
       keep("next:folders", f);
@@ -173,14 +176,19 @@
     }
     cardDrag = null;
     secDrag = null;
+    edits++;
+    saving++;
+    keep("next:playlists", lists);
     try {
-      if (c && target !== (base.find((s) => s.lists.some((p) => p.id === c.id))?.id ?? 0)) {
-        await api(`/api/playlists/${c.id}/folder`, {folder_id: target || null}, "PUT");
-      }
-      await api("/api/home-order", {items}, "PUT");
+      await Promise.all([
+        c && target !== (base.find((s) => s.lists.some((p) => p.id === c.id))?.id ?? 0)
+          ? api(`/api/playlists/${c.id}/folder`, {folder_id: target || null}, "PUT") : null,
+        api("/api/home-order", {items}, "PUT"),
+      ]);
     } catch (e) {
       error = `Couldn't move it: ${(e as Error).message}`;
     }
+    saving--;
     void load();
   }
 
@@ -193,6 +201,10 @@
       const e = m.error.get();
       if (e) toast(e);
       void load();
+    }, () => {                                        // deleted: gone from here at once (#115), the Pi follows
+      edits++;
+      lists = lists.filter((q) => q.id !== id);
+      keep("next:playlists", lists);
     })]);
     void m.load();                                    // fresh for next time
   }

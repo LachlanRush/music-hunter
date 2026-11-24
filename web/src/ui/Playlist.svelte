@@ -27,6 +27,7 @@
   let found = $state<number | null>(null);
   let link = $state("");
   let deletedOpen = $state(false);
+  let bpmTyping = $state<string | null>(null);
   let main: HTMLElement | undefined = $state();
 
   const p = $derived($data);
@@ -294,7 +295,12 @@
 
     <section class="tempo" aria-label="Tempo">
       <label><input type="checkbox" checked={p.tempo.on} onchange={(e) => model.saveTempo(e.currentTarget.checked, p.tempo.bpm)}> Set to</label>
-      <label><input type="number" min="60" max="200" step="0.5" inputmode="decimal" aria-label="Target BPM" value={p.tempo.target}
+      <!-- (not overwritten while I'm typing in it: a refresh arriving then put the old number back, #122) -->
+      <label><input type="number" min="60" max="200" step="0.5" inputmode="decimal" aria-label="Target BPM"
+             value={bpmTyping ?? p.tempo.target} onfocus={(e) => (bpmTyping = e.currentTarget.value)}
+             oninput={(e) => (bpmTyping = e.currentTarget.value)}
+             onblur={() => (bpmTyping = null)}
+             onkeydown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
              onchange={(e) => { const v = Number(e.currentTarget.value); model.saveTempo(p.tempo.on, v >= 60 && v <= 200 ? v : null); }}> BPM</label>
     </section>
 
@@ -388,7 +394,10 @@
     {/if}
 
     {#if p.deleted?.length}
-      <details class="failures deleted" bind:open={deletedOpen}>
+      <!-- Opening it shows the list from its top (feedback #121: the page ended up at its bottom). -->
+      <details class="failures deleted" bind:open={deletedOpen}
+               ontoggle={(e) => { const el = e.currentTarget; if (el.open) requestAnimationFrame(() => {
+                 window.scrollTo({top: el.getBoundingClientRect().top + scrollY - 12, behavior: "smooth"}); }); }}>
         <summary>Recently deleted ({p.deleted.length})</summary>
         <div class="del-all"><button class="btn danger" onclick={forgetAll}>Delete all</button></div>
         <ol>

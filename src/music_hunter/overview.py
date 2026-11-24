@@ -52,10 +52,33 @@ def overfull_plays(sess) -> set[int]:
     return out
 
 
+def lane_picks(sess) -> list[dict]:
+    """Since the lanes started (§20.7): rated picks by where they came from — random, a song lane, an artist lane —
+    with Off / Add rates, and how many lanes of each kind are active or quiet."""
+    from .ratings import ADD
+    since = sess.execute("SELECT min(created_at) FROM lanes").fetchone()[0]
+    if since is None:
+        return []
+    by = {"random": [], "song": [], "artist": []}
+    for kind, rating in sess.execute("SELECT coalesce(l.kind, 'random'), p.rating FROM plays p LEFT JOIN lanes l"
+                                     " ON l.id = p.lane_id WHERE p.rating IS NOT NULL AND p.is_control = 0"
+                                     " AND p.shown_at >= ?", (since,)):
+        by[kind].append(rating)
+    state = dict(((k, s), n) for k, s, n in sess.execute("SELECT kind, state, count(*) FROM lanes GROUP BY 1, 2"))
+    out = []
+    for kind, label in (("random", "Random picks"), ("song", "Song lanes"), ("artist", "Artist lanes")):
+        r = by[kind]
+        n = len(r)
+        out.append({"kind": kind, "label": label, "plays": n,
+                    "off": round(100 * r.count(1) / n) if n else None, "add": round(100 * r.count(ADD) / n) if n else None,
+                    "active": state.get((kind, "active")), "quiet": state.get((kind, "quiet"))})
+    return out
+
+
 def overview(playlist_id: int) -> dict:
     """A playlist's curve: its Find music's rated plays, without those from over-full seed shares."""
     p = db.connect_library().execute("SELECT name FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
-    zs, ratings, left_out = [], [], 0
+    zs, ratings, left_out, picks = [], [], 0, []
     if find.started(playlist_id):
         sess = db.connect(playlist_id)
         skip = overfull_plays(sess)
@@ -69,5 +92,6 @@ def overview(playlist_id: int) -> dict:
                 continue
             zs.append(z)
             ratings.append(rating)
-    return {"name": p["name"] if p else "", **_curve(zs, ratings), "left_out": left_out,
+        picks = lane_picks(sess)
+    return {"name": p["name"] if p else "", **_curve(zs, ratings), "left_out": left_out, "picks": picks,
 }

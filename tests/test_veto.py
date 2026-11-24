@@ -147,19 +147,13 @@ def test_grace_and_redownload_limit(conn, monkeypatch):
     assert row()[0] == "playable" and tid in pool.missing_audio(conn)
 
 
-def test_checks_below_the_gate_at_a_fixed_rate(conn):
-    """2026-11-18: 1 in 8 plays is a check from 0 to +1 SD, whatever rate the run drew earlier; never a track the
-    tempo band or the backstop shut out."""
+def test_no_checks(conn):
+    """2026-11-24: the 1-in-8 checks below the gate are off (the lanes are the other half of the picks), whatever
+    rate a run drew earlier."""
     from music_hunter import db
 
-    db.set_setting(conn, "control_rate", 0.5, log=False)          # a rate drawn by the run earlier…
-    n = sum(ratings.next_is_control(conn) for _ in range(4000))
-    assert 380 < n < 620                                           # …not used: 1 in 8
-    veto.update(conn)
-    for tid in ratings.vetoed_ids(conn):
-        d = json.loads(conn.execute("SELECT veto FROM tracks WHERE id = ?", (tid,)).fetchone()[0])
-        assert d["z"] >= config.CONFIG["controls"]["min_z"]
-        assert not d["rules"]["backstop"] and not d["rules"].get("tempo_band")
+    db.set_setting(conn, "control_rate", 0.5, log=False)
+    assert not any(ratings.next_is_control(conn) for _ in range(500))
 
 
 def test_closeness_follows_seed_stars(conn, monkeypatch):

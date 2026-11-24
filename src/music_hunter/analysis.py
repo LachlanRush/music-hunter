@@ -68,8 +68,15 @@ def lanes() -> list[dict]:
     out = [HOME]
     user, pw = os.environ.get("PIA_SOCKS_USER"), os.environ.get("PIA_SOCKS_PASS")
     if user and pw and "pia" in CFG.get("lanes", ["home", "pia"]):
-        out.append({"name": "pia", "proxy": f"socks5://{user}:{pw}@{CFG.get('pia_proxy', 'proxy-nl.privateinternetaccess.com:1080')}"})
+        pia = {"name": "pia", "proxy": f"socks5://{user}:{pw}@{CFG.get('pia_proxy', 'proxy-nl.privateinternetaccess.com:1080')}"}
+        out += [pia] * max(1, CFG.get("pia_loops", 1))   # (2026-11-24: two loops, so one downloads while one is analysed)
     return [x for x in out if x["name"] in CFG.get("lanes", ["home", "pia"])]
+
+
+def _per_lane(key: str, name: str, default: float) -> float:
+    """A pacing setting that is one number for every address, or {address: number}."""
+    v = CFG.get(key, default)
+    return float(v.get(name, default) if isinstance(v, dict) else v)
 
 
 class Local:
@@ -82,6 +89,7 @@ class Local:
     last_end: dict[str, float] = {}
 
     def __init__(self, folder: Path | None = None):
+        self.vocals_later = None    # the PC worker: (file, video_id) -> measured afterwards, off the critical path
         self.embedder = None
         self.yts = {}
         self.folder = folder        # the PC worker's own folder: its files are deleted once sent, so never cache/
@@ -94,8 +102,9 @@ class Local:
         lock = Local.pace.setdefault(name, threading.Lock())
         with lock:
             now = time.monotonic()
-            wait = max(CONFIG["pool"]["download_delay_seconds"] - (now - Local.last_end.get(name, -1e9)),
-                       CFG.get("lane_interval_seconds", 0) - (now - Local.last_start.get(name, -1e9)), 0)
+            wait = max(_per_lane("lane_gap_seconds", name, CONFIG["pool"]["download_delay_seconds"])
+                       - (now - Local.last_end.get(name, -1e9)),
+                       _per_lane("lane_interval_seconds", name, 0) - (now - Local.last_start.get(name, -1e9)), 0)
             if wait > 0:
                 time.sleep(wait)
             Local.last_start[name] = time.monotonic()
@@ -117,40 +126,68 @@ class Local:
         except Exception as e:  # yt-dlp raises DownloadError and friends
             raise DownloadFailed(str(e), download_s=time.monotonic() - t0) from e
         download_s = time.monotonic() - t0 - wait      # without the pacing wait
-        with Local.gpu:
+        # (2026-11-24) Only the audio model needs the GPU one track at a time, and the vocals helper takes one track
+        # at a time; loudness, tempo and cover art run alongside, and several tracks (one per download loop) at once.
+        # Before, everything ran under one lock: ~6–7 s a track, one track at a time.
+        with Local.setup:
             if self.embedder is None:
                 from .embedding import Embedder
                 self.embedder = Embedder()
             if lane["name"] not in self.yts:
                 from .sources import YouTubeMusic
                 self.yts[lane["name"]] = YouTubeMusic(lane["proxy"])
-            self.yt = self.yts[lane["name"]]
-            t1 = time.monotonic()
-            try:
-                lufs, peak, gain = loudness(file)
-                sr = self.embedder.sample_rate
-                samples = audio.decode(file, sr)
+        yt = self.yts[lane["name"]]
+        t1 = time.monotonic()
+        side = Local.helpers()
+        loud = side.submit(loudness, file)
+        bpm_sr = CONFIG["bpm"]["analysis_sample_rate"]
+        bpm = side.submit(lambda: estimate(audio.decode(file, bpm_sr), bpm_sr, bpm_prior))
+        cover = side.submit(artwork.fetch, yt, video_id, self.folder and self.folder / "art")
+        vocal = None if self.vocals_later else side.submit(Local.vocals, file)
+        if self.vocals_later:
+            self.vocals_later(file, video_id)          # measured after the result is sent (the PC worker)
+        try:
+            sr = self.embedder.sample_rate
+            samples = audio.decode(file, sr)
+            with Local.gpu:
                 emb = self.embedder.embed_track(samples)
-            except Exception as e:
-                raise AnalysisFailed(str(e), download_s=download_s, analysis_s=time.monotonic() - t1) from e
-            notes, tempo = {}, None
-            try:
-                bpm_sr = CONFIG["bpm"]["analysis_sample_rate"]
-                tempo = estimate(audio.decode(file, bpm_sr), bpm_sr, bpm_prior)
-            except Exception as e:
-                notes["bpm_failed"] = str(e)[:200]
-            vocals = Vocals.measure(file)                  # §18.34: logged on the Pi for the replay test
-            if vocals:
-                notes["vocals"] = vocals
-            t2 = time.monotonic()
-            art, published = None, None
-            try:
-                art, published = artwork.fetch(self.yt, video_id, self.folder and self.folder / "art")
-            except Exception as e:
-                notes["art_failed"] = str(e)[:200]
-            return Result(file, len(samples) / sr, lufs, peak, gain, emb, self.embedder.model_name, tempo, art,
-                          published, {"download_s": download_s, "analysis_s": t2 - t1, "waited_s": max(wait, 0)},
-                          notes)
+            lufs, peak, gain = loud.result()
+        except Exception as e:
+            raise AnalysisFailed(str(e), download_s=download_s, analysis_s=time.monotonic() - t1) from e
+        notes, tempo = {}, None
+        try:
+            tempo = bpm.result()
+        except Exception as e:
+            notes["bpm_failed"] = str(e)[:200]
+        vocals = vocal.result() if vocal else None     # §18.34: logged on the Pi for the replay test
+        if vocals:
+            notes["vocals"] = vocals
+        t2 = time.monotonic()
+        art, published = None, None
+        try:
+            art, published = cover.result()
+        except Exception as e:
+            notes["art_failed"] = str(e)[:200]
+        return Result(file, len(samples) / sr, lufs, peak, gain, emb, self.embedder.model_name, tempo, art,
+                      published, {"download_s": download_s, "analysis_s": t2 - t1, "waited_s": max(wait, 0)},
+                      notes)
+
+    setup = threading.Lock()
+    vocal_lock = threading.Lock()
+    _helpers = None
+
+    @staticmethod
+    def helpers():
+        """Threads for the parts of an analysis that run alongside the audio model."""
+        if Local._helpers is None:
+            from concurrent.futures import ThreadPoolExecutor
+            Local._helpers = ThreadPoolExecutor(CFG.get("analysis_threads", 8), thread_name_prefix="analyse")
+        return Local._helpers
+
+    @staticmethod
+    def vocals(file):
+        with Local.vocal_lock:                         # (one helper process, one track at a time)
+            return Vocals.measure(file)
 
 
 class Quality:
@@ -304,6 +341,41 @@ class Vocals:
             if line.startswith("{"):
                 return json.loads(line)
         raise TimeoutError("the vocals helper took too long")
+
+
+class VocalsLater:
+    """(2026-11-24) The vocals helper takes ~7 s a track, one at a time, and every track waited for it before being
+    sent: the analysis ran at ~7 s a track. Now the worker keeps a copy of the audio, sends the track at once, and
+    measures vocals here in turn, posting each result to the app (logged there as before). At most
+    [vocals] backlog copies wait; beyond that a track isn't measured."""
+
+    def __init__(self, folder: Path, http, base: str):
+        import queue
+        self.folder, self.http, self.base = folder, http, base
+        self.q: "queue.Queue" = queue.Queue()
+        folder.mkdir(parents=True, exist_ok=True)
+        for old in folder.glob("*"):                   # (copies left by a restart: measured again)
+            self.q.put((old, old.stem.split("~")[0]))
+
+    def add(self, file: Path, video_id: str) -> None:
+        import shutil
+        if self.q.qsize() >= CONFIG.get("vocals", {}).get("backlog", 300):
+            return
+        copy = self.folder / f"{video_id}~{file.name}"
+        shutil.copy2(file, copy)
+        self.q.put((copy, video_id))
+
+    def run(self) -> None:
+        while True:
+            copy, video_id = self.q.get()
+            try:
+                features = Local.vocals(copy)
+                if features:
+                    self.http.post(f"{self.base}/vocals", json={"video_id": video_id, "features": features}, timeout=60)
+            except Exception as e:  # noqa: BLE001 — never stops the worker; that track just isn't measured
+                print(f"  vocals for {video_id}: {str(e)[:120]}", flush=True)
+            finally:
+                copy.unlink(missing_ok=True)
 
 
 class Remote:
@@ -523,6 +595,10 @@ def run_worker(server: str, once: bool = False, http=None, local=None) -> int:
     if not once:                                     # playlist songs' 256 kbps copies alongside the analysis
         threads.append(threading.Thread(target=_quality_loop, args=(session(), base, local, shared), daemon=True,
                                         name="quality"))
+    if not once and hasattr(local, "vocals_later") and local.folder:   # vocals measured after each track is sent
+        later = VocalsLater(local.folder / "vocals", session(), base)
+        local.vocals_later = later.add
+        threads.append(threading.Thread(target=later.run, daemon=True, name="vocals"))
     for t in threads:
         t.start()
     _lane(ls[0], server, base, http, local, once, shared)

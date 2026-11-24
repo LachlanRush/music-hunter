@@ -16,7 +16,7 @@ VERSION_LABELS = {l.lower() for l in CONFIG["versions"]["labels"]}
 
 _BRACKETS = re.compile(r"\s*[\(\[]([^\(\)\[\]]*)[\)\]]")
 _FEAT = re.compile(r"\b(feat\.?|ft\.?|featuring)\s.*$", re.I)
-_ARTIST_SPLIT = re.compile(r"\s*(?:,|&|\bx\b|\bvs\.?|\bfeat\.?|\bft\.?|\bfeaturing\b|\band\b)\s*", re.I)
+_ARTIST_SPLIT = re.compile(r"\s*(?:,|&|(?<=\s)x(?=\s)|\bvs\.?|\bfeat\.?|\bft\.?|\bfeaturing\b|\band\b)\s*", re.I)
 _CATALOGUE = re.compile(r"^[A-Z]{1,12}\s?-?\d{2,5}[A-Z]?$")  # e.g. AF001, CATERINCA05
 
 

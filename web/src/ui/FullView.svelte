@@ -170,14 +170,7 @@
         {/if}
         </div>
       </div>
-      {#if finding && inList && pid != null}
-        <span class="stars below" role="group" aria-label="Stars">
-          {#each [1, 2, 3, 4, 5] as n}
-            <button class:on={!!inList.stars && n <= inList.stars} onclick={() => playlistModel(pid).setStars(inList!.id, n)}
-                    aria-label={`${n} star${n > 1 ? "s" : ""}`}>★</button>
-          {/each}
-        </span>
-      {/if}
+      <!-- (no stars in Find music: my note #105) -->
       <div class="np-seek">
         <span>{fmt(seeking ? seekValue / 1000 * $s.d : $s.t)}</span>
         <input type="range" min="0" max="1000" value={pos} aria-label="Position"
@@ -229,7 +222,6 @@
   .vote:hover { color: var(--fg); }
   .vote.on { color: var(--accent); }
   .vote.on svg { stroke-width: 3; }
-  .stars.below { margin: -10px 0 0 -4px; }
   .stars { display: flex; gap: 2px; flex: none; }
   .stars button { border: 0; background: none; padding: 4px 2px; font-size: 22px; line-height: 1; color: rgba(255, 255, 255, 0.16); }
   .stars button.on { color: var(--accent); }
