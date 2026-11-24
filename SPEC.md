@@ -1217,3 +1217,9 @@ Worked through from the logs (snapshot 2026-11-24 12:46).
 
 **Released as add-on 0.6.1 and app 0.5.1 (2026-11-24)**: §20.7–20.8 — lanes following my stars (similarity filter, the seed's own lists first, downloads for short lanes, shared songs), the checks below the gate off, re-scoring in separate processes, the faster catch-up after star changes, the VPN paced at yt-dlp's guidance with vocals measured after each song is sent, and feedback round 10; the app reports the server's answer with audio errors.
 
+**After 0.6.1 (2026-11-24, notes #129–#132, pushed to the Pi)**
+- **Lanes for songs found in Find music** (#132, Match Box): a lane looked for its starred song among the copied seeds only; a song first found in Find music and Added is its own pick, so its lanes got no downloads, and an artist lane whose highest-starred song was one never searched. Fixed: Match Box's lane now gets its two known songs and a search; four other short lanes too.
+- **Extended named remixes** (#131): "Pasion (The Trip Extended Remix)" wasn't taken for the extended version of "Pasion - The Trip Remix" ("extended" was only recognised as a label of its own, not inside a remix's name), so the extended-mix check missed it. Now "X Extended Remix / Mix / Edit / Version" counts as the extended "X Remix …", and songs with a mix or edit in their title are checked once more. (A same-day change keeping a starred song's other versions out of its lane was undone: not wanted.)
+- **No "Finding music · x of 20" box** once Find music has played (#129): it came back whenever the playable songs dropped below 20 under the +1 gate.
+- **Malugi in No More**: six plays, five from the random picks (11, 17 and 24 Nov), one from the Robustt – Took You Away song lane; three Off, three heard.
+
