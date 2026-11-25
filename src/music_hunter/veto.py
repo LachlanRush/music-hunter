@@ -199,8 +199,18 @@ def update_here(conn: sqlite3.Connection) -> dict:
     lane_songs = lanes.waiting_ids(conn)               # (their audio is kept: a lane can pick them below the gate)
     vetoed_now, returned, drop_audio, gone = [], [], [], []
     with conn:
+        # Read again now: scoring takes a while, and a song may have started playing meanwhile (2026-11-25, #139: a
+        # just-analysed song was picked 0.2 s before this pass vetoed it, and its audio was deleted mid-play). The
+        # song drawn to play next (perhaps already fetched to the device) is left alone too.
+        started = {t for t, in conn.execute("SELECT track_id FROM plays")}
+        draw = db.get_setting(conn, "next_draw") or {}
+        started.add(draw.get("track_id"))
         for tid, d in details.items():
             r = rows[tid]
+            if tid in started and not r["played"]:
+                d["state"] = r["veto_state"] or "playable"
+                conn.execute("UPDATE tracks SET veto = ? WHERE id = ?", (json.dumps(d), tid))
+                continue
             state = r["veto_state"] or "playable"
             if state in ("dropped", "owned", "surplus", "unavailable"):   # (unavailable: taken down on YouTube)  # v5: its seeds left the playlist (find.drop_orphans), it's
                 pass                                  # already in the playlist (find.mark_owned), or its seed's share
@@ -234,8 +244,9 @@ def update_here(conn: sqlite3.Connection) -> dict:
     lanes.sync(conn)                              # (new stars, finished batches, new songs; §20.7) — before audio goes,
     keep = lanes.waiting_ids(conn)                # so a song a lane has just taken keeps it
     with conn:
+        playing = {t for t, in conn.execute("SELECT track_id FROM plays")} | {(db.get_setting(conn, "next_draw") or {}).get("track_id")}
         for tid in drop_audio:                        # the fingerprint stays, the audio goes
-            if tid in keep:
+            if tid in keep or tid in playing:
                 continue
             fp = rows[tid]["file_path"]
             if fp and fp.startswith(CONFIG["paths"]["cache"] + "/"):

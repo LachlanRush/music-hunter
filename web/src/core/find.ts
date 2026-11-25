@@ -231,8 +231,11 @@ export class FindDriver {
 
   async next(path = "/api/next", autoplay = true, noLoad = false): Promise<void> {
     let got: Pick | null = null, err: Error | null = null;
+    // The song already started from what was fetched ahead: the Pi keeps it (#139, #140: it could redraw meanwhile,
+    // and the started song was cut off after a second).
+    const started = this.shown && this.onAir() === this.shown ? {track_id: this.shown.track_id} : {};
     for (let i = 0; i < 3 && !this.stopped; i++) {
-      try { got = await this.call<Pick>(path, {}); err = null; break; }
+      try { got = await this.call<Pick>(path, started); err = null; break; }
       catch (e) { err = e as Error; await sleep(1000); }
     }
     if (this.stopped) return;
@@ -241,10 +244,14 @@ export class FindDriver {
       this.host.ended();
       return;
     }
-    const early = this.shown && got.track_id === this.shown.track_id && this.onAir() === this.shown;
-    if (early) { Object.assign(this.shown!, got); this.cur = this.shown; }
+    const shown = this.shown;
+    const early = !!shown && got.track_id === shown.track_id;
+    if (early) { Object.assign(shown!, got); this.cur = shown; }
     else this.cur = got;
     this.shown = null;
+    // Stepped back while the Pi was confirming the pick (#140, 2026-11-25: the confirmation then loaded the new pick
+    // over the song I'd gone back to, 2 s later): stay there; forward comes back to the pick from its start.
+    if (shown && this.viewing === "previous") { this.host.publish(); void this.prefetch(); void this.loadRecent(); return; }
     this.viewing = "current"; this.prev = null; this.step = 0; this.hist = null;
     if (noLoad) { void this.prefetch(); void this.loadRecent(); return; }  // (start decides what plays)
     if (!early) await this.load(this.cur!, 0, 0, autoplay);

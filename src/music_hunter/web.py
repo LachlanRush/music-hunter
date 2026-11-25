@@ -1582,13 +1582,21 @@ def state() -> dict:
     }
 
 
+class NextBody(BaseModel):
+    track_id: int | None = None       # the song the player already started (fetched ahead), to be kept
+
+
 @router.post("/api/next")
-def next_track() -> dict:
-    """The play awaiting a rating, or a new one: a random playable track, or (a control) a random vetoed one."""
+def next_track(body: NextBody | None = None) -> dict:
+    """The play awaiting a rating, or a new one: a random playable track, or (a control) a random vetoed one. A song
+    the player has already started from what it fetched ahead is kept, even if the draw changed meanwhile (#139,
+    #140: a rating's re-score redrew the next pick while the fetched-ahead one was starting, so it was cut off)."""
     from .pool import restore_audio
 
     conn = db.connect()
     play = ratings.current_play(conn)
+    if play is None and body is not None and body.track_id:
+        ratings.keep_started(conn, body.track_id)
     if play is None:
         if ratings.run_complete(conn):
             raise HTTPException(409, "Run complete")

@@ -198,6 +198,38 @@ describe("Find music", () => {
     expect(p.state.get().source?.kind).toBe("playlist");
     vi.unstubAllGlobals();
   });
+
+  it("keeps the started pick, and a back pressed while the Pi confirms it stays back (#139, #140)", async () => {
+    const e = new FakeEngine();
+    const nextBodies: unknown[] = [];
+    let release: (() => void) | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const body = (v: unknown) => ({ok: true, status: 200, json: async () => v});
+      if (url.endsWith("/api/resume")) return body(pick(1, 10));
+      if (url.includes("/api/recent")) return body([]);
+      if (url.endsWith("/api/upcoming")) return body(pick(2, null));
+      if (url.endsWith("/api/next")) {
+        nextBodies.push(JSON.parse(String(init!.body)));
+        await new Promise<void>((r) => (release = r));          // the Pi is slow to confirm
+        return body(pick(2, 11));
+      }
+      return body({ok: true});
+    }));
+    const p = new Player(e, {played: () => {}, added: () => {}, notice: () => {}});
+    p.startFind(playlist([track(1)]));
+    for (let i = 0; i < 6; i++) await flush();
+    p.next();                                                  // heard: the fetched-ahead pick starts at once
+    for (let i = 0; i < 3; i++) await flush();
+    expect(p.state.get().track?.id).toBe(2);
+    expect(nextBodies[0]).toEqual({track_id: 2});              // the Pi is told which song started
+    p.prev(true);                                              // back to the song before, while confirming
+    for (let i = 0; i < 3; i++) await flush();
+    expect(p.state.get().track?.id).toBe(1);
+    release!();
+    for (let i = 0; i < 6; i++) await flush();
+    expect(p.state.get().track?.id).toBe(1);                   // stays back
+    vi.unstubAllGlobals();
+  });
 });
 
 describe("Set to BPM copies", () => {

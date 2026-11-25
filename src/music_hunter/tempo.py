@@ -65,7 +65,11 @@ def core_from(items) -> dict | None:
 
     def spread(c):
         return sum(min(abs(math.log(c / (b * f))) for f in FOLDS) for b in pick)
-    candidates = {round(b * f, 1) for b in pick for f in FOLDS if 60 <= b * f <= 200}
+    # Candidates within the range tempos are measured in ([bpm] min–max, a little over for d&b's 174–176): with the
+    # ties going to the faster candidate, a 60–200 range let one 130 BPM house track read as 195 (2:3), and Liked,
+    # blend and Disco House were all set to ~190 (#135, 2026-11-25).
+    lo, hi = CONFIG["bpm"]["min"], CONFIG["bpm"]["max"] + 2
+    candidates = {round(b * f, 1) for b in pick for f in FOLDS if lo <= b * f <= hi}
     first = min(candidates or {float(sorted(pick)[len(pick) // 2])}, key=lambda c: (round(spread(c), 3), -c))
     folded = sorted(nearest(b, first) for b in pick)
     center = folded[len(folded) // 2]
@@ -94,7 +98,12 @@ def playlist_tempo(lib, pid: int) -> dict | None:
     """The playlist's tempo, shared by the playlist page, its Find music and the veto: the BPM I set in Set to BPM if
     I chose one (the range of its 4–5 star tracks moved to centre on it), else the typical tempo and range of its
     4–5 star tracks."""
-    return shift_to(auto_tempo(lib, pid), db.get_setting(lib, playlist_key(pid), {}).get("bpm"))
+    saved = db.get_setting(lib, playlist_key(pid), {})
+    bpm = saved.get("bpm")
+    if bpm and saved.get("below") is not None:         # set: fixed, range and all (#136)
+        return {"center": round(bpm, 1), "lo": round(bpm - saved["below"], 1), "hi": round(bpm + saved["above"], 1),
+                "manual": True}
+    return shift_to(auto_tempo(lib, pid), bpm)
 
 
 def auto_tempo(lib, pid: int) -> dict | None:
@@ -142,7 +151,13 @@ def playlist_settings(lib, pid: int) -> dict:
     if core is None:
         bpms = [r[0] for r in lib.execute("SELECT t.bpm FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id"
                                           " WHERE pt.playlist_id = ?", (pid,))]
-    return settings(lib, playlist_key(pid), core["center"] if core else median_bpm(bpms))
+    s = settings(lib, playlist_key(pid), core["center"] if core else median_bpm(bpms))
+    if s["on"] and not s["bpm"]:
+        # Once Set to BPM is on, its number stays fixed (#136, 2026-11-25: with no number typed, it followed the
+        # playlist's typical tempo, which moved as songs were starred). The number shown is kept.
+        save(lib, playlist_key(pid), True, s["target"])
+        s = {**s, "bpm": s["target"]}
+    return s
 
 
 def session_settings(sess, session: int | None = None) -> dict:
@@ -390,6 +405,9 @@ def sync_all() -> None:
     lib = db.connect_library()
     pids = [r[0] for r in lib.execute("SELECT id FROM playlists")]
     for pid in pids:
+        saved = db.get_setting(lib, playlist_key(pid), {})
+        if saved.get("bpm") and saved.get("below") is None:     # set before 2026-11-25: its range is fixed now (#136)
+            save(lib, playlist_key(pid), saved.get("on", False), saved["bpm"])
         sync_playlist(lib, pid)
     folder = path("cache") / "tempo"
     if folder.exists():
@@ -402,7 +420,18 @@ def sync_all() -> None:
 
 
 def save(conn, key: str, on: bool, bpm: float | None) -> None:
-    """`engaged` remembers that it has been turned on at least once: from then on copies are kept ready."""
-    engaged = bool(on) or bool(db.get_setting(conn, key, {}).get("engaged"))
-    db.set_setting(conn, key, {"on": bool(on), "bpm": bpm, "engaged": engaged}, log=True)
+    """`engaged` remembers that it has been turned on at least once: from then on copies are kept ready. A playlist's
+    chosen BPM keeps the tempo range it had when it was set (its width either side), so stars given later don't move
+    the tempo filter either (#136, 2026-11-25)."""
+    saved = db.get_setting(conn, key, {})
+    engaged = bool(on) or bool(saved.get("engaged"))
+    value = {"on": bool(on), "bpm": bpm, "engaged": engaged}
+    if bpm and key.startswith("same_bpm:"):
+        if bpm == saved.get("bpm") and saved.get("below") is not None:
+            value.update(below=saved["below"], above=saved["above"])
+        else:
+            core = auto_tempo(conn, int(key.split(":")[1]))
+            if core:
+                value.update(below=round(core["center"] - core["lo"], 1), above=round(core["hi"] - core["center"], 1))
+    db.set_setting(conn, key, value, log=True)
 

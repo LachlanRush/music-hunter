@@ -22,8 +22,13 @@
   let main: HTMLElement | undefined = $state();
 
   // Dragging: a playlist to a place (section, index), or onto a section's name row; or a section to a new place.
-  let cardDrag = $state<{id: number; section: number; index: number; into: number | null} | null>(null);
-  let secDrag = $state<{id: number; order: number[]} | null>(null);
+  let cardDrag = $state<{id: number; section: number; index: number; into: number | null; from: number; fromIndex: number} | null>(null);
+  let secDrag = $state<{id: number; order: number[]; at: number} | null>(null);   // at: its place among the others
+  const set = (c: Partial<NonNullable<typeof cardDrag>>) => {
+    if (!cardDrag) return;
+    const n = {...cardDrag, ...c};
+    if (n.section !== cardDrag.section || n.index !== cardDrag.index || n.into !== cardDrag.into) cardDrag = n;
+  };
   let ghost = $state<{x: number; y: number; image: string | null; label: string} | null>(null);
 
   function readClosed(): Set<string> {
@@ -80,11 +85,13 @@
         if (el.dataset.card) {
           const id = Number(el.dataset.card), p = lists.find((q) => q.id === id)!;
           const sec = sections.find((s) => s.lists.some((q) => q.id === id))!;
-          cardDrag = {id, section: sec.id, index: sec.lists.findIndex((q) => q.id === id), into: null};
+          const index = sec.lists.findIndex((q) => q.id === id);
+          cardDrag = {id, section: sec.id, index, into: null, from: sec.id, fromIndex: index};
           ghost = {x, y, image: p.image, label: p.name};
         } else {
           const id = Number(el.dataset.head);
-          secDrag = {id, order: sections.map((s) => s.id)};
+          const order = sections.map((s) => s.id);
+          secDrag = {id, order, at: order.indexOf(id)};
           ghost = {x, y, image: null, label: sections.find((s) => s.id === id)?.name ?? ""};
         }
       },
@@ -92,31 +99,35 @@
         if (ghost) ghost = {...ghost, x, y};
         const el = document.elementFromPoint(x, y) as HTMLElement | null;
         if (!el) return;
+        // Nothing on the page moves while dragging, only a marker where it would go (2026-11-25, #134: cards and
+        // sections moved live, which shifted the layout under the pointer, so the target flipped back and forth: the
+        // card bounced back to its folder, and on the phone the page slid about).
         if (secDrag) {
           const over = el.closest("[data-section]") as HTMLElement | null;
           const sid = over && Number(over.dataset.section);
-          if (over == null || sid == null || sid === secDrag.id) return;
-          const r = over.getBoundingClientRect(), order = secDrag.order.filter((s) => s !== secDrag!.id);
-          order.splice(order.indexOf(sid) + (y > r.top + r.height / 2 ? 1 : 0), 0, secDrag.id);
-          secDrag = {...secDrag, order};
+          if (over == null || sid == null) return;
+          const r = over.getBoundingClientRect(), others = secDrag.order.filter((s) => s !== secDrag!.id);
+          const at = sid === secDrag.id ? secDrag.at : others.indexOf(sid) + (y > r.top + r.height / 2 ? 1 : 0);
+          if (at !== secDrag.at) secDrag = {...secDrag, at};
           return;
         }
         if (!cardDrag) return;
         const head = el.closest("[data-head]") as HTMLElement | null;
-        if (head) { cardDrag = {...cardDrag, into: Number(head.dataset.head)}; return; }   // into it, at its end
+        if (head) { set({into: Number(head.dataset.head)}); return; }                       // into it, at its end
         const over = el.closest("[data-card]") as HTMLElement | null;
-        if (over && Number(over.dataset.card) !== cardDrag.id) {                            // beside another playlist
+        if (over) {
           const sid = Number((over.closest("[data-section]") as HTMLElement).dataset.section);
-          const base = rest(sid), i = base.findIndex((q) => q.id === Number(over.dataset.card));
+          if (Number(over.dataset.card) === cardDrag.id) { set({section: cardDrag.from, index: cardDrag.fromIndex, into: null}); return; }
+          const i = rest(sid).findIndex((q) => q.id === Number(over.dataset.card));
           const r = over.getBoundingClientRect();
-          cardDrag = {...cardDrag, section: sid, index: i + (x > r.left + r.width / 2 ? 1 : 0), into: null};
+          set({section: sid, index: i + (x > r.left + r.width / 2 ? 1 : 0), into: null});
           return;
         }
         const grid = el.closest("[data-grid]") as HTMLElement | null;                       // empty space: its end
         if (grid) {
           const sid = Number(grid.dataset.grid);
-          if (sid !== cardDrag.section) cardDrag = {...cardDrag, section: sid, index: rest(sid).length, into: null};
-        } else if (cardDrag.into != null) cardDrag = {...cardDrag, into: null};
+          if (sid !== cardDrag.section) set({section: sid, index: rest(sid).length, into: null});
+        } else if (cardDrag.into != null) set({into: null});
       },
       end: () => void finish(),
       cancel: () => { cardDrag = null; secDrag = null; ghost = null; void load(); },
@@ -133,31 +144,40 @@
       .map((f) => ({...f, lists: lists.filter((p) => (f.builtin ? !mine.has(p.folder_id ?? -1) : p.folder_id === f.id))}));
   });
   const rest = (sid: number) => (base.find((s) => s.id === sid)?.lists ?? []).filter((p) => p.id !== cardDrag?.id);
-  const sections = $derived.by(() => {
-    let out = base;
-    if (secDrag) {
-      const at = new Map(secDrag.order.map((id, i) => [id, i]));
-      out = [...out].sort((a, b) => at.get(a.id)! - at.get(b.id)!);
-    }
+  const sections = $derived(base);
+  // Where a dragged playlist would go: the card it would sit before, or the end of a section.
+  const marker = $derived.by(() => {
     const d = cardDrag;
-    if (d && d.into == null) {
-      const card = lists.find((p) => p.id === d.id)!;
-      out = out.map((s) => {
-        const l = s.lists.filter((p) => p.id !== d.id);
-        if (s.id === d.section) l.splice(Math.min(d.index, l.length), 0, card);
-        return {...s, lists: l};
-      });
-    }
-    return out;
+    if (!d || d.into != null || (d.section === d.from && d.index === d.fromIndex)) return null;
+    const l = rest(d.section);
+    if (!l.length) return {empty: d.section};
+    return d.index < l.length ? {before: l[d.index].id} : {after: l[l.length - 1].id};
+  });
+  const secMarker = $derived.by(() => {
+    const d = secDrag;
+    if (!d || d.at === d.order.indexOf(d.id)) return null;
+    const others = d.order.filter((s) => s !== d.id);
+    return d.at < others.length ? {before: others[d.at], after: null} : {before: null, after: others[others.length - 1]};
   });
 
   async function finish() {
     const c = cardDrag, sd = secDrag;
     ghost = null;
-    let order = sections;
-    if (c && c.into != null) {                       // dropped on a section's name row: at its end
+    let order = sections, secIds: number[] = [];
+    if (sd) {
+      secIds = sd.order.filter((s) => s !== sd.id);
+      secIds.splice(sd.at, 0, sd.id);
+      const at = new Map(secIds.map((id, i) => [id, i]));
+      order = [...order].sort((a, b) => at.get(a.id)! - at.get(b.id)!);
+    }
+    if (c) {
       const card = lists.find((p) => p.id === c.id)!;
-      order = sections.map((s) => ({...s, lists: [...s.lists.filter((p) => p.id !== c.id), ...(s.id === c.into ? [card] : [])]}));
+      order = order.map((s) => {
+        const l = s.lists.filter((p) => p.id !== c.id);
+        if (c.into != null) { if (s.id === c.into) l.push(card); }      // dropped on a section's name row: its end
+        else if (s.id === c.section) l.splice(Math.min(c.index, l.length), 0, card);
+        return {...s, lists: l};
+      });
     }
     // The whole page's order, sections and playlists together (a section's playlists after it).
     const items: {kind: string; id?: number}[] = [];
@@ -171,7 +191,7 @@
     const ranked = new Map(items.filter((i) => i.kind === "playlist").map((i, k) => [i.id!, k]));
     lists = [...lists].sort((a, b) => (ranked.get(a.id) ?? 0) - (ranked.get(b.id) ?? 0));
     if (sd) {
-      const at = new Map(sd.order.map((id, i) => [id, i]));
+      const at = new Map(secIds.map((id, i) => [id, i]));
       folders = folders.map((f) => ({...f, position: at.get(f.id) ?? f.position}));
     }
     cardDrag = null;
@@ -181,8 +201,9 @@
     keep("next:playlists", lists);
     try {
       await Promise.all([
-        c && target !== (base.find((s) => s.lists.some((p) => p.id === c.id))?.id ?? 0)
-          ? api(`/api/playlists/${c.id}/folder`, {folder_id: target || null}, "PUT") : null,
+        // (compared with where it started: `base` already shows it moved, so comparing with that never sent the
+        // move, and the next refresh put the playlist back in its old folder, #134)
+        c && target !== c.from ? api(`/api/playlists/${c.id}/folder`, {folder_id: target || null}, "PUT") : null,
         api("/api/home-order", {items}, "PUT"),
       ]);
     } catch (e) {
@@ -262,7 +283,8 @@
   <section class="home" aria-label="Your playlists and folders">
     {#each sections as f (f.id)}
       <div class="folder" class:closed={closed.has(String(f.id))} class:dragging={secDrag?.id === f.id}
-           class:drop-here={cardDrag?.into === f.id} data-section={f.id}>
+           class:drop-here={cardDrag?.into === f.id || marker?.empty === f.id}
+           class:drop-above={secMarker?.before === f.id} class:drop-below={secMarker?.after === f.id} data-section={f.id}>
         <div class="folder-head" data-head={f.id}>
           <span class="folder-toggle" role="button" tabindex="0" aria-expanded={!closed.has(String(f.id))}
                 onclick={() => toggle(f.id)} onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(f.id); } }}>
@@ -274,7 +296,8 @@
         </div>
         <div class="grid" data-grid={f.id}>
           {#each f.lists as p (p.id)}
-            <a class="card" class:dragging={cardDrag?.id === p.id} href={href(`/playlist/${p.id}`)} data-card={p.id} draggable="false"
+            <a class="card" class:dragging={cardDrag?.id === p.id}
+               class:drop-before={marker?.before === p.id} class:drop-after={marker?.after === p.id} href={href(`/playlist/${p.id}`)} data-card={p.id} draggable="false"
                onclick={(e) => { e.preventDefault(); go(`/playlist/${p.id}`); }}>
               <div class="cover">{#if p.image}<img src={p.image} alt="" draggable="false">{:else}{(p.name || "?")[0].toUpperCase()}{/if}</div>
               <b>{p.name}</b>
@@ -321,6 +344,17 @@
     -webkit-box-orient: vertical; overflow: hidden; }
   .card .bar { margin-top: 6px; }
   .card.dragging { opacity: .25; }
+  .card { position: relative; }
+  .card.drop-before::before, .card.drop-after::after { content: ""; position: absolute; top: 0; bottom: 0; width: 4px;
+    border-radius: 2px; background: var(--accent, #fff); box-shadow: 0 0 10px rgba(255, 255, 255, 0.4); }
+  .card.drop-before::before { left: -10px; }
+  .card.drop-after::after { right: -10px; }
+  @media (max-width: 600px) { .card.drop-before::before { left: -6px; } .card.drop-after::after { right: -6px; } }
+  .folder { position: relative; }
+  .folder.drop-above::before, .folder.drop-below::after { content: ""; position: absolute; left: 0; right: 0; height: 4px;
+    border-radius: 2px; background: var(--accent, #fff); box-shadow: 0 0 10px rgba(255, 255, 255, 0.4); }
+  .folder.drop-above::before { top: -4px; }
+  .folder.drop-below::after { bottom: -4px; }
   .card:global(.held) { transform: scale(.96); transition: transform .15s; }
   @media (max-width: 600px) {
     .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
@@ -343,6 +377,7 @@
   .folder.closed .grid { display: none; }
   .folder.dragging { opacity: .3; }
   .dragging-card .folder:not(.closed) .grid:empty { display: block; min-height: 80px; border: 2px dashed rgba(255, 255, 255, 0.18); border-radius: 8px; margin-bottom: 12px; }
+  .folder.drop-here .grid:empty { border-color: rgba(255, 255, 255, 0.5); background: var(--accent-soft); }
   .folder.drop-here > .folder-head { background: var(--accent-soft); outline: 2px solid rgba(255, 255, 255, 0.35); outline-offset: -2px; }
   .dragging-card { cursor: grabbing; }
   .ghost { position: fixed; z-index: 50; pointer-events: none; width: 120px; border-radius: 6px; overflow: hidden;

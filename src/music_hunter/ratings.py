@@ -159,7 +159,10 @@ def playable_ids(conn: sqlite3.Connection) -> list[int]:
     """Playable tracks ready to play now (audio present) — v4 picks come from these, at random."""
     from .veto import PLAYABLE
 
-    return _ids(conn, f"{PLAYABLE} AND t.file_path IS NOT NULL AND t.id IN (SELECT track_id FROM track_embeddings)")
+    # Scored ones only, once the veto has scored anything: a song analysed moments ago hasn't passed the gate yet
+    # (2026-11-25: 4 such picks since 11-18, one vetoed as it started).
+    return _ids(conn, f"{PLAYABLE} AND t.file_path IS NOT NULL AND t.id IN (SELECT track_id FROM track_embeddings)"
+                      " AND (t.veto_state IS NOT NULL OR NOT EXISTS (SELECT 1 FROM tracks WHERE veto_state IS NOT NULL))")
 
 
 def vetoed_ids(conn: sqlite3.Connection) -> list[int]:
@@ -190,6 +193,9 @@ def upcoming(conn: sqlite3.Connection, rng=random) -> int | None:
     is drawn once and kept until that play starts; only the track is redrawn if it no longer qualifies (e.g. a
     rating in between vetoed it). With nothing vetoed yet, a control can't be injected and the play is a normal pick.
     """
+    kept = db.get_setting(conn, "next_draw")
+    if kept and kept.get("kept"):                    # already playing on the device (keep_started): no redraw
+        return kept["track_id"]
     queued = [t for t in (db.get_setting(conn, "play_next") or [])
               if conn.execute("SELECT file_path FROM tracks WHERE id = ?", (t,)).fetchone()[0]]
     if queued:                                       # songs asked for again come first (2026-11-11)
@@ -224,6 +230,27 @@ def upcoming(conn: sqlite3.Connection, rng=random) -> int | None:
             draw = {"control": control, "track_id": rng.choice(choices), "lane_coin": bool(lane_coin)}
         db.set_setting(conn, "next_draw", draw, log=False)
     return draw["track_id"]
+
+
+def keep_started(conn: sqlite3.Connection, track_id: int) -> bool:
+    """The player started `track_id` from what it fetched ahead (the upcoming pick) before the Pi confirmed it: the
+    next play is that song, unless it can't be any more (played already, gone, no audio). If the draw had moved on
+    meanwhile (a rating's re-score redrew it), the change is logged and the song kept, so it isn't cut off."""
+    from . import lanes
+
+    draw = db.get_setting(conn, "next_draw")
+    if draw is not None and draw["track_id"] == track_id:
+        draw = {**draw, "kept": True}
+    else:
+        t = conn.execute("SELECT file_path, veto_state FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        if (t is None or not t["file_path"] or (t["veto_state"] or "playable") in lanes.GONE
+                or conn.execute("SELECT 1 FROM plays WHERE track_id = ?", (track_id,)).fetchone()):
+            return False
+        lane = lanes.waiting(conn).get(track_id) if lanes.enabled(conn) else None
+        db.log_event(conn, "pick_kept", track_id=track_id, replaced=draw and draw["track_id"], lane=lane)
+        draw = {"control": False, "track_id": track_id, "lane": lane, "lane_coin": bool(lane), "kept": True}
+    db.set_setting(conn, "next_draw", draw, log=False)
+    return True
 
 
 def show_next(conn: sqlite3.Connection, rng=random) -> int:

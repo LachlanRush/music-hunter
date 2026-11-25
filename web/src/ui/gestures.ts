@@ -75,14 +75,15 @@ export function pressable(root: HTMLElement | Document, o: PressOptions): () => 
     const p = t.touches[0];
     const far = Math.hypot(p.clientX - d.x0, p.clientY - d.y0) > SLOP;
     if (!d.active && !d.held) { if (far) { clearTimeout(d.timer); d = null; } return; }   // scrolling
-    if (!t.cancelable) {                                // the page is already scrolling under the finger: no drag (#116)
+    if (!t.cancelable && !d.active) {                   // the page is already scrolling under the finger: no drag (#116)
       clearTimeout(d.timer);
       d.item.classList.remove("held");
-      if (d.active) o.cancel();
       d = null;
       return;
     }
-    t.preventDefault();
+    // A drag under way carries on even if Chrome sends a move it won't let us cancel (it does when the page is busy
+    // drawing; that ended the drag mid-way, #134).
+    if (t.cancelable) t.preventDefault();
     d.x = p.clientX; d.y = p.clientY;
     if (!d.active) { if (!far || !o.canDrag(d.item)) return; begin(); }
     scroll(p.clientY);
