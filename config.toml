@@ -71,7 +71,9 @@ refill_min_net = 1
 # Group picks (SPEC.md §20.9, 2026-11-25): a share of picks chosen to find Adds, from a grid of attribute buckets
 # learnt from the folder's ratings (lanes included) plus how the 10 most similar rated songs went (groups.py).
 enabled = true
-share = 0.2                       # of all picks (taken from the random picks; lanes keep their share)
+share = 0.5                       # of all picks, taken from the random picks; lanes keep their half (2026-11-25, my
+                                  # decision: group picks replace the random picks; 0.2 → 0.5). Random picks remain the
+                                  # fallback while group picks can't be made (too few ratings or playable songs)
 top_share = 0.1                   # a group pick is a random song from this top share of the playable songs …
 top_min = 3                       # … but at least this many
 min_playable = 10                 # no group picks while fewer songs than this are playable

@@ -267,7 +267,8 @@ def test_group_picks(conn, monkeypatch):
     from music_hunter import groups, overview
     _setup(conn, monkeypatch)
     monkeypatch.setitem(config.CONFIG["groups"], "min_playable", 3)
-    monkeypatch.setattr(groups, "CFG", {**config.CONFIG["groups"], "min_playable": 3, "min_ratings": 10, "min_adds": 2})
+    monkeypatch.setattr(groups, "CFG", {**config.CONFIG["groups"], "share": 0.2, "min_playable": 3, "min_ratings": 10,
+                                        "min_adds": 2})
     rng = random.Random(4)
     for i in range(24):                                 # some ratings, a few Adds
         p = ratings.show_next(conn, rng)
