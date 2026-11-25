@@ -75,7 +75,8 @@ share = 0.2                       # of all picks (taken from the random picks; l
 top_share = 0.1                   # a group pick is a random song from this top share of the playable songs …
 top_min = 3                       # … but at least this many
 min_playable = 10                 # no group picks while fewer songs than this are playable
-shrink = 8.0                      # a bucket counts as average until about this many songs have passed through it
+buckets = 5                       # each measured attribute cut into this many equal shares (the score: its 0.5 SD bands)
+shrink = 8.0                      # a bucket leans on its neighbours (then average) until about this many songs have passed through it
 min_ratings = 30                  # no group picks until the folder has this many ratings …
 min_adds = 3                      # … with this many Adds among them
 

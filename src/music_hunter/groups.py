@@ -1,17 +1,18 @@
 """Group picks: a share of Find music's picks chosen to find Adds (SPEC.md §20.9, 2026-11-25, my idea of a grid).
 
-Rows are attributes and columns their buckets; every rated song in the playlist's folder (lane songs included: the
+Rows are attributes and columns their buckets (fifths of each measured attribute); every rated song in the playlist's folder (lane songs included: the
 lanes build this data) passes through one bucket per row. A bucket's Add chance is its Add rate relative to the
 overall rate, judged against what each song's other buckets already predict (an Off that passed through one good
 bucket, but whose other buckets were all bad, hardly counts against the good one), and shrunk towards it while few
-songs have passed through ([groups] shrink). Rows: length; approachable,
+songs have passed through ([groups] shrink; leaning on its neighbouring buckets first). Each bucket then counts by
+where it sits between its row's lowest and highest bucket. Rows: length; approachable,
 happy, vocal share, bright (the vocal analysis); artist rated before; closeness to seeds and to likes; number of
-sources; and the veto score in its 0.5 SD bands. A song's grid value is the sum of its buckets' log lifts; to it is added
+sources; and the veto score in its 0.5 SD bands. A song's grid value is the sum of where its buckets sit; to it is added
 how its 10 most similar rated songs went (Add rate − Off rate). Both are standardised over the playable songs, and
 the group pick is a random song from the top [groups] top_share of them.
 
-Chosen on a replay (2026-11-25, 471 random picks, each scored only from earlier ratings): Add-AUC 0.68, its top 10%
-of random picks Add 21–23% / Off 23–27% (random 8% / 36%, lanes 14% / 24%). Each pick records its group score
+Chosen on a replay (2026-11-25, 471 random picks, each scored only from earlier ratings): Add-AUC 0.68–0.70, its top
+10% of random picks Add 21–25% / Off 17–19% (random 8% / 36%, lanes 14% / 24%). Each pick records its group score
 (plays.groups) and group picks are marked (plays.picked_by = 'groups'), so Results compares them with the lanes and
 random picks.
 """
@@ -120,17 +121,38 @@ def _explained(buckets: dict, add: np.ndarray, base: float, m: float, rounds: in
     """Each bucket's lift, judged against what its songs' other buckets already predict (my note, 2026-11-25): an Off
     that passed through one good bucket but whose other buckets were bad was expected anyway, so it hardly counts
     against the good one; likewise an Add the other buckets already explain hardly raises it. Fitted in turn, row by
-    row (backfitting), each lift shrunk towards 1 while little has passed through. Replayed: Add-AUC 0.666 → 0.684."""
+    row (backfitting). While few songs have passed through a bucket it leans on its neighbouring buckets (themselves
+    leaning on average), not straight on average, so a run of similar buckets holds each other up when a row is cut
+    finer (my note: finer buckets shouldn't dilute a strong range)."""
     lift = {row: {} for row in buckets}
     L = {row: np.ones(len(add)) for row in buckets}
     for _ in range(rounds):
         for row, col in buckets.items():
             others = base * np.prod([L[j] for j in buckets if j != row], axis=0)
-            for b in set(col):
-                mk = col == b
-                lift[row][b] = (add[mk].sum() + m * base) / (others[mk].sum() + m * base)
+            labels = set(col)
+            obs = {b: add[col == b].sum() for b in labels}
+            exp = {b: others[col == b].sum() for b in labels}
+            for b in labels:
+                target = 1.0
+                if b.isdigit():                            # an ordered row: its neighbours
+                    nb = [str(int(b) + d) for d in (-1, 1) if str(int(b) + d) in labels]
+                    if nb:
+                        target = (sum(obs[x] for x in nb) + m * base) / (sum(exp[x] for x in nb) + m * base)
+                lift[row][b] = (obs[b] + m * base * target) / (exp[b] + m * base)
             L[row] = np.array([lift[row][b] for b in col])
     return lift
+
+
+def _placed(lift: dict) -> dict:
+    """Each bucket as where it sits between its row's lowest and highest bucket (−0.5 to +0.5), so every row has the
+    same say and no single noisy bucket dominates (my note: how close it is to the row's max and min). Replayed at 5
+    buckets: better than raw lifts (Add-AUC 0.682 → 0.697, top 10% Off 29% → 19%)."""
+    out = {}
+    for row, lifts in lift.items():
+        logs = {b: np.log(v) for b, v in lifts.items()}
+        lo, hi = min(logs.values()), max(logs.values())
+        out[row] = {b: ((v - lo) / (hi - lo) - 0.5) if hi > lo else 0.0 for b, v in logs.items()}
+    return out
 
 
 def update(conn: sqlite3.Connection) -> dict:
@@ -157,7 +179,8 @@ def update(conn: sqlite3.Connection) -> dict:
     for row in ROWS:
         vals = [t["a"][row] for t in train if isinstance(t["a"][row], (int, float)) and not isinstance(t["a"][row], bool)]
         if vals and row not in ("score", "artist known"):
-            edges[row] = np.quantile(vals, [1 / 3, 2 / 3])
+            q = CFG.get("buckets", 5)
+            edges[row] = np.unique(np.quantile(vals, np.arange(1, q) / q))
     buckets = {row: np.array([_bucket(row, t["a"][row], edges) for t in train]) for row in ROWS}
     add = (y == ADD).astype(float)
     base, m = add.mean(), CFG.get("shrink", 8.0)
@@ -172,7 +195,7 @@ def update(conn: sqlite3.Connection) -> dict:
                                              cands)}
     embs = {t: db.from_blob(b) for t, b in conn.execute(
         f"SELECT track_id, embedding FROM track_embeddings WHERE track_id IN ({marks})", cands)}
-    lift = _explained(buckets, add, base, m)
+    placed = _placed(_explained(buckets, add, base, m))
     grid, sim, ids = [], [], []
     for tid in cands:
         r, e = info.get(tid), embs.get(tid)
@@ -180,7 +203,7 @@ def update(conn: sqlite3.Connection) -> dict:
             continue
         a = _attrs(r["veto"], r["duration_s"], voc.get(r["video_id"], {}))
         a["artist known"] = bool(_artists(r["artist"]) & seen)
-        g = sum(np.log(lift[row].get(_bucket(row, a[row], edges), 1.0)) for row in ROWS)
+        g = sum(placed[row].get(_bucket(row, a[row], edges), 0.0) for row in ROWS)
         s = _similar(E, y, e / (np.linalg.norm(e) or 1))
         grid.append(g)
         sim.append(0.0 if s is None else s)
