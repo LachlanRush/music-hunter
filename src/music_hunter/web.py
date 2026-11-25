@@ -383,7 +383,10 @@ def _after_loop(pid) -> None:
             reweight.after_rating(conn)
             veto.update(conn)                          # likes changed: re-score, move tracks across the line
             from . import background
-            background.groups_update(conn)             # the group picks' scores (§20.9)
+            try:
+                background.groups_update(conn)         # the group picks' scores (§20.9)
+            except Exception as e:  # noqa: BLE001 — never holds up the rest; picks fall back to random
+                db.log_event(db.connect_library(), "groups_failed", playlist_id=pid, error=str(e)[:200])
             session_worker().start_if_needed()
             _rescore_all(skip=pid)                     # the artist's value changed in the other playlists too
         except Exception as e:  # noqa: BLE001 — the next rating or maintenance pass tries again
