@@ -8,8 +8,14 @@ songs have passed through ([groups] shrink; leaning on its neighbouring buckets 
 where it sits between its row's lowest and highest bucket. Rows: length; approachable,
 happy, vocal share, bright (the vocal analysis); artist rated before; closeness to seeds and to likes; number of
 sources; and the veto score in its 0.5 SD bands. A song's grid value is the sum of where its buckets sit; to it is added
-how its 10 most similar rated songs went (Add rate − Off rate). Both are standardised over the playable songs, and
-the group pick is a random song from the top [groups] top_share of them.
+how its 10 most similar rated songs went (Add rate − Off rate). Both are standardised over every analysed song in the
+score range the evidence covers ([groups] min_z and up), played or not.
+
+A fixed standard (2026-11-25, my note): a song qualifies when its group score is in the top [groups] top_share of all
+those songs, so the bar doesn't sink as the best are played. Group picks are at most [groups] share of the picks: a
+random song that qualifies and whose audio is here; when none is ready, the pick goes to a lane (else, a random
+playable song). The best qualifying songs keep their audio (or get it back, the 'restore' job), and when fewer than
+[groups] min_supply qualify, more candidates are downloaded (the 'groups' job, up to [groups] fetch_per_day).
 
 Chosen on a replay (2026-11-25, 471 random picks, each scored only from earlier ratings): Add-AUC 0.68–0.70, its top
 10% of random picks Add 21–25% / Off 17–19% (random 8% / 36%, lanes 14% / 24%). Each pick records its group score
@@ -31,6 +37,7 @@ ROWS = ("length", "approachable", "happy", "vocal share", "bright", "artist know
         "like closeness", "sources", "score")
 Z_EDGES = (0, 0.5, 1, 1.5, 2)
 ADD, OFF = 3, 1
+GONE = ("dropped", "owned", "unavailable", "surplus")
 
 
 def enabled(conn: sqlite3.Connection) -> bool:
@@ -156,10 +163,8 @@ def _placed(lift: dict) -> dict:
 
 
 def update(conn: sqlite3.Connection) -> dict:
-    """Score every playable song and keep the result (setting group_scores) for the picks. Cheap enough to run after
-    every rating (~0.2 s on the PC for ~900 folder ratings)."""
-    from .ratings import playable_ids
-
+    """Score every analysed song and keep the result (setting group_scores) for the picks: the standard (bar) and
+    the unplayed songs meeting it. Run after every rating."""
     pid = db.SESSION.get()
     if not enabled(conn):
         return {}
@@ -185,54 +190,93 @@ def update(conn: sqlite3.Connection) -> dict:
     add = (y == ADD).astype(float)
     base, m = add.mean(), CFG.get("shrink", 8.0)
 
+    # Every analysed song in the score range the evidence covers ([groups] min_z and up, not shut out by the tempo
+    # band or the backstop), played or not: the standard is set over all of them, so it stays put as the best are
+    # played (2026-11-25, my note: a fixed standard, not the top of whatever is left).
     voc = _vocals(conn)
-    cands = playable_ids(conn)
-    if len(cands) < CFG.get("min_playable", 10):      # (a top share of a handful isn't a choice)
-        db.set_setting(conn, "group_scores", None, log=False)
-        return {}
-    marks = ",".join("?" * len(cands))
-    info = {r["id"]: r for r in conn.execute(f"SELECT id, artist, duration_s, video_id, veto FROM tracks WHERE id IN ({marks})",
-                                             cands)}
-    embs = {t: db.from_blob(b) for t, b in conn.execute(
-        f"SELECT track_id, embedding FROM track_embeddings WHERE track_id IN ({marks})", cands)}
+    rows_ = conn.execute("SELECT t.id, t.artist, t.duration_s, t.video_id, t.veto, t.veto_state, e.embedding,"
+                         " t.id IN (SELECT track_id FROM plays) AS played FROM tracks t"
+                         " JOIN track_embeddings e ON e.track_id = t.id WHERE t.origin = 'pool' AND t.veto IS NOT NULL"
+                         ).fetchall()
     placed = _placed(_explained(buckets, add, base, m))
-    grid, sim, ids = [], [], []
-    for tid in cands:
-        r, e = info.get(tid), embs.get(tid)
-        if r is None or e is None:
+    grid, sim, ids, played = [], [], [], []
+    for r in rows_:
+        v = json.loads(r["veto"])
+        rules = v.get("rules", {})
+        if (v.get("z") is None or v["z"] < CFG.get("min_z", 0.0) or rules.get("tempo_band") or rules.get("backstop")
+                or (r["veto_state"] or "playable") in GONE):
             continue
         a = _attrs(r["veto"], r["duration_s"], voc.get(r["video_id"], {}))
         a["artist known"] = bool(_artists(r["artist"]) & seen)
-        g = sum(placed[row].get(_bucket(row, a[row], edges), 0.0) for row in ROWS)
+        e = db.from_blob(r["embedding"])
+        grid.append(sum(placed[row].get(_bucket(row, a[row], edges), 0.0) for row in ROWS))
         s = _similar(E, y, e / (np.linalg.norm(e) or 1))
-        grid.append(g)
         sim.append(0.0 if s is None else s)
-        ids.append(tid)
-    if not ids:
+        ids.append(r["id"])
+        played.append(bool(r["played"]))
+    if len(ids) < CFG.get("min_songs", 50):
+        db.set_setting(conn, "group_scores", None, log=False)
         return {}
 
     def z(v):
         v = np.array(v, float)
         return (v - v.mean()) / (v.std() or 1)
     score = z(grid) + z(sim)
+    bar = float(np.quantile(score, 1 - CFG.get("top_share", 0.1)))
     order = np.argsort(-score)
-    n_top = max(CFG.get("top_min", 3), int(round(len(ids) * CFG.get("top_share", 0.1))))
     rank = {ids[i]: k for k, i in enumerate(order)}
-    out = {"at": time.time(), "ratings": len(train), "adds": int(add.sum()), "playable": len(ids),
-           "scores": {str(t): {"score": round(float(score[i]), 3), "grid": round(float(grid[i]), 3),
-                               "similar": round(float(sim[i]), 3), "pct": round(1 - rank[t] / len(ids), 3)}
-                      for i, t in enumerate(ids)},
-           "top": [ids[i] for i in order[:n_top]]}
+    unplayed = [i for i in order if not played[i]]
+    out = {"at": time.time(), "ratings": len(train), "adds": int(add.sum()), "songs": len(ids), "bar": round(bar, 3),
+           "scores": {str(ids[i]): {"score": round(float(score[i]), 3), "grid": round(float(grid[i]), 3),
+                                    "similar": round(float(sim[i]), 3), "pct": round(1 - rank[ids[i]] / len(ids), 3)}
+                      for i in unplayed},
+           "qualify": [ids[i] for i in unplayed if score[i] >= bar]}
     db.set_setting(conn, "group_scores", out, log=False)
-    db.log_event(conn, "groups_update", ratings=len(train), adds=int(add.sum()), playable=len(ids),
-                 seconds=round(time.monotonic() - t0, 2))
+    db.log_event(conn, "groups_update", ratings=len(train), adds=int(add.sum()), songs=len(ids),
+                 qualify=len(out["qualify"]), seconds=round(time.monotonic() - t0, 2))
     return out
 
 
-def top(conn: sqlite3.Connection, playable: set) -> list[int]:
-    """The group picks to draw from now: the top share, still playable."""
-    g = db.get_setting(conn, "group_scores") or {}
-    return [t for t in g.get("top", []) if t in playable]
+def qualifying(conn: sqlite3.Connection) -> list[int]:
+    """Unplayed songs meeting the standard, best first (audio or not)."""
+    return (db.get_setting(conn, "group_scores") or {}).get("qualify", [])
+
+
+def ready(conn: sqlite3.Connection) -> list[int]:
+    """Songs meeting the standard whose audio is here: a group pick never waits for a download."""
+    q = qualifying(conn)
+    if not q:
+        return []
+    marks = ",".join("?" * len(q))
+    have = {t for t, in conn.execute(f"SELECT id FROM tracks WHERE id IN ({marks}) AND file_path IS NOT NULL"
+                                     " AND id NOT IN (SELECT track_id FROM plays)", q)}
+    return [t for t in q if t in have]
+
+
+def keep_ids(conn: sqlite3.Connection) -> set:
+    """Songs whose audio is kept (or fetched again) for group picks: the best [groups] keep of those meeting the
+    standard."""
+    return set(qualifying(conn)[:CFG.get("keep", 40)]) if enabled(conn) else set()
+
+
+def missing_audio(conn: sqlite3.Connection) -> list[int]:
+    keep = [t for t in qualifying(conn)[:CFG.get("keep", 40)]]
+    if not keep or not enabled(conn):
+        return []
+    marks = ",".join("?" * len(keep))
+    gone = {t for t, in conn.execute(f"SELECT id FROM tracks WHERE id IN ({marks}) AND file_path IS NULL", keep)}
+    return [t for t in keep if t in gone]
+
+
+def short(conn: sqlite3.Connection) -> bool:
+    """Too few songs meet the standard: more are downloaded (the 'groups' job), up to [groups] fetch_per_day."""
+    if not enabled(conn) or db.get_setting(conn, "group_scores") is None:
+        return False
+    if len(qualifying(conn)) >= CFG.get("min_supply", 15):
+        return False
+    today = sum(json.loads(d).get("tried", 0) for d, in conn.execute(
+        "SELECT data FROM events WHERE kind = 'groups_fetched' AND at >= date('now')"))
+    return today < CFG.get("fetch_per_day", 300)
 
 
 def record(conn: sqlite3.Connection, track_id: int) -> str | None:

@@ -262,27 +262,30 @@ def test_an_artist_search_suggestion_doesnt_break_scoring(conn, monkeypatch):
 
 
 def test_group_picks(conn, monkeypatch):
-    """Group picks (§20.9): scored from the ratings so far; about [groups] share of the draws are from their top
-    songs, recorded with the play (picked_by, groups) and counted on their own in Results."""
+    """Group picks (§20.9): a fixed standard over every analysed song; up to [groups] share of the draws are songs
+    meeting it whose audio is here (else a lane song); recorded with the play and counted on their own in Results;
+    the best qualifying songs keep their audio, and too few qualifying songs ask for more downloads."""
     from music_hunter import groups, overview
     _setup(conn, monkeypatch)
-    monkeypatch.setitem(config.CONFIG["groups"], "min_playable", 3)
-    monkeypatch.setattr(groups, "CFG", {**config.CONFIG["groups"], "share": 0.2, "min_playable": 3, "min_ratings": 10,
-                                        "min_adds": 2})
+    monkeypatch.setattr(groups, "CFG", {**config.CONFIG["groups"], "share": 0.2, "min_songs": 10, "min_ratings": 10,
+                                        "min_adds": 2, "min_z": -99, "top_share": 0.3})
     rng = random.Random(4)
     for i in range(24):                                 # some ratings, a few Adds
         p = ratings.show_next(conn, rng)
         ratings.rate(conn, p, 3 if i % 5 == 0 else 1 if i % 2 else 2)
     veto.update(conn)
     g = groups.update(conn)
-    assert g and g["top"] and set(g["top"]) <= set(ratings.playable_ids(conn))
+    played = {t for t, in conn.execute("SELECT track_id FROM plays")}
+    assert g["qualify"] and not set(g["qualify"]) & played
+    ready = set(groups.ready(conn))
+    assert ready <= set(g["qualify"])
     kinds = []
     for i in range(200):
         conn.execute("DELETE FROM settings WHERE key = 'next_draw'")
         ratings.upcoming(conn, random.Random(i))
         d = ratings.db.get_setting(conn, "next_draw")
         kinds.append("group" if d.get("group") else "lane" if d.get("lane") else "random")
-        assert not d.get("group") or d["track_id"] in g["top"]
+        assert not d.get("group") or d["track_id"] in ready
     assert 0.1 < kinds.count("group") / 200 < 0.32
     while True:                                         # a group pick, shown and rated
         conn.execute("DELETE FROM settings WHERE key = 'next_draw'")
@@ -294,3 +297,10 @@ def test_group_picks(conn, monkeypatch):
     assert row[0] == "groups" and row[1]
     ratings.rate(conn, p, 3)
     assert any(r["kind"] == "groups" and r["plays"] == 1 for r in overview.lane_picks(conn))
+    groups.update(conn)
+    keep = groups.keep_ids(conn)
+    veto.update(conn)                                   # qualifying songs keep their audio
+    assert all(conn.execute("SELECT file_path FROM tracks WHERE id = ?", (t,)).fetchone()[0] for t in keep
+               if t in ready)
+    monkeypatch.setattr(groups, "CFG", {**groups.CFG, "min_supply": 10_000})
+    assert groups.short(conn)                           # too few: more downloads wanted

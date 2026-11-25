@@ -415,7 +415,9 @@ def missing_audio(conn: sqlite3.Connection) -> list[int]:
     from . import lanes
     from .veto import PLAYABLE
 
+    from . import groups
     lane = lanes.missing_audio(conn) if lanes.enabled(conn) else []
+    lane += [t for t in groups.missing_audio(conn) if t not in set(lane)]          # (group picks' songs, §20.9)
     return lane + [r[0] for r in conn.execute(f"SELECT t.id FROM tracks t WHERE {PLAYABLE} AND t.file_path IS NULL")
                    if r[0] not in set(lane)]
 

@@ -132,6 +132,11 @@ class Worker:
             return "restore"                  # lane songs' audio before top-ups: a lane only picks songs it has (§20.7)
         if lanes.enabled(conn) and lanes.fetchable(conn):
             return "lanes"                    # more songs downloaded for lanes short of them (§20.7)
+        from . import groups
+        if groups.missing_audio(conn) and not youtube_paused():
+            return "restore"                  # group picks' songs' audio: a group pick only picks songs it has (§20.9)
+        if left and groups.short(conn):
+            return "groups"                   # too few songs meet the group standard: download more (§20.9)
         if left and playable < pool_cfg["target_size"]:
             return "fill"
         if missing_audio(conn) and not youtube_paused():
@@ -186,6 +191,10 @@ class Worker:
             self._lanes(conn)
             self.state, self.message = "idle", ""
             return
+        if job == "groups":
+            self._groups(conn)
+            self.state, self.message = "idle", ""
+            return
         if job in ("pull", "pull_new"):
             if self.pid is not None:              # v5: carry over stars changed in the playlist since the last pull
                 find.sync_seeds(db.connect_library(), conn, self.pid)
@@ -231,6 +240,32 @@ class Worker:
                 filler.process(cid, seed)
                 done += 1
             veto.update(conn)                       # (places the new songs that pass)
+
+
+    def _groups(self, conn) -> None:
+        """Too few songs meet the group standard (§20.9): download [groups] fetch_per_job more candidates, one from each
+        seed's lists in turn (best list positions first), then score them."""
+        from collections import deque
+
+        from . import background, groups
+        from .pool import Filler, buckets
+
+        gen = conn.execute("SELECT max(id) FROM generations").fetchone()[0]
+        if gen is None:
+            return
+        queues = [deque(c) for _, c in sorted(buckets(conn, gen).items())]
+        seeds_of = [b[0] for b in sorted(buckets(conn, gen))]
+        filler, tried, joined = Filler(conn, gen), 0, 0
+        self.message = "Finding more songs…"
+        while tried < groups.CFG.get("fetch_per_job", 20) and any(queues):
+            for q, seed in zip(queues, seeds_of):
+                if q and tried < groups.CFG.get("fetch_per_job", 20):
+                    priority.yield_to_player()
+                    tried += 1
+                    joined += bool(filler.process(q.popleft(), seed))
+        db.log_event(conn, "groups_fetched", tried=tried, joined=joined)
+        veto.update(conn)
+        background.groups_update(conn)
 
 
 HEAVY = threading.Lock()

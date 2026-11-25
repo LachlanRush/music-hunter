@@ -204,13 +204,16 @@ def upcoming(conn: sqlite3.Connection, rng=random) -> int | None:
         return queued[0]
     from . import lanes
 
+    from . import groups
     playable, vetoed = set(playable_ids(conn)), set(vetoed_ids(conn))
     lane_on = lanes.enabled(conn)
     waiting = lanes.waiting(conn, ready=True) if lane_on else {}    # (audio here: a lane pick never waits)
-    if not playable and not vetoed and not waiting:
+    group_ready = groups.ready(conn) if groups.enabled(conn) else []
+    if not playable and not vetoed and not waiting and not group_ready:
         return None
     draw = db.get_setting(conn, "next_draw")
     ok = draw is not None and (draw["track_id"] in waiting if draw.get("lane") else
+                               draw["track_id"] in group_ready if draw.get("group") else
                                draw["track_id"] in (vetoed if draw.get("control") else playable))
     if not ok:
         control = draw["control"] if draw is not None else next_is_control(conn, rng)
@@ -220,17 +223,18 @@ def upcoming(conn: sqlite3.Connection, rng=random) -> int | None:
         # The coin is kept with the draw, like the check, so a redraw doesn't flip it.
         lane_coin = draw.get("lane_coin") if draw is not None and "lane_coin" in draw else \
             (lane_on and rng.random() < lanes.CFG.get("share", 0.5))
-        # Group picks (§20.9): a share of the picks that aren't lane songs, from the group scores' top songs.
-        from . import groups
+        # Group picks (§20.9): at most [groups] share of the picks, songs meeting the group standard. When none is
+        # ready, the pick goes to a lane (2026-11-25, my note: fewer group picks rather than lower ones).
         group_coin = draw.get("group_coin") if draw is not None and "group_coin" in draw else \
             (not lane_coin and groups.enabled(conn)
              and rng.random() < groups.CFG.get("share", 0.2) / max(1e-9, 1 - (lanes.CFG.get("share", 0.5) if lane_on else 0)))
-        top = groups.top(conn, playable) if group_coin and not control else []
-        if not control and waiting and (lane_coin or not playable):   # (nothing else ready: a lane song)
+        if not control and group_coin and group_ready:
+            draw = {"control": False, "track_id": rng.choice(group_ready), "lane_coin": False, "group_coin": True,
+                    "group": True}
+        elif not control and waiting and (lane_coin or group_coin or not playable):   # (a lane song in its place)
             tid = rng.choice(sorted(waiting))
-            draw = {"control": False, "track_id": tid, "lane": waiting[tid], "lane_coin": True}
-        elif top:
-            draw = {"control": False, "track_id": rng.choice(top), "lane_coin": False, "group_coin": True, "group": True}
+            draw = {"control": False, "track_id": tid, "lane": waiting[tid], "lane_coin": True,
+                    "group_coin": bool(group_coin)}
         else:
             choices = sorted(vetoed if control else playable)
             if not choices:

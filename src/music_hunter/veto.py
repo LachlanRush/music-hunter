@@ -196,7 +196,9 @@ def update_here(conn: sqlite3.Connection) -> dict:
         " WHERE origin = 'pool'", (f"-{CFG['grace_days']} days",))}
     n_rated = conn.execute("SELECT count(*) FROM plays WHERE rating IS NOT NULL").fetchone()[0]
     from . import lanes
-    lane_songs = lanes.waiting_ids(conn)               # (their audio is kept: a lane can pick them below the gate)
+    from . import groups
+    lane_songs = lanes.waiting_ids(conn) | groups.keep_ids(conn)   # (their audio is kept: lanes and group picks
+                                                                   # can pick them below the gate)
     vetoed_now, returned, drop_audio, gone = [], [], [], []
     with conn:
         # Read again now: scoring takes a while, and a song may have started playing meanwhile (2026-11-25, #139: a
@@ -242,7 +244,7 @@ def update_here(conn: sqlite3.Connection) -> dict:
             d["state"] = state
             conn.execute("UPDATE tracks SET veto_state = ?, veto = ? WHERE id = ?", (state, json.dumps(d), tid))
     lanes.sync(conn)                              # (new stars, finished batches, new songs; §20.7) — before audio goes,
-    keep = lanes.waiting_ids(conn)                # so a song a lane has just taken keeps it
+    keep = lanes.waiting_ids(conn) | groups.keep_ids(conn)   # so a song a lane has just taken keeps it
     with conn:
         playing = {t for t, in conn.execute("SELECT track_id FROM plays")} | {(db.get_setting(conn, "next_draw") or {}).get("track_id")}
         for tid in drop_audio:                        # the fingerprint stays, the audio goes
