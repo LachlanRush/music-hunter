@@ -504,8 +504,8 @@ class NewPlaylist(BaseModel):
 
 
 class TempoBody(BaseModel):
-    on: bool
-    bpm: float | None = None
+    on: bool | None = None            # left out: as it was
+    bpm: float | None = None          # left out: as it was; null: the playlist's own tempo
 
 
 def _tempo_view(s: dict) -> dict:
@@ -830,8 +830,19 @@ def set_playlist_tempo(playlist_id: int, body: TempoBody) -> dict:
     _playlist_or_404(conn, playlist_id)
     if body.bpm is not None and not 60 <= body.bpm <= 200:
         raise HTTPException(400, "BPM between 60 and 200")
-    bpm = body.bpm if "bpm" in body.model_fields_set else tempo.playlist_settings(conn, playlist_id)["bpm"]
-    tempo.save(conn, tempo.playlist_key(playlist_id), body.on, bpm)      # bpm left out: keep the target
+    now = tempo.playlist_settings(conn, playlist_id)
+    on = now["on"] if body.on is None else body.on
+    if "bpm" in body.model_fields_set:                    # typed (or emptied: back to the playlist's own tempo)
+        bpm, typed = body.bpm, body.bpm is not None
+    else:
+        bpm, typed = now["bpm"], now.get("typed", True)
+    # Ticked: the number stays as it is (the playlist's tempo, if none was typed, locked then). Unticked, a number I
+    # didn't type goes, so the shown tempo follows the playlist again (#136, 2026-11-25).
+    if on and bpm is None:
+        bpm, typed = now["auto"], False
+    elif not on and not typed:
+        bpm = None
+    tempo.save(conn, tempo.playlist_key(playlist_id), on, bpm, typed=typed)
     view = _tempo_view(tempo.sync_playlist(conn, playlist_id))
     _after_membership_change(conn, playlist_id)     # a chosen BPM is the playlist's tempo: Find music's filter follows
     return view
@@ -1889,6 +1900,8 @@ def set_find_tempo(body: TempoBody) -> dict:
     conn = db.connect()
     now = tempo.session_settings(conn)
     bpm = body.bpm if "bpm" in body.model_fields_set else now["bpm"]
+    if body.on is None:
+        body.on = now["on"]
     if bool(body.on) == bool(now["on"]) and bpm == now["bpm"] and (now.get("engaged") or not body.on):
         return _tempo_view(now)                              # unchanged (every Find music start sends it): nothing
     tempo.save(conn, "same_bpm", body.on, bpm)               # to redo, and the song starts sooner (2026-11-18)

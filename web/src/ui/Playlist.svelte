@@ -294,14 +294,15 @@
     </section>
 
     <section class="tempo" aria-label="Tempo">
-      <label><input type="checkbox" checked={p.tempo.on} onchange={(e) => model.saveTempo(e.currentTarget.checked, p.tempo.bpm)}> Set to</label>
+      <label><input type="checkbox" checked={p.tempo.on} onchange={(e) => model.saveTempo({on: e.currentTarget.checked})}> Set to</label>
       <!-- (not overwritten while I'm typing in it: a refresh arriving then put the old number back, #122) -->
       <label><input type="number" min="60" max="200" step="0.5" inputmode="decimal" aria-label="Target BPM"
              value={bpmTyping ?? p.tempo.target} onfocus={(e) => (bpmTyping = e.currentTarget.value)}
              oninput={(e) => (bpmTyping = e.currentTarget.value)}
              onblur={() => (bpmTyping = null)}
              onkeydown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-             onchange={(e) => { const v = Number(e.currentTarget.value); model.saveTempo(p.tempo.on, v >= 60 && v <= 200 ? v : null); }}> BPM</label>
+             onchange={(e) => { const raw = e.currentTarget.value.trim(), v = Number(raw);
+               if (!raw) void model.saveTempo({bpm: null}); else if (v >= 60 && v <= 200) void model.saveTempo({bpm: v}); }}> BPM</label>
     </section>
 
     {#if find?.state === "preparing"}

@@ -47,14 +47,31 @@ def nearest(bpm: float, around: float) -> float:
     return min((bpm * f for f in FOLDS), key=lambda r: abs(around / r - 1))
 
 
-def core_from(items) -> dict | None:
-    """The tempo range of a set of (bpm, stars) — 4–5 star tracks (all starred if too few have 4–5; all given if
-    none is starred): {'center' (median), 'lo', 'hi'}, each read at the tempo nearest the plain median."""
+def _core_bpms(items) -> list[float]:
+    """The BPMs a playlist's tempo range comes from: its 4–5 star tracks (all starred if too few have 4–5; all given
+    if none is starred)."""
     v = CONFIG["veto"]
     items = [(b, s) for b, s in items if b]
     pick = [b for b, s in items if s and s >= v["tempo_core_stars"]]
     if len(pick) < v["tempo_core_min"]:
         pick = [b for b, s in items if s] or [b for b, _ in items]
+    return pick
+
+
+def core_around(items, bpm: float) -> dict:
+    """The tempo range when I've set a BPM (#136, 2026-11-25): the set BPM and the 4–5 star songs near it (within
+    tempo_core_outlier_pct), so the playlist's own songs still widen the range, while songs far off it don't (No
+    More's 4★ songs at 129–131 against 142 pulled slow house in, #71)."""
+    far = CONFIG["veto"].get("tempo_core_outlier_pct", 6) / 100
+    near = [n for n in (nearest(b, bpm) for b in _core_bpms(items)) if abs(n / bpm - 1) <= far]
+    return {"center": round(bpm, 1), "lo": round(min(near + [bpm]), 1), "hi": round(max(near + [bpm]), 1), "manual": True}
+
+
+def core_from(items) -> dict | None:
+    """The tempo range of a set of (bpm, stars) — 4–5 star tracks (all starred if too few have 4–5; all given if
+    none is starred): {'center' (median), 'lo', 'hi'}, each read at the tempo nearest the plain median."""
+    v = CONFIG["veto"]
+    pick = _core_bpms(items)
     if not pick:
         return None
     # The tempo they agree on best: every reading is folded (half, double, 2:3) to its nearest point to a candidate,
@@ -96,14 +113,13 @@ def shift_to(core: dict | None, center: float | None) -> dict | None:
 
 def playlist_tempo(lib, pid: int) -> dict | None:
     """The playlist's tempo, shared by the playlist page, its Find music and the veto: the BPM I set in Set to BPM if
-    I chose one (the range of its 4–5 star tracks moved to centre on it), else the typical tempo and range of its
-    4–5 star tracks."""
-    saved = db.get_setting(lib, playlist_key(pid), {})
-    bpm = saved.get("bpm")
-    if bpm and saved.get("below") is not None:         # set: fixed, range and all (#136)
-        return {"center": round(bpm, 1), "lo": round(bpm - saved["below"], 1), "hi": round(bpm + saved["above"], 1),
-                "manual": True}
-    return shift_to(auto_tempo(lib, pid), bpm)
+    there is one (with the 4–5 star songs near it, core_around), else the typical tempo and range of its 4–5 star
+    tracks."""
+    bpm = db.get_setting(lib, playlist_key(pid), {}).get("bpm")
+    if not bpm:
+        return auto_tempo(lib, pid)
+    return core_around(lib.execute("SELECT t.bpm, pt.stars FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id"
+                                   " WHERE pt.playlist_id = ? AND pt.stars IS NOT NULL", (pid,)).fetchall(), bpm)
 
 
 def auto_tempo(lib, pid: int) -> dict | None:
@@ -153,10 +169,10 @@ def playlist_settings(lib, pid: int) -> dict:
                                           " WHERE pt.playlist_id = ?", (pid,))]
     s = settings(lib, playlist_key(pid), core["center"] if core else median_bpm(bpms))
     if s["on"] and not s["bpm"]:
-        # Once Set to BPM is on, its number stays fixed (#136, 2026-11-25: with no number typed, it followed the
-        # playlist's typical tempo, which moved as songs were starred). The number shown is kept.
-        save(lib, playlist_key(pid), True, s["target"])
-        s = {**s, "bpm": s["target"]}
+        # Ticked, its number stays fixed (#136, 2026-11-25: ticked with no number typed, it followed the playlist's
+        # typical tempo, which moved as songs were starred). The number shown is kept until it's unticked.
+        save(lib, playlist_key(pid), True, s["target"], typed=False)
+        s = {**s, "bpm": s["target"], "typed": False}
     return s
 
 
@@ -406,8 +422,11 @@ def sync_all() -> None:
     pids = [r[0] for r in lib.execute("SELECT id FROM playlists")]
     for pid in pids:
         saved = db.get_setting(lib, playlist_key(pid), {})
-        if saved.get("bpm") and saved.get("below") is None:     # set before 2026-11-25: its range is fixed now (#136)
-            save(lib, playlist_key(pid), saved.get("on", False), saved["bpm"])
+        if "typed" not in saved and saved.get("bpm"):
+            # (2026-11-25) a number equal to the playlist's own tempo was locked by ticking, not typed
+            kept = db.get_setting(lib, f"tempo_core:{pid}") or {}
+            save(lib, playlist_key(pid), saved.get("on", False), saved["bpm"],
+                 typed=abs(saved["bpm"] - kept.get("center", -99)) > 0.05)
         sync_playlist(lib, pid)
     folder = path("cache") / "tempo"
     if folder.exists():
@@ -419,19 +438,12 @@ def sync_all() -> None:
             f.unlink(missing_ok=True)
 
 
-def save(conn, key: str, on: bool, bpm: float | None) -> None:
-    """`engaged` remembers that it has been turned on at least once: from then on copies are kept ready. A playlist's
-    chosen BPM keeps the tempo range it had when it was set (its width either side), so stars given later don't move
-    the tempo filter either (#136, 2026-11-25)."""
+def save(conn, key: str, on: bool, bpm: float | None, typed: bool | None = None) -> None:
+    """`engaged` remembers that it has been turned on at least once: from then on copies are kept ready. `typed`: the
+    number is one I typed (kept when unticked), not the playlist's tempo locked by ticking (#136)."""
     saved = db.get_setting(conn, key, {})
     engaged = bool(on) or bool(saved.get("engaged"))
-    value = {"on": bool(on), "bpm": bpm, "engaged": engaged}
-    if bpm and key.startswith("same_bpm:"):
-        if bpm == saved.get("bpm") and saved.get("below") is not None:
-            value.update(below=saved["below"], above=saved["above"])
-        else:
-            core = auto_tempo(conn, int(key.split(":")[1]))
-            if core:
-                value.update(below=round(core["center"] - core["lo"], 1), above=round(core["hi"] - core["center"], 1))
+    value = {"on": bool(on), "bpm": bpm, "engaged": engaged,
+             "typed": bool(bpm) and (saved.get("typed", True) if typed is None else typed)}
     db.set_setting(conn, key, value, log=True)
 

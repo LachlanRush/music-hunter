@@ -605,7 +605,8 @@ def test_sound_order(lib):
 
 
 def test_chosen_bpm_moves_the_playlist_tempo(lib):
-    """Set to BPM with my own number: the playlist's tempo centres on it, keeping the 4–5 star range's width."""
+    """Set to BPM with my own number: the playlist's tempo centres on it; its range takes in the 4–5 star songs near
+    it (#136, 2026-11-25; was: the range's width moved to centre on it)."""
     from music_hunter import tempo
 
     conn, track, _ = lib
@@ -617,9 +618,12 @@ def test_chosen_bpm_moves_the_playlist_tempo(lib):
         library.set_stars(conn, pid, t, 5)
     auto = tempo.playlist_tempo(conn, pid)
     assert auto["center"] == 142 and auto["lo"] == 140 and auto["hi"] == 150
+    tempo.save(conn, tempo.playlist_key(pid), True, 139)
+    moved = tempo.playlist_tempo(conn, pid)
+    assert (moved["center"], moved["lo"], moved["hi"]) == (139, 139, 142)         # 150 is over 6% off
     tempo.save(conn, tempo.playlist_key(pid), True, 130)
     moved = tempo.playlist_tempo(conn, pid)
-    assert (moved["center"], moved["lo"], moved["hi"]) == (130, 128, 138)
+    assert (moved["center"], moved["lo"], moved["hi"]) == (130, 130, 130)         # nothing near it
     assert tempo.playlist_settings(conn, pid)["auto"] == 142
     tempo.save(conn, tempo.playlist_key(pid), True, None)              # Auto: back to the stars' median
     assert tempo.playlist_tempo(conn, pid)["center"] == 142

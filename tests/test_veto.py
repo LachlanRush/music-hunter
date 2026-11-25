@@ -251,3 +251,35 @@ def test_no_room_for_a_seed_whose_finds_fail_the_veto(conn, monkeypatch):
     monkeypatch.setitem(config.CONFIG["pool"], "target_size", len(playable))
     monkeypatch.setitem(config.CONFIG["pool"], "surplus_factor", 100.0)
     assert pool.park_surplus(conn) == 0
+
+
+def test_set_bpm_ticked_stays_and_range_around_it(tmp_path, monkeypatch):
+    """#136 (2026-11-25): ticked, Set to BPM keeps its number while stars change; unticked, a number I didn't type
+    follows the playlist again. A set number's range takes in the 4–5 star songs near it, not those far off."""
+    from fastapi.testclient import TestClient
+    from music_hunter import db, library, tempo, web
+
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    lib = db.connect()
+    pid = library.create_playlist(lib, "p")
+
+    def add(bpm, stars):
+        with lib:
+            tid = lib.execute("INSERT INTO tracks (artist, title, duration_s, origin, bpm) VALUES ('a', 't', 200,"
+                              " 'library', ?)", (bpm,)).lastrowid
+        library.add_to_playlist(lib, pid, tid)
+        library.set_stars(lib, pid, tid, stars)
+    for b in (140, 141, 142):
+        add(b, 5)
+    client = TestClient(web.app)
+    put = lambda body: client.put(f"/api/playlists/{pid}/tempo", json=body).json()   # noqa: E731
+    assert put({"on": True})["target"] == 141                    # ticked: the playlist's tempo, locked
+    for b in (128, 129, 130, 131):                                # slower songs starred: the median moves …
+        add(b, 5)
+    assert tempo.auto_tempo(lib, pid)["center"] < 135
+    assert client.get(f"/api/playlists/{pid}").json()["tempo"]["target"] == 141      # … but not while ticked
+    assert put({"on": False})["target"] < 135                    # unticked: follows the playlist again
+    assert put({"bpm": 141.5})["target"] == 141.5                # typed: kept, ticked or not
+    assert put({"on": True})["target"] == 141.5 and put({"on": False})["target"] == 141.5
+    core = tempo.playlist_tempo(lib, pid)                         # 140–142 near it; 128–131 are over 6% off
+    assert (core["lo"], core["hi"]) == (140.0, 142.0)

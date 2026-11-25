@@ -190,9 +190,14 @@ export class PlaylistModel {
 
   /** Set to BPM: shown at once, the Pi follows (feedback #122: a typed 143 was saved, but a view fetched just before
    *  put the old number back in the box). The songs' rates come with the Pi's view. */
-  async saveTempo(on: boolean, bpm: number | null): Promise<void> {
-    this.change((p) => ({...p, tempo: {...p.tempo, on, bpm, target: bpm ?? p.tempo.auto ?? p.tempo.target}}));
-    await this.send(api(`/api/playlists/${this.id}/tempo`, {on, bpm}, "PUT"), "Couldn't save", 0);
+  /** Only what changed is sent (#136: ticking just after typing a number sent the old number with it). */
+  async saveTempo(c: {on?: boolean; bpm?: number | null}): Promise<void> {
+    this.change((p) => {
+      const t = {...p.tempo, ...c};
+      if ("bpm" in c) t.target = c.bpm ?? p.tempo.auto ?? p.tempo.target;
+      return {...p, tempo: t};
+    });
+    await this.send(api(`/api/playlists/${this.id}/tempo`, c, "PUT"), "Couldn't save", 0);
   }
 
   async ownBpm(trackId: number, bpm: number): Promise<void> {
