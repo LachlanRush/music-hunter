@@ -87,6 +87,10 @@ def _health() -> None:
 async def lifespan(app):
     _health()
     conn = db.connect()
+    from . import background
+    orphans = background.reap_orphans()             # left behind by a killed run (2026-11-25: they filled the Pi)
+    if orphans:
+        db.log_event(conn, "orphans_killed", count=len(orphans))
     db.log_event(conn, "server_start", host=UI["host"], port=UI["port"],
                  hide_names_until_rated=UI["hide_names_until_rated"])
     analysis.drop_unfinished(conn)                  # v5: nobody waits for tracks queued for the PC before a restart
@@ -122,6 +126,7 @@ async def lifespan(app):
     from . import tempo
     threading.Thread(target=tempo.sync_all, daemon=True).start()   # Same BPM copies for every playlist
     yield
+    background.stop()
     db.log_event(conn, "server_stop")
 
 
@@ -1535,7 +1540,12 @@ def _restart_soon() -> None:
     """Exit shortly; the add-on's start script starts the app again (unpacking an uploaded bundle first)."""
     import os
 
-    threading.Timer(1.0, os._exit, [0]).start()
+    from . import background
+
+    def go():
+        background.stop()                           # else its processes outlive the app (2026-11-25)
+        os._exit(0)
+    threading.Timer(1.0, go).start()
 
 
 @app.get("/api/admin/snapshot", dependencies=[Depends(worker_auth)])
