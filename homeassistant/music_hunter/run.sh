@@ -37,6 +37,9 @@ while true; do
   APP=$!
   if wait "$APP"; then STATUS=0; else STATUS=$?; fi
   APP=""
+  # Why it stopped, in the app's log (2026-11-25: an hour of restarts left nothing there). 137 = killed (SIGKILL),
+  # most often the system running out of memory.
+  echo "$(date '+%Y-%m-%d %H:%M:%S'),000 INFO music_hunter: app_exit {\"status\": $STATUS, \"seconds\": $(( $(date +%s) - STARTED )), \"code\": \"$SRC\"}" >> /data/data/music-hunter.log 2>/dev/null || true
   if [ "$STATUS" -ne 0 ]; then
     if [ "$SRC" != "/app/src" ] && [ $(( $(date +%s) - STARTED )) -lt 60 ]; then
       python3 -c 'import pathlib; from music_hunter.transfer import code_failed; code_failed(pathlib.Path("/data"))' || true

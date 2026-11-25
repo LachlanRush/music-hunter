@@ -350,7 +350,7 @@ session_gap_minutes = 30         # plays further apart than this start a new ses
 
 [ui]
 background_process = true         # re-scoring (the veto and the lanes) in separate processes, so serving songs comes
-background_processes = 2          #   first (2026-11-24: songs took 8–20 s to start while stars were caught up with)
+background_processes = 1          #   first (one since 2026-11-25: memory on the Pi) (2026-11-24: songs took 8–20 s to start while stars were caught up with)
 background_nice = 10              #   … at this lower CPU priority
 maintenance_minutes = 60         # v5: re-score idle playlists, purge Recently deleted, restart due work
 results_min_plays = 8            # Results curve: the lines stop where fewer plays than this are behind a point

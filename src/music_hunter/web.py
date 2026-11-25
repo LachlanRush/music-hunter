@@ -30,25 +30,89 @@ from .scoring import pool_tracks
 
 STATIC = Path(__file__).parent / "static"
 UI = CONFIG["ui"]
+def _health() -> None:
+    """Why did the app die? (2026-11-25: it restarted every few seconds to minutes for an hour with nothing in its
+    log.) Python's own crash reports and anything printed to stderr go into the log file, and memory is logged
+    every 10 minutes, or every 30 s while the Pi is short of it, so an out-of-memory kill shows coming."""
+    import faulthandler
+    import os
+    import sys
+
+    if "pytest" in sys.modules:
+        return
+    try:
+        log = open(path("data") / "music-hunter.log", "a", buffering=1)
+        os.dup2(log.fileno(), 2)
+        faulthandler.enable(file=log)
+    except OSError:
+        pass
+
+    def mem() -> dict:
+        out = {}
+        try:
+            info = dict(line.split(":", 1) for line in open("/proc/meminfo"))
+            out["available_mb"] = int(info["MemAvailable"].split()[0]) // 1024
+            out["total_mb"] = int(info["MemTotal"].split()[0]) // 1024
+            own = os.getpid()
+            rss = {}
+            for d in os.listdir("/proc"):
+                if not d.isdigit():
+                    continue
+                try:
+                    st = open(f"/proc/{d}/stat").read().rsplit(")", 1)[1].split()
+                    if int(d) == own or int(st[1]) == own:
+                        name = open(f"/proc/{d}/comm").read().strip()
+                        rss[f"{name}:{d}"] = int(st[21]) * os.sysconf("SC_PAGE_SIZE") // 2**20
+                except (OSError, IndexError, ValueError):
+                    continue
+            out["rss_mb"] = rss
+            out["threads"] = threading.active_count()
+        except (OSError, KeyError, ValueError):
+            pass
+        return out
+
+    def loop():
+        last = 0.0
+        while True:
+            m = mem()
+            low = m.get("available_mb", 10**6) < CONFIG["ui"].get("low_memory_mb", 500)
+            if low or time.monotonic() - last > 600:
+                db.log_event(db.connect_library(), "health", low=low, **m)
+                last = time.monotonic()
+            time.sleep(30)
+    threading.Thread(target=loop, daemon=True, name="health").start()
+
+
 @asynccontextmanager
 async def lifespan(app):
+    _health()
     conn = db.connect()
     db.log_event(conn, "server_start", host=UI["host"], port=UI["port"],
                  hide_names_until_rated=UI["hide_names_until_rated"])
     analysis.drop_unfinished(conn)                  # v5: nobody waits for tracks queued for the PC before a restart
     library.clean_descriptions(conn)                # Spotify's "Playlist · <owner> · N items" isn't a description
     worker.start_if_needed()
-    for p in library.list_playlists(conn):          # v5: resume each started session's background work
-        if find.started(p["id"]):
-            token = db.SESSION.set(p["id"])         # re-score under the current rules (a playlist not listened to
-            try:                                    # since an update would otherwise keep its old state)
+
+    def resume_sessions():
+        # v5: resume each started session's background work, re-scored under the current rules (a playlist not
+        # listened to since an update would otherwise keep its old state). In the background, one playlist at a
+        # time, after the app is already answering (2026-11-25: start-up waited for every playlist's re-score, so
+        # each restart left the phone unable to play, rate or send feedback for a while).
+        lib = db.connect_library()
+        for p in library.list_playlists(lib):
+            if not find.started(p["id"]):
+                continue
+            token = db.SESSION.set(p["id"])
+            try:
+                priority.yield_to_player()
                 ratings.undo_leave_skips(db.connect(p["id"]))
                 veto.update(db.connect(p["id"]))
             except Exception as e:  # noqa: BLE001 — never block start-up
-                db.log_event(conn, "startup_rescore_failed", playlist_id=p["id"], error=str(e)[:200])
+                db.log_event(lib, "startup_rescore_failed", playlist_id=p["id"], error=str(e)[:200])
             finally:
                 db.SESSION.reset(token)
             session_worker(p["id"]).start_if_needed()
+    threading.Thread(target=resume_sessions, daemon=True, name="resume-sessions").start()
     jobs.requeue_interrupted(conn)                  # v5: a job cut off by a restart runs again (jobs are re-runnable)
     threading.Thread(target=_maintenance, daemon=True, name="maintenance").start()
     from . import rekordbox
