@@ -77,3 +77,32 @@ def veto_update(conn: sqlite3.Connection) -> dict:
                 _pool = None
             return veto.update_here(conn)
         raise
+
+
+def _groups_update(pid: int) -> dict:
+    from . import db, groups
+    db.SESSION.set(pid)
+    conn = db.connect(pid)
+    try:
+        return groups.update(conn)
+    finally:
+        conn.close()
+
+
+def groups_update(conn: sqlite3.Connection) -> dict:
+    """groups.update (§20.9), in a background process when it can be, as veto_update."""
+    from . import groups
+    pid = None if IN_CHILD or conn.in_transaction or not CONFIG["ui"].get("background_process", True) \
+        else _session_of(conn)
+    if pid is None:
+        return groups.update(conn)
+    global _pool
+    try:
+        return _executor().submit(_groups_update, pid).result()
+    except Exception as e:  # noqa: BLE001
+        from concurrent.futures.process import BrokenProcessPool
+        if isinstance(e, BrokenProcessPool):
+            with _lock:
+                _pool = None
+            return groups.update(conn)
+        raise

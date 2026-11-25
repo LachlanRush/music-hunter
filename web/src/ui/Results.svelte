@@ -98,14 +98,14 @@
     {#if d.picks?.length}
       <section class="lanes">
         <h2>Lanes and random picks</h2>
-        <p class="sub">Since the lanes started: songs following your stars (a starred song's closest-sounding songs, an artist's best) beside the random picks.</p>
+        <p class="sub">Since the lanes started: songs following your stars (a starred song's closest-sounding songs, an artist's best) beside the random picks, and the group picks (songs whose groups and similar songs have gone well, from 25 Nov).</p>
         <table>
           <thead><tr><th></th><th>Rated</th><th>Off</th><th>Add</th><th>Lanes</th></tr></thead>
           <tbody>
             {#each d.picks as r (r.kind)}
               <tr><th scope="row">{r.label}</th><td>{r.plays}</td><td>{r.off == null ? "–" : `${r.off}%`}</td>
                 <td>{r.add == null ? "–" : `${r.add}%`}</td>
-                <td>{r.kind === "random" ? "" : `${r.active ?? 0} active · ${r.quiet ?? 0} quiet`}</td></tr>
+                <td>{r.kind === "random" || r.kind === "groups" ? "" : `${r.active ?? 0} active · ${r.quiet ?? 0} quiet`}</td></tr>
             {/each}
           </tbody>
         </table>

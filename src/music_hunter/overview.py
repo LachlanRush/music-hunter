@@ -59,15 +59,18 @@ def lane_picks(sess) -> list[dict]:
     since = sess.execute("SELECT min(created_at) FROM lanes").fetchone()[0]
     if since is None:
         return []
-    by = {"random": [], "song": [], "artist": []}
-    for kind, rating in sess.execute("SELECT coalesce(l.kind, 'random'), p.rating FROM plays p LEFT JOIN lanes l"
+    by = {"random": [], "song": [], "artist": [], "groups": []}
+    for kind, rating in sess.execute("SELECT coalesce(l.kind, p.picked_by, 'random'), p.rating FROM plays p LEFT JOIN lanes l"
                                      " ON l.id = p.lane_id WHERE p.rating IS NOT NULL AND p.is_control = 0"
                                      " AND p.shown_at >= ?", (since,)):
         by[kind].append(rating)
     state = dict(((k, s), n) for k, s, n in sess.execute("SELECT kind, state, count(*) FROM lanes GROUP BY 1, 2"))
     out = []
-    for kind, label in (("random", "Random picks"), ("song", "Song lanes"), ("artist", "Artist lanes")):
+    for kind, label in (("random", "Random picks"), ("song", "Song lanes"), ("artist", "Artist lanes"),
+                        ("groups", "Group picks")):
         r = by[kind]
+        if kind == "groups" and not r:
+            continue
         n = len(r)
         out.append({"kind": kind, "label": label, "plays": n,
                     "off": round(100 * r.count(1) / n) if n else None, "add": round(100 * r.count(ADD) / n) if n else None,

@@ -382,6 +382,8 @@ def _after_loop(pid) -> None:
                 tempo.sync_session(conn, pid)          # Find music: drop copies of tracks played a while ago
             reweight.after_rating(conn)
             veto.update(conn)                          # likes changed: re-score, move tracks across the line
+            from . import background
+            background.groups_update(conn)             # the group picks' scores (§20.9)
             session_worker().start_if_needed()
             _rescore_all(skip=pid)                     # the artist's value changed in the other playlists too
         except Exception as e:  # noqa: BLE001 — the next rating or maintenance pass tries again

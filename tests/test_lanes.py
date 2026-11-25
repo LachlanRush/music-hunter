@@ -259,3 +259,37 @@ def test_an_artist_search_suggestion_doesnt_break_scoring(conn, monkeypatch):
     assert score_pool(conn)
     p = ratings.show(conn, track_id=tid)
     assert p
+
+
+def test_group_picks(conn, monkeypatch):
+    """Group picks (§20.9): scored from the ratings so far; about [groups] share of the draws are from their top
+    songs, recorded with the play (picked_by, groups) and counted on their own in Results."""
+    from music_hunter import groups, overview
+    _setup(conn, monkeypatch)
+    monkeypatch.setitem(config.CONFIG["groups"], "min_playable", 3)
+    monkeypatch.setattr(groups, "CFG", {**config.CONFIG["groups"], "min_playable": 3, "min_ratings": 10, "min_adds": 2})
+    rng = random.Random(4)
+    for i in range(24):                                 # some ratings, a few Adds
+        p = ratings.show_next(conn, rng)
+        ratings.rate(conn, p, 3 if i % 5 == 0 else 1 if i % 2 else 2)
+    veto.update(conn)
+    g = groups.update(conn)
+    assert g and g["top"] and set(g["top"]) <= set(ratings.playable_ids(conn))
+    kinds = []
+    for i in range(200):
+        conn.execute("DELETE FROM settings WHERE key = 'next_draw'")
+        ratings.upcoming(conn, random.Random(i))
+        d = ratings.db.get_setting(conn, "next_draw")
+        kinds.append("group" if d.get("group") else "lane" if d.get("lane") else "random")
+        assert not d.get("group") or d["track_id"] in g["top"]
+    assert 0.1 < kinds.count("group") / 200 < 0.32
+    while True:                                         # a group pick, shown and rated
+        conn.execute("DELETE FROM settings WHERE key = 'next_draw'")
+        ratings.upcoming(conn, rng)
+        if ratings.db.get_setting(conn, "next_draw").get("group"):
+            break
+    p = ratings.show_next(conn, rng)
+    row = conn.execute("SELECT picked_by, groups FROM plays WHERE id = ?", (p,)).fetchone()
+    assert row[0] == "groups" and row[1]
+    ratings.rate(conn, p, 3)
+    assert any(r["kind"] == "groups" and r["plays"] == 1 for r in overview.lane_picks(conn))
