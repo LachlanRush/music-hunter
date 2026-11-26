@@ -32,7 +32,8 @@ FOLDS = (1, 2, 0.5, 1.5, 2 / 3)           # a measured BPM can be a half, double
 
 
 def nearest_reading(bpm: float, target: float) -> float:
-    return min((bpm * f for f in FOLDS), key=lambda r: abs(np.log(r / target)))
+    from .tempo import nearest                   # the same reading the playlist shows (folding costs a little)
+    return nearest(bpm, target)
 
 
 def robust_z(x: np.ndarray) -> np.ndarray:

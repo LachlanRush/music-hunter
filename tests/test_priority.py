@@ -80,6 +80,16 @@ def test_tempo_ties_go_to_the_plain_reading():
     assert tempo.core_from([(173, 5), (116, 5), (87, 5), (174, 5)])["center"] == 174
 
 
+def test_wide_tempo_playlist_isnt_folded():
+    """Soul Set (2026-11-26): 5-star songs at 98-158 BPM were all folded (x1.5, x2) to agree at ~174, so the playlist's
+    tempo became 196 and every song showed 170-240. Folding now costs a little, so they keep their measured tempo."""
+    soul = [(138.06, 5), (158.09, 5), (115.77, 5), (99.09, 5), (125.16, 5), (98.11, 5), (115.53, 5), (115.92, 5)]
+    core = tempo.core_from(soul)
+    assert 110 < core["center"] < 120
+    assert [tempo.shown_bpm(b, core["center"]) for b in (98.11, 138.06, 158.09)] == [98, 138, 158]
+    assert tempo.shown_bpm(87, 174) == 174 and tempo.shown_bpm(93.6, 142) == 140     # real misreads still fold
+
+
 def test_find_music_prune_keeps_renders_in_flight(tmp_path, monkeypatch):
     """A copy being rendered for the pick just started was cancelled by the prune after a rating, deleted the moment
     it was made (404 in the player) and rendered again (2026-11-25)."""

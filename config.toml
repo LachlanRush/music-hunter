@@ -329,6 +329,7 @@ analysis_sample_rate = 22050
 hop_length = 256                 # analysis step (~12 ms); finer = more precise beat times
 prior_width_octaves = 0.5        # 3:2 tie-break: gentle preference for tempos near the seeds' median BPM
 sigma = 4.0                      # bpm_match fall-off: ~0.6 at sigma BPM from the target (or beyond the window)
+fold_penalty = 0.25              # a reading is only read as half/double/3:2 of itself when that lands >25% (log) closer (2026-11-26)
 max_stretch = 0.12               # Match tempo stretches at most ±12%; with a target set, tracks within ±12%
                                  # can all be played at the target and get bpm_match credit:
 window_edge_credit = 0.5         # 1 at the target, falling to this at ±12%, then dropping away beyond

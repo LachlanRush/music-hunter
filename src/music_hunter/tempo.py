@@ -13,6 +13,7 @@ target BPM; default: the playlist's median BPM), stored on the server:
 Until a track's copy is ready the original plays, and the player swaps the copy in at the same point in the music.
 """
 
+import math
 import re
 import subprocess
 import threading
@@ -30,6 +31,18 @@ KEEP_PLAYED = 3                         # Find music: copies kept for the last f
 
 # --- settings and rates ---------------------------------------------------------------------------------------------
 
+def fold_cost(bpm: float, f: float, around: float) -> float:
+    """How far a reading folded by `f` lands from `around` (log scale), plus a cost for folding at all: a song keeps
+    its measured tempo unless folding brings it much closer. Real misreads still fold (d&b's 87 -> 174, Love Again's
+    93.6 -> 140); a playlist that genuinely spans tempos doesn't get every song doubled or made 3:2 (Soul Set's 98-158
+    BPM songs all showed 170-240, 2026-11-26)."""
+    return abs(math.log(around / (bpm * f))) + (CONFIG["bpm"].get("fold_penalty", 0.25) if f != 1 else 0.0)
+
+
+def best_fold(bpm: float, around: float) -> float:
+    return min(FOLDS, key=lambda f: fold_cost(bpm, f, around))
+
+
 def median_bpm(bpms) -> float:
     b = sorted(x for x in bpms if x)
     return round(b[len(b) // 2] * 2) / 2 if b else 128.0
@@ -40,11 +53,11 @@ def shown_bpm(bpm: float | None, around: float) -> int | None:
     reading shows as the tempo it really plays at (Love Again: read 93.6, shown 140)."""
     if not bpm:
         return None
-    return round(min((bpm * f for f in FOLDS), key=lambda r: abs(around / r - 1)))
+    return round(bpm * best_fold(bpm, around))
 
 
 def nearest(bpm: float, around: float) -> float:
-    return min((bpm * f for f in FOLDS), key=lambda r: abs(around / r - 1))
+    return bpm * best_fold(bpm, around)
 
 
 def _core_bpms(items) -> list[float]:
@@ -74,14 +87,12 @@ def core_from(items) -> dict | None:
     pick = _core_bpms(items)
     if not pick:
         return None
-    # The tempo they agree on best: every reading is folded (half, double, 2:3) to its nearest point to a candidate,
-    # and the candidate with the least spread wins. (The plain median of the readings could itself be a misreading:
+    # The tempo they agree on best: every reading is folded (half, double, 2:3) to its nearest point to a candidate
+    # (folding costs a little, fold_cost), and the candidate with the least spread wins. (The plain median of the readings could itself be a misreading:
     # Interesting d&b's 174 BPM tracks read as 173, 116 (2:3) and 87 (half); their median, 116, folded the 87s to
     # 130, and every track showed ~116. Fixed 2026-11-11.)
-    import math
-
     def spread(c):
-        return sum(min(abs(math.log(c / (b * f))) for f in FOLDS) for b in pick)
+        return sum(min(fold_cost(b, f, c) for f in FOLDS) for b in pick)
     # Candidates within the range tempos are measured in ([bpm] min–max, a little over for d&b's 174–176): with the
     # ties going to the faster candidate, a 60–200 range let one 130 BPM house track read as 195 (2:3), and Liked,
     # blend and Disco House were all set to ~190 (#135, 2026-11-25).
@@ -93,7 +104,7 @@ def core_from(items) -> dict | None:
     plain = sorted(pick)[len(pick) // 2]
 
     def folded_count(c):
-        return sum(min(FOLDS, key=lambda f: abs(math.log(c / (b * f)))) != 1 for b in pick)
+        return sum(best_fold(b, c) != 1 for b in pick)
     first = min(candidates or {float(plain)},
                 key=lambda c: (round(spread(c), 3), folded_count(c), abs(math.log(c / plain))))
     folded = sorted(nearest(b, first) for b in pick)
@@ -158,7 +169,7 @@ def rate_for(bpm: float | None, s: dict, ignore_off: bool = False) -> tuple[floa
     target, max_stretch = s["target"], CONFIG["tempo"].get("play_max_stretch", CONFIG["bpm"]["max_stretch"])
     if not bpm or not target:
         return 1.0, "Own tempo (unknown BPM)"
-    reading = min((bpm * f for f in FOLDS), key=lambda r: abs(target / r - 1))
+    reading = nearest(bpm, target)
     r = target / reading
     if abs(r - 1) > max_stretch:
         return 1.0, f"Own tempo ({round(reading)} BPM, too far from {target:g})"
