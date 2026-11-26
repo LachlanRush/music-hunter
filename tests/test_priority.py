@@ -72,6 +72,37 @@ def test_far_off_song_doesnt_stretch_the_tempo_range():
     assert tempo.core_from(few)["lo"] == 127.0
 
 
+def test_tempo_ties_go_to_the_plain_reading():
+    """#144: one starred song (Love Sensation, 117) made Disco 175.8 (its 3:2); Haus Muzik's 139–143 songs came out
+    as 94.8 (their 2:3) on rounding noise. d&b's misread songs still fold to 174."""
+    assert tempo.core_from([(117.17, 5)])["center"] == 117.2
+    assert tempo.core_from([(139.12, 4), (142.04, 5), (142.26, 5), (143.0, 5)])["center"] == 142.3
+    assert tempo.core_from([(173, 5), (116, 5), (87, 5), (174, 5)])["center"] == 174
+
+
+def test_find_music_prune_keeps_renders_in_flight(tmp_path, monkeypatch):
+    """A copy being rendered for the pick just started was cancelled by the prune after a rating, deleted the moment
+    it was made (404 in the player) and rendered again (2026-11-25)."""
+    dest = tmp_path / "find7-3719-1.044.webm"
+    with tempo.RENDERER.cv:
+        tempo.RENDERER.running["test"] = dest
+    try:
+        monkeypatch.setattr(tempo, "_copies", lambda scope: iter(()))
+        monkeypatch.setattr(tempo, "session_settings", lambda sess, session: {"on": True, "target": 142.0,
+                                                                              "engaged": True})
+        import sqlite3
+        sess = sqlite3.connect(":memory:")
+        sess.executescript("CREATE TABLE plays (id INTEGER PRIMARY KEY, track_id INT);"
+                           "CREATE TABLE tracks (id INTEGER PRIMARY KEY, bpm REAL, veto_state TEXT);"
+                           "INSERT INTO tracks VALUES (3719, 136.0, NULL); INSERT INTO plays (track_id) VALUES (3719);")
+        tempo.sync_session(sess, 7)
+        assert dest not in tempo.RENDERER.cancelled
+    finally:
+        with tempo.RENDERER.cv:
+            tempo.RENDERER.running.pop("test", None)
+            tempo.RENDERER.cancelled.discard(dest)
+
+
 def test_age_restricted_video_isnt_youtube_blocking_us():
     """#77: one age-restricted video paused every download for up to 40 min at a time."""
     from music_hunter.analysis import refusal

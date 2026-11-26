@@ -43,8 +43,9 @@ def bundle(dest: Path, audio: bool, log: bool = False) -> Path:
                 src.backup(out)
             src.close(), out.close()
             tar.add(copy, arcname=str(db_file.relative_to(root)))
-        if log and (path("data") / "music-hunter.log").exists():
-            tar.add(path("data") / "music-hunter.log", arcname="data/music-hunter.log")
+        if log:                                          # with the rotated ones (.1–.5): the current file can be minutes old
+            for f in sorted(path("data").glob("music-hunter.log*")):
+                tar.add(f, arcname=f"data/{f.name}")
         if audio:
             for name in AUDIO:
                 folder = path(name)

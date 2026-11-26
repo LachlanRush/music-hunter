@@ -85,9 +85,17 @@ def core_from(items) -> dict | None:
     # Candidates within the range tempos are measured in ([bpm] min–max, a little over for d&b's 174–176): with the
     # ties going to the faster candidate, a 60–200 range let one 130 BPM house track read as 195 (2:3), and Liked,
     # blend and Disco House were all set to ~190 (#135, 2026-11-25).
+    # Ties (one song, or readings that fold onto each other equally well) go to the candidate needing the fewest
+    # readings folded, then the one nearest the plain median: the tracker's own reading is usually right. (They went to
+    # the fastest: Disco with only Love Sensation starred, read 117, became 175.8 and every song showed ~190, #144.)
     lo, hi = CONFIG["bpm"]["min"], CONFIG["bpm"]["max"] + 2
-    candidates = {round(b * f, 1) for b in pick for f in FOLDS if lo <= b * f <= hi}
-    first = min(candidates or {float(sorted(pick)[len(pick) // 2])}, key=lambda c: (round(spread(c), 3), -c))
+    candidates = {b * f for b in pick for f in FOLDS if lo <= b * f <= hi}       # unrounded, so equivalent folds tie exactly
+    plain = sorted(pick)[len(pick) // 2]
+
+    def folded_count(c):
+        return sum(min(FOLDS, key=lambda f: abs(math.log(c / (b * f)))) != 1 for b in pick)
+    first = min(candidates or {float(plain)},
+                key=lambda c: (round(spread(c), 3), folded_count(c), abs(math.log(c / plain))))
     folded = sorted(nearest(b, first) for b in pick)
     center = folded[len(folded) // 2]
     # A song far off the others' tempo doesn't stretch the range (2026-11-18, #71: No More's 4★ Good 4 U at 127 BPM
@@ -406,8 +414,15 @@ def sync_session(sess, session: int) -> None:
     recent = {r[0] for r in sess.execute("SELECT track_id FROM plays ORDER BY id DESC LIMIT ?", (KEEP_PLAYED,))}
     played = {r[0] for r in sess.execute("SELECT DISTINCT track_id FROM plays")} | \
         {r[0] for r in sess.execute("SELECT id FROM tracks WHERE veto_state = 'dropped'")}
+    # Renders still queued or running count as copies too: they're the pick just started or the one drawn next, and
+    # pruning them cancelled the render, so the file was deleted the moment it was made (the player got a 404 and the
+    # Pi rendered it again, up to three times; 2026-11-25).
+    with RENDERER.cv:
+        pending = list(RENDERER.pending)
+    in_flight = [(int(m["track"]), float(m["rate"])) for m in (NAME.match(d.name) for d in pending)
+                 if m and m["scope"] == scope]
     wanted = set()
-    for f, tid, rate in _copies(scope):
+    for tid, rate in [(tid, rate) for _, tid, rate in _copies(scope)] + in_flight:
         if tid in played and tid not in recent:
             continue
         bpm = sess.execute("SELECT bpm FROM tracks WHERE id = ?", (tid,)).fetchone()
