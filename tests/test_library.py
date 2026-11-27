@@ -384,6 +384,8 @@ def test_rekordbox_export_brings_its_grid_back_for_phrase_marks(tmp_path, monkey
     from music_hunter.config import CONFIG
     sync, conn, pid, track, m4a = _sync_setup(tmp_path, monkeypatch)
     monkeypatch.setitem(CONFIG["sync"], "rekordbox_inbox", str(tmp_path / "Rekordbox export"))
+    monkeypatch.setitem(CONFIG["grid"], "enabled", True)       # (dropped 2026-11-27, #147; kept working if turned on)
+    monkeypatch.setitem(CONFIG["grid"], "write_xml", True)
     m4a("a.m4a"); m4a("b.m4a")
     a = track("Art", "One", stars=5, file="library/a.m4a")
     b = track("Art", "Two", stars=4, file="library/b.m4a")
@@ -713,3 +715,47 @@ def test_one_recording_twice_is_merged(lib):
     assert [tuple(r) for r in rows] == [(p1, b, 4), (p2, b, 2)]          # the extended name kept; one entry per playlist
     assert conn.execute("SELECT merged_into FROM tracks WHERE id = ?", (a,)).fetchone()[0] == b
     assert library.merge_duplicates(conn) == 0
+
+
+def test_sync_keeps_a_set_to_bpm_folder_while_ticked(tmp_path, monkeypatch):
+    """2026-11-27 (#148): with Set to BPM ticked, a synced playlist's folder gets "<target> BPM/" with every song at
+    the tempo the player plays it at (a song's own "Play at … BPM" included), and rekordbox.xml a playlist for it;
+    another target replaces it, unticking removes it."""
+    import subprocess
+
+    from music_hunter import tempo
+    sync, conn, pid, track, m4a = _sync_setup(tmp_path, monkeypatch)
+    m4a("a.m4a"); m4a("b.m4a")
+    a = track("Art", "One", stars=5, file="library/a.m4a")
+    b = track("Art", "Two", stars=4, file="library/b.m4a")
+    with conn:
+        conn.execute("UPDATE tracks SET duration_s = 1.0, bpm = 133.0 WHERE id = ?", (b,))
+    db.set_setting(conn, sync.setting(pid), True)
+    sync.run_once(conn)
+    folder = tmp_path / "share" / "pump_ 140"
+    assert not (folder / "140 BPM").exists()                       # not ticked: no folder
+
+    tempo.save(conn, tempo.playlist_key(pid), True, 140.0, typed=True)
+    sync.run_once(conn)
+    sub = folder / "140 BPM"
+    assert sorted(f.name for f in sub.iterdir()) == ["Art - One.m4a", "Art - Two.m4a"]
+    length = lambda f: float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
+                                             "csv=p=0", str(f)], capture_output=True, text=True).stdout)
+    assert abs(length(sub / "Art - One.m4a") - length(folder / "Art - One.m4a")) < 0.05   # already at 140
+    assert length(sub / "Art - Two.m4a") < length(folder / "Art - Two.m4a") * 0.97         # 133 → 140: shorter
+    xml = (tmp_path / "share" / "rekordbox.xml").read_text()
+    assert 'Name="pump: 140 (140 BPM)"' in xml and "/140%20BPM/Art%20-%20Two.m4a" in xml
+    assert xml.count('AverageBpm="140.00"') == 3 and xml.count('AverageBpm="133.00"') == 1   # Two: 133 → 140
+    with conn:
+        conn.execute("UPDATE playlist_tracks SET bpm_override = 145 WHERE track_id = ?", (a,))
+    sync.run_once(conn)
+    assert 'AverageBpm="145.00"' in (tmp_path / "share" / "rekordbox.xml").read_text()
+
+    tempo.save(conn, tempo.playlist_key(pid), True, 138.0, typed=True)
+    sync.run_once(conn)
+    assert not (folder / "140 BPM").exists() and (folder / "138 BPM").exists()
+    tempo.save(conn, tempo.playlist_key(pid), False, None, typed=False)
+    sync.run_once(conn)
+    assert not (folder / "138 BPM").exists()
+    assert sorted(f.name for f in folder.iterdir()) == ["Art - One.m4a", "Art - Two.m4a"]
+    assert "BPM)" not in (tmp_path / "share" / "rekordbox.xml").read_text()

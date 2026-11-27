@@ -475,8 +475,10 @@ similar_bpm_tolerance = 0.06   # Find similar: only songs within this share of t
 # out from the Pi's own copy (no YouTube download), synced playlists first; rekordbox.xml then carries the grid, a hot
 # cue A on the drop and memory cues every cue_bars bars counted from the drop.
 [grid]
-enabled = true
-write_xml = true
+# Dropped 2026-11-27 (#147): no grid work on the PC, no grids, cues or phrase marks in rekordbox.xml, and the Rekordbox
+# export folder isn't read. rekordbox.xml keeps the playlists and stars.
+enabled = false
+write_xml = false
 # Phrase marks only on Rekordbox's own grid (2026-11-14, my choice): its bar 1 is right more often than ours, so a song
 # gets marks once Rekordbox's export has brought its grid back (rekordbox.py); Rekordbox's grid and my own cues are
 # written back unchanged. false: songs without it get our own grid and cues.

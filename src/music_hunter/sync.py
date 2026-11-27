@@ -132,8 +132,113 @@ def sync_playlist(lib, pid: int, name: str, parent: str | None = None) -> dict:
     for tid, d in kept.items():
         if tid not in wanted:
             (folder / d["file"]).unlink(missing_ok=True)         # it left the playlist
-    _save(pid, {"folder": rel, "tracks": wanted})
+    _save(pid, {**st, "folder": rel, "tracks": wanted})           # (its Set to BPM folder's list kept)
     return wanted
+
+
+TEMPO_TAGS = 1   # what's written into a BPM folder copy (as TAGS)
+
+
+def _bpm_plan(lib, pid: int, tracks: dict) -> tuple[str | None, dict]:
+    """The playlist's Set to BPM folder (#148, 2026-11-27): its name ("142 BPM") while Set to BPM is ticked, else
+    None; and each synced track's rate there and the tempo it then plays at — the player's own rule (the playlist's
+    target, or the track's own "Play at … BPM")."""
+    from . import tempo
+
+    s = tempo.playlist_settings(lib, pid)
+    if not s["on"] or not s.get("target"):
+        return None, {}
+    core = tempo.playlist_tempo(lib, pid)
+    overrides = dict(lib.execute("SELECT track_id, bpm_override FROM playlist_tracks WHERE playlist_id = ?"
+                                 " AND bpm_override IS NOT NULL", (pid,)).fetchall())
+    around = core["center"] if core else s["target"]
+    plan = {}
+    for tid, d in tracks.items():
+        bpm, own = d.get("bpm"), overrides.get(int(tid))
+        rate = (own and tempo.override_rate(bpm, own, around)) or tempo.rate_for(bpm, s)[0]
+        plays_at = (own or s["target"]) if rate != 1.0 else bpm and tempo.nearest(bpm, s["target"])
+        plan[tid] = {"rate": round(rate, 3), "bpm": round(plays_at, 2) if plays_at else None}
+    return f"{s['target']:g} BPM", plan
+
+
+def _render(src: Path, art: Path | None, dest: Path, rate: float, title: str, artist: str) -> None:
+    """A copy stretched to `rate`, pitch kept (Rubber Band, as the player's copies), as 256 kbps AAC for Rekordbox."""
+    tmp = _temp(dest)
+    cmd = ["nice", "-n", "15", "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src)]
+    if art is not None and art.exists():
+        cmd += ["-i", str(art), "-map", "0:a", "-map", "1:v", "-c:v", "copy", "-disposition:v:0", "attached_pic"]
+    else:
+        cmd += ["-map", "0:a"]
+    cmd += ["-af", f"rubberband=tempo={rate}:pitchq=quality", "-c:a", "aac", "-b:a", "256k", "-map_metadata", "-1",
+            "-metadata", f"title={title}", "-metadata", f"artist={artist}", "-f", "mp4", str(tmp)]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        tmp.replace(dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def sync_bpm_folder(lib, pid: int, stop=lambda: False) -> dict | None:
+    """Bring the playlist's Set to BPM folder up to date: <playlist folder>/<target> BPM/, every synced track at the
+    tempo the player plays it at. Gone (only the files put there) when Set to BPM is unticked or the target changes.
+    Rendering takes a while on the Pi, so `stop()` is asked between tracks (a change waiting: the plain folders go
+    first) and what's done is kept for the next pass. Returns {"name", "tracks"} or None."""
+    st = _load(pid)
+    if not st["folder"]:
+        return None
+    folder = Path(CFG["folder"]) / st["folder"]
+    name, plan = _bpm_plan(lib, pid, st["tracks"])
+    old = st.get("bpm") or {"name": None, "tracks": {}}
+    if old["name"] and old["name"] != name:                       # unticked, or another target: its files go
+        sub = folder / old["name"]
+        for d in old["tracks"].values():
+            (sub / d["file"]).unlink(missing_ok=True)
+        if sub.exists() and not any(sub.iterdir()):
+            sub.rmdir()
+        old = {"name": None, "tracks": {}}
+        st["bpm"] = None
+        _save(pid, st)
+    if name is None:
+        return None
+    sub = folder / name
+    sub.mkdir(parents=True, exist_ok=True)
+    kept, done = old["tracks"], {}
+    rows = {str(r["id"]): r for r in lib.execute(
+        f"SELECT id, art_path FROM tracks WHERE id IN ({','.join('?' * len(plan)) or 'NULL'})", [int(t) for t in plan])}
+    for tid, d in st["tracks"].items():
+        p = plan[tid]
+        have = kept.get(tid)
+        if (have and have["source"] == d["source"] and have["rate"] == p["rate"] and have["file"] == d["file"]
+                and have.get("tags") == TEMPO_TAGS and (sub / d["file"]).exists()):
+            done[tid] = {**have, "bpm": p["bpm"], "stars": d["stars"]}
+            continue
+        if stop():
+            break
+        art = rows.get(tid) and rows[tid]["art_path"]
+        art = resolve(art) if art else None
+        try:
+            if p["rate"] == 1.0:
+                _tag(resolve(d["source"]), art, sub / d["file"], d["title"], d["artist"])
+            else:
+                _render(resolve(d["source"]), art, sub / d["file"], p["rate"], d["title"], d["artist"])
+        except subprocess.CalledProcessError as e:
+            db.log_event(lib, "sync_bpm_failed", playlist_id=pid, track_id=int(tid),
+                         error=(e.stderr or b"").decode(errors="replace")[-300:])
+            continue
+        if have and have["file"] != d["file"]:
+            (sub / have["file"]).unlink(missing_ok=True)
+        done[tid] = {"file": d["file"], "source": d["source"], "rate": p["rate"], "tags": TEMPO_TAGS, "bpm": p["bpm"],
+                     "stars": d["stars"], "artist": d["artist"], "title": d["title"], "duration_s": d["duration_s"],
+                     "size": (sub / d["file"]).stat().st_size}
+        st["bpm"] = {"name": name, "tracks": {**{k: v for k, v in kept.items() if k not in done}, **done}}
+        _save(pid, st)                                           # (kept track by track: a restart carries on)
+    else:
+        for tid, d in kept.items():
+            if tid not in done:
+                (sub / d["file"]).unlink(missing_ok=True)        # it left the playlist (or its folder)
+        st["bpm"] = {"name": name, "tracks": done}
+        _save(pid, st)
+    return {"name": name, "tracks": {k: v for k, v in (st.get("bpm") or {}).get("tracks", {}).items() if k in st["tracks"]}}
 
 
 def _marks(grid: dict | None, duration: float, rb: dict | None = None, source: str | None = None) -> str:
@@ -180,14 +285,17 @@ def _rekordbox(playlists: list[tuple], grids: dict | None = None, last: dict | N
         for tid, d in tracks.items():
             if tid not in seen:
                 seen[tid] = str(len(seen) + 1)
+                if d.get("rate"):                                 # (a Set to BPM copy: its own length and tempo)
+                    d = {**d, "duration_s": (d["duration_s"] or 0) / d["rate"], "bpm": d["bpm"]}
                 where = quote(f"{laptop}/{folder}/{d['file']}", safe="/:")
                 entries.append(
                     f'    <TRACK TrackID="{seen[tid]}" Name={quoteattr(d["title"])} Artist={quoteattr(d["artist"])}'
                     f' Kind="M4A File" Size="{d["size"]}" TotalTime="{round(d["duration_s"] or 0)}"'
                     f' AverageBpm="{d["bpm"] or 0:.2f}" Rating="{(d["stars"] or 0) * 51}"'
                     f' Location="file://localhost/{where}"'
-                    + (f'>{marks}</TRACK>' if (marks := _marks((gr := (grids or {}).get(tid, (None, None)))[0],
-                                                              d["duration_s"] or 0, gr[1], d["source"])) else '/>'))
+                    + (f'>{marks}</TRACK>' if not d.get("rate") and (marks := _marks(
+                        (gr := (grids or {}).get(tid, (None, None)))[0], d["duration_s"] or 0, gr[1], d["source"]))
+                       else (marks := "") or '/>'))
                 marked += 'Num="-1"' in marks
             keys.append(f'      <TRACK Key="{seen[tid]}"/>')
         node = (f'    <NODE Name={quoteattr(name)} Type="1" KeyType="0" Entries="{len(keys)}">\n'
@@ -199,7 +307,7 @@ def _rekordbox(playlists: list[tuple], grids: dict | None = None, last: dict | N
     for fname, inner in groups.items():
         nodes.insert(0, f'    <NODE Type="0" Name={quoteattr(fname)} Count="{len(inner)}">\n' + "\n".join(inner)
                      + "\n    </NODE>")
-    if last:                                                     # (an empty playlist, just its name)
+    if last and CONFIG.get("grid", {}).get("write_xml", True):   # (an empty playlist, just its name)
         nodes.insert(0, f'    <NODE Name={quoteattr(f"Marks from {last['file']}: {marked} of {last['songs']} songs")}'
                         ' Type="1" KeyType="0" Entries="0">\n    </NODE>')
     return ('<?xml version="1.0" encoding="UTF-8"?>\n<DJ_PLAYLISTS Version="1.0.0">\n'
@@ -218,14 +326,43 @@ def run_once(lib) -> None:
         if is_on(lib, p["id"]):
             parent = folders.get(p["folder_id"])                 # the home page's folder, if it's in one
             tracks = sync_playlist(lib, p["id"], p["name"], parent)
-            done.append((p["name"], _load(p["id"])["folder"], tracks, parent))
-    if done:
-        xml = Path(CFG["folder"]) / "rekordbox.xml"
-        tmp = _temp(xml)
-        grids = {str(r["id"]): (json.loads(r["grid"]) if r["grid"] else None, json.loads(r["rb_grid"]) if r["rb_grid"] else None)
-                 for r in lib.execute("SELECT id, grid, rb_grid FROM tracks WHERE grid IS NOT NULL OR rb_grid IS NOT NULL")}
-        tmp.write_text(_rekordbox(done, grids, db.get_setting(lib, "rekordbox_last_import")), encoding="utf-8")
-        tmp.replace(xml)
+            done.append((p["id"], p["name"], _load(p["id"])["folder"], tracks, parent))
+    if not done:
+        return
+    _write_xml(lib, done, _bpm_entries(done, {p: _load(p).get("bpm") for p, *_ in done}))
+    # Then the Set to BPM folders (#148): slow on the Pi, so a change waiting stops them between tracks and the plain
+    # folders go first; the next pass carries on.
+    bpm = {}
+    for p, *_ in done:
+        bpm[p] = sync_bpm_folder(lib, p, stop=lambda: _again)
+        if _again:
+            return
+    _write_xml(lib, done, _bpm_entries(done, bpm))
+
+
+def _bpm_entries(done: list, bpm: dict) -> dict:
+    """{playlist id: (name, folder, tracks, parent)} of each Set to BPM folder, for rekordbox.xml."""
+    out = {}
+    for p, name, folder, tracks, parent in done:
+        b = bpm.get(p)
+        if b and b.get("name"):
+            out[p] = (f"{name} ({b['name']})", f"{folder}/{b['name']}",
+                      {f"{k}@bpm": v for k, v in b["tracks"].items() if k in tracks}, parent)
+    return out
+
+
+def _write_xml(lib, done: list, bpm: dict) -> None:
+    xml = Path(CFG["folder"]) / "rekordbox.xml"
+    tmp = _temp(xml)
+    grids = {str(r["id"]): (json.loads(r["grid"]) if r["grid"] else None, json.loads(r["rb_grid"]) if r["rb_grid"] else None)
+             for r in lib.execute("SELECT id, grid, rb_grid FROM tracks WHERE grid IS NOT NULL OR rb_grid IS NOT NULL")}
+    lists = []
+    for p, *rest in done:
+        lists.append(tuple(rest))
+        if p in bpm:
+            lists.append(bpm[p])
+    tmp.write_text(_rekordbox(lists, grids, db.get_setting(lib, "rekordbox_last_import")), encoding="utf-8")
+    tmp.replace(xml)
 
 
 def request() -> None:
@@ -234,11 +371,11 @@ def request() -> None:
     if shutil.which("ffmpeg") is None:
         return
     with _lock:
-        if _thread is not None and _thread.is_alive():
+        if _thread is not None:                      # running, or just started (it clears this when it ends)
             _again = True
             return
-        _thread = threading.Thread(target=_work, daemon=True)
-        _thread.start()
+        _thread = t = threading.Thread(target=_work, daemon=True)
+    t.start()                                        # (outside the lock: the pass takes it when it ends)
 
 
 def _work() -> None:

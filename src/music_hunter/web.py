@@ -120,11 +120,13 @@ async def lifespan(app):
     jobs.requeue_interrupted(conn)                  # v5: a job cut off by a restart runs again (jobs are re-runnable)
     threading.Thread(target=_maintenance, daemon=True, name="maintenance").start()
     from . import rekordbox
-    rekordbox.start()                               # Rekordbox exports dropped in the Songs share (its grids)
+    if CONFIG.get("grid", {}).get("enabled", True):
+        rekordbox.start()                               # Rekordbox exports dropped in the Songs share (its grids)
     _extended_soon()
     job_runner.kick()
     from . import tempo
     threading.Thread(target=tempo.sync_all, daemon=True).start()   # Same BPM copies for every playlist
+    sync.request()                                  # the laptop folders follow a new version at once, not an hour later
     yield
     background.stop()
     db.log_event(conn, "server_stop")
@@ -999,6 +1001,7 @@ def set_track_bpm(playlist_id: int, track_id: int, body: OverrideBody) -> dict:
         conn.execute("UPDATE playlist_tracks SET bpm_override = ? WHERE playlist_id = ? AND track_id = ?",
                      (round(body.bpm, 1), playlist_id, track_id))
     tempo.sync_playlist(conn, playlist_id)
+    sync.request()                                    # its Set to BPM folder on the laptop follows (#148)
     return {"ok": True, "bpm_override": round(body.bpm, 1)}
 
 

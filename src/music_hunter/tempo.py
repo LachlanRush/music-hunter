@@ -456,12 +456,21 @@ def sync_all() -> None:
         sync_playlist(lib, pid)
     folder = path("cache") / "tempo"
     if folder.exists():
+        # A render's part file is left alone unless it's stale: this runs at start-up and in the hourly maintenance
+        # pass, while renders are under way, and deleting their part files failed them (2026-11-26, Elastic).
+        stale = time.time() - 900
         for f in folder.glob("pl*-*.webm"):
+            if ".part." in f.name:
+                continue
             m = NAME.match(f.name)
             if not m or int(m["scope"][2:]) not in pids:
                 f.unlink(missing_ok=True)
         for f in folder.glob("*.part.webm"):
-            f.unlink(missing_ok=True)
+            try:
+                if f.stat().st_mtime < stale:
+                    f.unlink(missing_ok=True)
+            except FileNotFoundError:
+                pass
 
 
 def save(conn, key: str, on: bool, bpm: float | None, typed: bool | None = None) -> None:

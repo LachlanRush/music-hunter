@@ -208,8 +208,14 @@ def update_here(conn: sqlite3.Connection) -> dict:
         started = {t for t, in conn.execute("SELECT track_id FROM plays")}
         draw = db.get_setting(conn, "next_draw") or {}
         started.add(draw.get("track_id"))
+        # Each track's state read again too: a restore that found its video taken down marks it 'unavailable' (or a
+        # catch-up marks it owned / dropped) while this pass scores, and writing back the state read at the start
+        # undid it — Aitor Astiz – True Light was tried again five times in two days (2026-11-27).
+        fresh = dict(conn.execute("SELECT id, veto_state FROM tracks WHERE origin = 'pool'").fetchall())
         for tid, d in details.items():
             r = rows[tid]
+            if tid in fresh and fresh[tid] != r["veto_state"]:
+                r = {**dict(r), "veto_state": fresh[tid]}
             if tid in started and not r["played"]:
                 d["state"] = r["veto_state"] or "playable"
                 conn.execute("UPDATE tracks SET veto = ? WHERE id = ?", (json.dumps(d), tid))
